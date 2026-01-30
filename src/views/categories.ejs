@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Category Order</title>
+  <style>
+    body{font-family:system-ui;margin:24px;}
+    .wrap{max-width:900px;}
+    .hint{color:#666}
+    ul{list-style:none;padding:0;margin:0;}
+    li{padding:10px 12px;border:1px solid #ddd;border-radius:10px;margin-bottom:8px;background:#fff; cursor: grab;}
+    li.dragging{opacity:0.5;}
+    .row{display:flex; justify-content:space-between; align-items:center;}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #333;background:#111;color:#fff;}
+    a{color:#111}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Category Order</h1>
+    <p class="hint">Drag categories into the exact order you want to appear on invoices.</p>
+
+    <form method="post" action="/admin/categories/save" id="form">
+      <ul id="list">
+        <% categories.forEach(c => { %>
+          <li draggable="true" data-id="<%= c.id %>">
+            <div class="row">
+              <div><b><%= c.name %></b></div>
+              <div class="hint">id: <%= c.id %></div>
+            </div>
+          </li>
+        <% }) %>
+      </ul>
+      <input type="hidden" name="order" id="order" value="" />
+      <button type="submit">Save order</button>
+      &nbsp; <a href="/">Home</a>
+    </form>
+  </div>
+
+<script>
+  const list = document.getElementById('list');
+  let dragging = null;
+
+  list.addEventListener('dragstart', (e) => {
+    dragging = e.target;
+    dragging.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+
+  list.addEventListener('dragend', (e) => {
+    if (dragging) dragging.classList.remove('dragging');
+    dragging = null;
+  });
+
+  list.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const after = getDragAfterElement(list, e.clientY);
+    const cur = document.querySelector('.dragging');
+    if (!cur) return;
+    if (after == null) list.appendChild(cur);
+    else list.insertBefore(cur, after);
+  });
+
+  function getDragAfterElement(container, y) {
+    const els = [...container.querySelectorAll('li:not(.dragging)')];
+    return els.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) return { offset, element: child };
+      return closest;
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+  }
+
+  document.getElementById('form').addEventListener('submit', (e) => {
+    const ids = [...document.querySelectorAll('#list li')].map(li => li.dataset.id);
+    // encode as multiple order fields (Express will read order as array)
+    // easiest: create hidden inputs
+    document.querySelectorAll('input[name="order[]"]').forEach(n => n.remove());
+    ids.forEach(id => {
+      const inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = 'order';
+      inp.value = id;
+      e.target.appendChild(inp);
+    });
+  });
+</script>
+</body>
+</html>

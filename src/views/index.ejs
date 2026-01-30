@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>QBO Invoice Sorter + Surcharge</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 820px; }
+    a.button, button { display:inline-block; padding:10px 14px; border-radius:10px; border:1px solid #333; text-decoration:none; background:#111; color:#fff; }
+    .muted { color:#666; }
+    input { padding:10px; border-radius:10px; border:1px solid #ddd; width: 260px; }
+  </style>
+</head>
+<body>
+  <h1>QBO Invoice Sorter + Operating Cost Surcharge</h1>
+
+  <div class="card">
+    <% if (!connected) { %>
+      <p>Status: <b>Not connected</b></p>
+      <p class="muted">First step: connect to QuickBooks Online.</p>
+      <a class="button" href="/auth/start">Connect QBO</a>
+    <% } else { %>
+      <p>Status: <b>Connected</b></p>
+      <p class="muted">Realm ID: <%= realmId %> <% if (companyName) { %> • Company: <%= companyName %> <% } %></p>
+      <p>
+        <a class="button" href="/admin/sync">Sync Customers & Categories</a>
+        <a class="button" href="/admin/categories">Category Order</a>
+        <a class="button" href="/admin/rules">Surcharge Rules</a>
+      </p>
+
+      <hr/>
+      <h3>Manual test (process one invoice)</h3>
+      <form method="post" action="/admin/process-invoice">
+        <input name="invoice_id" placeholder="Invoice ID (number)" />
+        <button type="submit">Process</button>
+      </form>
+      <p class="muted">Use this to test on one invoice before turning on webhooks.</p>
+    <% } %>
+  </div>
+
+  <p class="muted" style="margin-top:16px;">
+    Webhook endpoint: <code>/webhooks/qbo</code>
+  </p>
+</body>
+</html>
