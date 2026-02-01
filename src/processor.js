@@ -86,10 +86,21 @@ function ensureAutoMarkerInPrivateNote(note) {
 }
 
 function shouldSkipBecauseLocked(invoice, source) {
-  // We only skip on webhooks. Manual processing can still re-run if you want.
+  // Only skip on webhooks. Manual processing can still re-run if you want.
   if (source !== 'webhook') return false;
   const note = (invoice?.PrivateNote || '').toString();
   return note.includes(AUTO_MARKER);
+}
+
+/**
+ * Extract a category order number from an item name like:
+ * "01. Sorbets: ..." or "5 - Beverage: ..." etc.
+ */
+function extractPrefixNumber(name) {
+  const n = (name || '').trim();
+  // Matches: "01.", "1.", "05 -", "5 -", "05:", etc
+  const m = n.match(/^(\d{1,2})\s*[.\-:]/);
+  return m ? Number(m[1]) : null;
 }
 
 export async function processInvoice({ oauthClient, realmId, invoiceId, source }) {
@@ -108,7 +119,7 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
   const invoice = invResp?.Invoice;
   if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
 
-  // LOCK: if already processed and locked, never overwrite later edits (webhooks)
+  // LOCK: if already processed + locked, never overwrite later edits (webhooks)
   if (shouldSkipBecauseLocked(invoice, source)) {
     db.addLog({
       invoice_id: invoice.Id,
@@ -227,7 +238,8 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
   }
 
   // 3) Sort item lines by category order
-  // If surcharge is manual override, we do NOT move it; we treat it like a normal "immovable" line.
+  // NOTE: QBO isn't returning ParentRef (catId is null), so we sort by numeric prefix in item name.
+  // If a real ParentRef exists and matches your saved order, we will still use it.
   const movableIdxs = [];
   const movableLines = [];
   let autoSurchargeLine = null;
@@ -244,7 +256,7 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
       continue;
     }
 
-    // Manual override surcharge line stays where it is (do not treat as movable)
+    // Manual override surcharge line stays where it is
     if (manualSurchargeOverride && itemId === String(surchargeItemId)) {
       continue;
     }
@@ -253,31 +265,40 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     movableLines.push(line);
   }
 
-  // Fetch Items for category mapping
+  // Fetch Items for mapping
   const itemIds = [...new Set(movableLines.map(l => getItemId(l)).filter(Boolean))];
   const itemMap = await qboBatchReadItems(oauthClient, realmId, itemIds);
 
-  // Build category sort index mapping
+  // Build category sort index mapping from your saved order page
   const categorySort = new Map();
   for (const c of db.listCategoriesOrdered()) {
     categorySort.set(String(c.id), Number(c.sort_index));
   }
 
-  let __dbgCount = 0;
-function sortKey(line) {
-  const itemId = getItemId(line);
-  const item = itemMap.get(String(itemId));
-  const catId = item?.ParentRef?.value ? String(item.ParentRef.value) : null;
-  const catIdx = catId && categorySort.has(catId) ? categorySort.get(catId) : 999999;
-  const itemName = line?.SalesItemLineDetail?.ItemRef?.name || item?.Name || '';
+  function sortKey(line) {
+    const itemId = getItemId(line);
+    const item = itemMap.get(String(itemId));
+    const itemName =
+      line?.SalesItemLineDetail?.ItemRef?.name ||
+      item?.Name ||
+      '';
 
-  if (__dbgCount < 10) {
-    console.log('[SORTDBG]', { itemId, itemName, catId, catIdx });
-    __dbgCount++;
+    // 1) Try real QBO category first (if present)
+    const catId = item?.ParentRef?.value ? String(item.ParentRef.value) : null;
+    if (catId && categorySort.has(catId)) {
+      return { catIdx: categorySort.get(catId), itemName: itemName.toLowerCase() };
+    }
+
+    // 2) Fallback: numeric prefix in item name (your system)
+    const prefixNum = extractPrefixNumber(itemName);
+    if (prefixNum !== null) {
+      // multiply to keep room for future in-between ordering
+      return { catIdx: prefixNum * 1000, itemName: itemName.toLowerCase() };
+    }
+
+    // 3) Last fallback
+    return { catIdx: 999999, itemName: itemName.toLowerCase() };
   }
-  return { catIdx, itemName: itemName.toLowerCase() };
-}
-
 
   const sortedMovable = movableLines.slice().sort((a, b) => {
     const ka = sortKey(a);
@@ -307,7 +328,6 @@ function sortKey(line) {
   }
 
   // 5) Lock invoice after first processing (prevents overwriting later manual edits)
-  // Only apply the marker if we are going to update the invoice (or if we changed nothing but still want to lock).
   const nextPrivateNote = ensureAutoMarkerInPrivateNote(invoice.PrivateNote);
 
   // Determine if anything changed
