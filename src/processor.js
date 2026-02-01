@@ -263,14 +263,21 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     categorySort.set(String(c.id), Number(c.sort_index));
   }
 
-  function sortKey(line) {
-    const itemId = getItemId(line);
-    const item = itemMap.get(String(itemId));
-    const catId = item?.ParentRef?.value ? String(item.ParentRef.value) : null;
-    const catIdx = catId && categorySort.has(catId) ? categorySort.get(catId) : 999999;
-    const itemName = line?.SalesItemLineDetail?.ItemRef?.name || item?.Name || '';
-    return { catIdx, itemName: itemName.toLowerCase() };
+  let __dbgCount = 0;
+function sortKey(line) {
+  const itemId = getItemId(line);
+  const item = itemMap.get(String(itemId));
+  const catId = item?.ParentRef?.value ? String(item.ParentRef.value) : null;
+  const catIdx = catId && categorySort.has(catId) ? categorySort.get(catId) : 999999;
+  const itemName = line?.SalesItemLineDetail?.ItemRef?.name || item?.Name || '';
+
+  if (__dbgCount < 10) {
+    console.log('[SORTDBG]', { itemId, itemName, catId, catIdx });
+    __dbgCount++;
   }
+  return { catIdx, itemName: itemName.toLowerCase() };
+}
+
 
   const sortedMovable = movableLines.slice().sort((a, b) => {
     const ka = sortKey(a);
