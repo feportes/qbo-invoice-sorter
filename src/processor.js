@@ -66,18 +66,16 @@ function lineHasAutoTag(line) {
   return desc.includes(AUTO_SURCHARGE_TAG);
 }
 
-function buildSurchargeLine({ surchargeItemId, amount, autoTag = true }) {
+function buildSurchargeLine({ surchargeItemId, amount }) {
   return {
     DetailType: 'SalesItemLineDetail',
     Amount: Number(amount),
-    Description: autoTag ? `Operating Cost Surcharge ${AUTO_SURCHARGE_TAG}` : undefined,
     SalesItemLineDetail: {
       ItemRef: { value: String(surchargeItemId) }
-      // Taxability: rely on the Item being taxable in QBO (recommended).
-      // You can also set TaxCodeRef here if your company uses consistent codes.
     }
   };
 }
+
 
 function ensureAutoMarkerInPrivateNote(note) {
   const cur = (note || '').toString();
