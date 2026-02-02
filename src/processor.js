@@ -61,10 +61,6 @@ function findSurchargeLineIndex(lines, surchargeItemId) {
   return lines.findIndex(l => isMovableItemLine(l) && getItemId(l) === String(surchargeItemId));
 }
 
-function lineHasAutoTag(line) {
-  const desc = (line?.Description || '').toString();
-  return desc.includes(AUTO_SURCHARGE_TAG);
-}
 
 function buildSurchargeLine({ surchargeItemId, amount }) {
   return {
