@@ -143,26 +143,28 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   const palletByLoc = new Map();
   for (const p of pallets) palletByLoc.set(p.location_code, p);
 
-  // Build two columns (L/R) from door to deep (01..10)
-  const left = [];
-  const right = [];
+  // Determine active C1 mode (for label + slot depth)
+  const c1Mode = (containerNo === 1)
+    ? (db.getSetting('container_mode_C1') || '10-slot')
+    : null;
+
+  // Build two columns (L/R) from door to deep (01..10) but respect C1 capacity
   let maxDepth = 10;
 
-// Special rule for Container 1 (20 ft)
-if (containerNo === 1) {
-  const mode = db.getSetting('container_mode_C1') || '10-slot';
-  maxDepth = (mode === '8-slot') ? 4 : 5;
-}
+  if (containerNo === 1) {
+    maxDepth = (c1Mode === '8-slot') ? 4 : 5;
+  }
 
-for (let depth = 1; depth <= maxDepth; depth++) {
-
+  const left = [];
+  const right = [];
+  for (let depth = 1; depth <= maxDepth; depth++) {
     const lCode = `C${containerNo}-L${String(depth).padStart(2, '0')}`;
     const rCode = `C${containerNo}-R${String(depth).padStart(2, '0')}`;
     left.push({ code: lCode, pallet: palletByLoc.get(lCode) || null });
     right.push({ code: rCode, pallet: palletByLoc.get(rCode) || null });
   }
 
-  res.render('inventory_map', { containerNo, containers, left, right });
+  res.render('inventory_map', { containerNo, containers, left, right, c1Mode });
 });
 
 // Walk-in list
