@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Walk-in Inventory</title>
+  <style>
+    body { font-family: system-ui; margin: 24px; }
+    table { border-collapse: collapse; width: 100%; max-width: 900px; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align: left; }
+    th { background: #fafafa; }
+    .muted { color: #666; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<h1>Walk-in Inventory</h1>
+<p class="muted">Loose / picking inventory stored in the walk-in freezer.</p>
+
+<p>
+  <a href="/inventory/map?c=1">Back to Container Map</a> |
+  <a href="/">Home</a>
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>SKU</th>
+      <th>Lot</th>
+      <th>Qty</th>
+      <th>Unit</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% rows.forEach(r => { %>
+      <tr>
+        <td><%= r.sku_name %></td>
+        <td><%= r.lot_number || '' %></td>
+        <td><%= r.qty_units %></td>
+        <td><%= r.unit_type %></td>
+      </tr>
+    <% }) %>
+  </tbody>
+</table>
+
+</body>
+</html>
