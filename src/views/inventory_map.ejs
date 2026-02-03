@@ -24,6 +24,18 @@
 <div class="top">
   <h1 style="margin:0;">Container Map: C<%= containerNo %></h1>
 
+<% if (containerNo === 1 && c1Mode) { %>
+  <p class="muted">
+    <b>C1 Mode:</b> <%= c1Mode %>
+    <% if (c1Mode === '8-slot') { %>
+      (L01–L04 / R01–R04)
+    <% } else { %>
+      (L01–L05 / R01–R05)
+    <% } %>
+  </p>
+<% } %>
+
+
   <form method="get" action="/inventory/map">
     <label class="muted">Container</label>
     <select name="c" onchange="this.form.submit()">
