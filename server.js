@@ -146,7 +146,16 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   // Build two columns (L/R) from door to deep (01..10)
   const left = [];
   const right = [];
-  for (let depth = 1; depth <= 10; depth++) {
+  let maxDepth = 10;
+
+// Special rule for Container 1 (20 ft)
+if (containerNo === 1) {
+  const mode = db.getSetting('container_mode_C1') || '10-slot';
+  maxDepth = (mode === '8-slot') ? 4 : 5;
+}
+
+for (let depth = 1; depth <= maxDepth; depth++) {
+
     const lCode = `C${containerNo}-L${String(depth).padStart(2, '0')}`;
     const rCode = `C${containerNo}-R${String(depth).padStart(2, '0')}`;
     left.push({ code: lCode, pallet: palletByLoc.get(lCode) || null });
