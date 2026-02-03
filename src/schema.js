@@ -230,6 +230,8 @@ export function seedDefaults() {
   if (!db.getSetting('default_pallet_pick_threshold')) db.setSetting('default_pallet_pick_threshold', '0.80');
   if (!db.getSetting('lane_priority')) db.setSetting('lane_priority', 'R_FIRST');
   if (!db.getSetting('walkin_first_default')) db.setSetting('walkin_first_default', '1');
+  if (!db.getSetting('container_mode_C1')) db.setSetting('container_mode_C1', '10-slot');
+
 
   // -------------------------
   // Seed customer rules (only once)
