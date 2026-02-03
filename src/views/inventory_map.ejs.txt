@@ -1,0 +1,134 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Inventory Map - C<%= containerNo %></title>
+  <style>
+    body { font-family: system-ui; margin: 24px; }
+    .top { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    select, input { padding: 8px; border: 1px solid #ddd; border-radius: 10px; }
+    button { padding: 8px 12px; border-radius: 10px; border: 1px solid #333; background: #111; color: #fff; }
+    a { color: #111; text-decoration: none; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; max-width: 1000px; }
+    .col { border: 1px solid #ddd; border-radius: 12px; padding: 12px; }
+    .slot { border: 1px solid #eee; border-radius: 12px; padding: 10px; margin-bottom: 10px; }
+    .code { font-weight: 700; }
+    .muted { color: #666; font-size: 13px; }
+    .pallet { margin-top: 6px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #ddd; font-size: 12px; margin-left: 6px; }
+  </style>
+</head>
+<body>
+
+<div class="top">
+  <h1 style="margin:0;">Container Map: C<%= containerNo %></h1>
+
+  <form method="get" action="/inventory/map">
+    <label class="muted">Container</label>
+    <select name="c" onchange="this.form.submit()">
+      <% containers.forEach(c => { %>
+        <option value="<%= c %>" <%= c === containerNo ? 'selected' : '' %>>C<%= c %></option>
+      <% }) %>
+    </select>
+  </form>
+
+  <a href="/inventory/add-pallet">+ Add Pallet</a>
+  <span class="muted">|</span>
+  <a href="/inventory/walkin">Walk-in</a>
+  <span class="muted">|</span>
+  <a href="/">Home</a>
+</div>
+
+<div class="grid">
+
+  <!-- LEFT -->
+  <div class="col">
+    <h3>LEFT (L) <span class="muted">01 = closest to door</span></h3>
+
+    <% left.forEach(s => { %>
+      <div class="slot">
+        <div class="code"><%= s.code %></div>
+
+        <% if (!s.pallet) { %>
+          <div class="muted">Empty</div>
+        <% } else { %>
+          <div class="pallet">
+            <div>
+              <b>Pallet #<%= s.pallet.id %></b>
+              <span class="pill"><%= s.pallet.status %></span>
+            </div>
+            <div class="muted">
+              <%= s.pallet.sku_name %>
+              <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
+              • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
+            </div>
+
+            <div class="actions">
+              <form method="post" action="/inventory/move">
+                <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
+                <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+                <input name="to_slot" placeholder="C<%= containerNo %>-R01"/>
+                <button>Move</button>
+              </form>
+
+              <form method="post" action="/inventory/break-to-walkin">
+                <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
+                <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+                <input name="qty" type="number" step="0.01" placeholder="Qty"/>
+                <button>Break</button>
+              </form>
+            </div>
+          </div>
+        <% } %>
+      </div>
+    <% }) %>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="col">
+    <h3>RIGHT (R) <span class="muted">01 = closest to door</span></h3>
+
+    <% right.forEach(s => { %>
+      <div class="slot">
+        <div class="code"><%= s.code %></div>
+
+        <% if (!s.pallet) { %>
+          <div class="muted">Empty</div>
+        <% } else { %>
+          <div class="pallet">
+            <div>
+              <b>Pallet #<%= s.pallet.id %></b>
+              <span class="pill"><%= s.pallet.status %></span>
+            </div>
+            <div class="muted">
+              <%= s.pallet.sku_name %>
+              <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
+              • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
+            </div>
+
+            <div class="actions">
+              <form method="post" action="/inventory/move">
+                <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
+                <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+                <input name="to_slot" placeholder="C<%= containerNo %>-L01"/>
+                <button>Move</button>
+              </form>
+
+              <form method="post" action="/inventory/break-to-walkin">
+                <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
+                <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+                <input name="qty" type="number" step="0.01" placeholder="Qty"/>
+                <button>Break</button>
+              </form>
+            </div>
+          </div>
+        <% } %>
+      </div>
+    <% }) %>
+  </div>
+
+</div>
+
+</body>
+</html>
