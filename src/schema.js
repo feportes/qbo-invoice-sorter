@@ -112,42 +112,10 @@ export function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_locations_type ON locations(type);
     CREATE INDEX IF NOT EXISTS idx_locations_container ON locations(container_no, side, depth);
 
-    CREATE TABLE IF NOT EXISTS container_templates (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      container_no INTEGER NOT NULL,
-      mode_name TEXT NOT NULL,
-      max_depth INTEGER NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_container_templates
-    ON container_templates(container_no, mode_name);
-
-    CREATE TABLE IF NOT EXISTS documents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL,
-      filename TEXT NOT NULL,
-      storage_path TEXT NOT NULL,
-      parsed_json TEXT,
-      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS receipts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      received_date DATE NOT NULL,
-      supplier_name TEXT,
-      container_ref TEXT,
-      reference_no TEXT,
-      document_id INTEGER REFERENCES documents(id),
-      notes TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
     CREATE TABLE IF NOT EXISTS lots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       sku_id INTEGER NOT NULL REFERENCES skus(id),
-      receipt_id INTEGER REFERENCES receipts(id),
+      receipt_id INTEGER,
       lot_number TEXT NOT NULL,
       supplier_lot TEXT,
       production_date DATE,
@@ -168,7 +136,7 @@ export function ensureSchema() {
       location_id INTEGER NOT NULL REFERENCES locations(id),
       qty_units REAL NOT NULL,
       status TEXT NOT NULL DEFAULT 'SEALED',
-      received_receipt_id INTEGER REFERENCES receipts(id),
+      received_receipt_id INTEGER,
       notes TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -218,67 +186,28 @@ export function seedDefaults() {
   if (!db.getSetting('surcharge_item_name')) db.setSetting('surcharge_item_name', 'Operating Cost Surcharge');
   if (!db.getSetting('uncategorized_position')) db.setSetting('uncategorized_position', 'bottom');
 
-  // Inventory global defaults
+  // Inventory defaults
   if (!db.getSetting('default_pallet_pick_threshold')) db.setSetting('default_pallet_pick_threshold', '0.80');
   if (!db.getSetting('lane_priority')) db.setSetting('lane_priority', 'R_FIRST');
   if (!db.getSetting('walkin_first_default')) db.setSetting('walkin_first_default', '1');
 
-  // Container mode settings
-  if (!db.getSetting('container_mode_C1')) db.setSetting('container_mode_C1', '10-slot');
+  // ✅ Asymmetric container defaults
+  // C1 default: 8-slot (4/4)
+  if (!db.getSetting('container_mode_C1')) db.setSetting('container_mode_C1', '8-slot');
+  if (!db.getSetting('container_flip_C1')) db.setSetting('container_flip_C1', 'L_LONG'); // ignored for 8-slot
+
+  // C2–C7 default: 18-slot (9/9)
   for (let c = 2; c <= 7; c++) {
-    const key = `container_mode_C${c}`;
-    if (!db.getSetting(key)) db.setSetting(key, '20-slot'); // default 40ft = 20 slot
+    const mk = `container_mode_C${c}`;
+    const fk = `container_flip_C${c}`;
+    if (!db.getSetting(mk)) db.setSetting(mk, '18-slot');
+    if (!db.getSetting(fk)) db.setSetting(fk, 'L_LONG'); // ignored for 18-slot
   }
 
-  // Seed customer rules only once
-  const rules = db.listRules();
-  if (rules.length === 0) {
-    db.upsertRule({
-      id: null,
-      match_type: 'prefix',
-      customer_id: null,
-      prefix: 'Alohana',
-      rule_type: 'always_0',
-      threshold: null,
-      amount: 0,
-      enabled: 1
-    });
-    db.upsertRule({
-      id: null,
-      match_type: 'exact',
-      customer_id: null,
-      prefix: null,
-      rule_type: 'always_15',
-      threshold: null,
-      amount: 15,
-      enabled: 0
-    });
-    db.upsertRule({
-      id: null,
-      match_type: 'exact',
-      customer_id: null,
-      prefix: null,
-      rule_type: 'exclude',
-      threshold: null,
-      amount: null,
-      enabled: 0
-    });
-    db.upsertRule({
-      id: null,
-      match_type: 'exact',
-      customer_id: null,
-      prefix: null,
-      rule_type: 'conditional',
-      threshold: 1000,
-      amount: 15,
-      enabled: 0
-    });
-  }
-
-  seedLocationsAndDefaults();
+  seedLocations();
 }
 
-function seedLocationsAndDefaults() {
+function seedLocations() {
   const s = db.sqlite;
 
   const upsertLoc = s.prepare(`
@@ -290,24 +219,10 @@ function seedLocationsAndDefaults() {
   upsertLoc.run({ type: 'WALKIN',  code: 'WALKIN',  container_no: null, side: null, depth: null, enabled: 1 });
   upsertLoc.run({ type: 'RETURNS', code: 'RETURNS', container_no: null, side: null, depth: null, enabled: 1 });
 
-  const upsertTemplate = s.prepare(`
-    INSERT INTO container_templates (container_no, mode_name, max_depth, enabled)
-    VALUES (?, ?, ?, 1)
-    ON CONFLICT(container_no, mode_name)
-    DO UPDATE SET max_depth=excluded.max_depth, enabled=1
-  `);
-
-  upsertTemplate.run(1, '8-slot', 4);
-  upsertTemplate.run(1, '10-slot', 5);
-
-  for (let c = 2; c <= 7; c++) {
-    upsertTemplate.run(c, '18-slot', 9);
-    upsertTemplate.run(c, '20-slot', 10);
-  }
-
+  // Seed max possible slot depth up to 11 (needed for 20-slot 11/9)
   for (let containerNo = 1; containerNo <= 7; containerNo++) {
     for (const side of ['L', 'R']) {
-      for (let depth = 1; depth <= 10; depth++) {
+      for (let depth = 1; depth <= 11; depth++) {
         const code = `C${containerNo}-${side}${String(depth).padStart(2, '0')}`;
         upsertLoc.run({
           type: 'CONTAINER',

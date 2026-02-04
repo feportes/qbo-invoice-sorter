@@ -2,100 +2,96 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Container Mode Settings</title>
+  <title>Container Layout Settings</title>
   <style>
-    body { font-family: system-ui; margin: 24px; max-width: 820px; }
-    h1 { margin-bottom: 8px; }
+    body { font-family: system-ui; margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 6px 0; }
     .muted { color:#666; font-size: 13px; }
-    .card { border:1px solid #ddd; border-radius: 12px; padding: 16px; margin-top: 14px; }
-    label { display:block; margin-top: 12px; font-weight: 600; }
-    select { width: 100%; padding: 10px; border:1px solid #ddd; border-radius: 10px; margin-top: 6px; }
+    .card { border:1px solid #ddd; border-radius: 12px; padding: 16px; margin-top: 14px; background:#fff; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align:left; vertical-align: top; }
+    th { background:#fafafa; }
+    select { width: 100%; padding: 8px; border:1px solid #ddd; border-radius: 10px; }
     button { margin-top: 16px; padding: 12px 16px; border-radius: 10px; border:1px solid #333; background:#111; color:#fff; }
     .msg { margin-top: 12px; padding: 10px; border-radius: 10px; background: #f4f4f4; }
     a { color:#111; text-decoration:none; }
-    .row { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .nav { margin-top: 10px; }
+    .small { font-size: 12px; color: #666; margin-top: 2px; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #ddd; background:#fff; font-size:12px; }
   </style>
 </head>
 <body>
 
-  <h1>Container Mode Settings</h1>
-  <div class="muted">
-    Set how many pallet positions each container can display.
-    Door = 01. Left/Right lanes.
-  </div>
+<h1>Container Layout Settings</h1>
+<div class="muted">Door side is <b>01</b>. Left/Right lanes are <b>L</b> and <b>R</b>.</div>
 
-  <% if (msg) { %>
-    <div class="msg"><%= msg %></div>
-  <% } %>
+<div class="nav muted">
+  <a href="/inventory/yard">Yard</a> |
+  <a href="/inventory/map?c=1">Container Map</a> |
+  <a href="/">Home</a>
+</div>
 
-  <div class="card">
-    <form method="post">
-      <label>C1 (20 ft) mode</label>
-      <select name="mode_c1">
-        <option value="8-slot" <%= current.C1 === '8-slot' ? 'selected' : '' %>>8-slot (L01–L04 / R01–R04)</option>
-        <option value="10-slot" <%= current.C1 === '10-slot' ? 'selected' : '' %>>10-slot (L01–L05 / R01–R05)</option>
-      </select>
+<% if (msg) { %>
+  <div class="msg"><%= msg %></div>
+<% } %>
 
-      <div style="height:10px;"></div>
-      <div class="row">
-        <div>
-          <label>C2 (40 ft) mode</label>
-          <select name="mode_c2">
-            <option value="18-slot" <%= current.C2 === '18-slot' ? 'selected' : '' %>>18-slot (L01–L09 / R01–R09)</option>
-            <option value="20-slot" <%= current.C2 === '20-slot' ? 'selected' : '' %>>20-slot (L01–L10 / R01–R10)</option>
-          </select>
-        </div>
+<div class="card">
+  <form method="post">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:90px;">Container</th>
+          <th style="width:240px;">Mode</th>
+          <th style="width:240px;">Flip</th>
+          <th>Effective Layout</th>
+        </tr>
+      </thead>
+      <tbody>
 
-        <div>
-          <label>C3 (40 ft) mode</label>
-          <select name="mode_c3">
-            <option value="18-slot" <%= current.C3 === '18-slot' ? 'selected' : '' %>>18-slot</option>
-            <option value="20-slot" <%= current.C3 === '20-slot' ? 'selected' : '' %>>20-slot</option>
-          </select>
-        </div>
+        <tr>
+          <td><b>C1</b><div class="small">20 ft</div></td>
+          <td>
+            <select name="mode_C1">
+              <option value="8-slot" <%= current.C1.mode === '8-slot' ? 'selected' : '' %>>8-slot (4/4)</option>
+              <option value="9-slot" <%= current.C1.mode === '9-slot' ? 'selected' : '' %>>9-slot (5/4)</option>
+            </select>
+          </td>
+          <td>
+            <select name="flip_C1">
+              <option value="L_LONG" <%= current.C1.flip === 'L_LONG' ? 'selected' : '' %>>Left longer (L>R)</option>
+              <option value="R_LONG" <%= current.C1.flip === 'R_LONG' ? 'selected' : '' %>>Right longer (R>L)</option>
+            </select>
+            <div class="small">Flip matters only for 9-slot.</div>
+          </td>
+          <td><span class="pill"><%= current.C1.label %></span></td>
+        </tr>
 
-        <div>
-          <label>C4 (40 ft) mode</label>
-          <select name="mode_c4">
-            <option value="18-slot" <%= current.C4 === '18-slot' ? 'selected' : '' %>>18-slot</option>
-            <option value="20-slot" <%= current.C4 === '20-slot' ? 'selected' : '' %>>20-slot</option>
-          </select>
-        </div>
+        <% ['C2','C3','C4','C5','C6','C7'].forEach(cn => { %>
+          <tr>
+            <td><b><%= cn %></b><div class="small">40 ft</div></td>
+            <td>
+              <select name="mode_<%= cn %>">
+                <option value="18-slot" <%= current[cn].mode === '18-slot' ? 'selected' : '' %>>18-slot (9/9)</option>
+                <option value="20-slot" <%= current[cn].mode === '20-slot' ? 'selected' : '' %>>20-slot (11/9)</option>
+              </select>
+            </td>
+            <td>
+              <select name="flip_<%= cn %>">
+                <option value="L_LONG" <%= current[cn].flip === 'L_LONG' ? 'selected' : '' %>>Left longer (L>R)</option>
+                <option value="R_LONG" <%= current[cn].flip === 'R_LONG' ? 'selected' : '' %>>Right longer (R>L)</option>
+              </select>
+              <div class="small">Flip matters only for 20-slot.</div>
+            </td>
+            <td><span class="pill"><%= current[cn].label %></span></td>
+          </tr>
+        <% }) %>
 
-        <div>
-          <label>C5 (40 ft) mode</label>
-          <select name="mode_c5">
-            <option value="18-slot" <%= current.C5 === '18-slot' ? 'selected' : '' %>>18-slot</option>
-            <option value="20-slot" <%= current.C5 === '20-slot' ? 'selected' : '' %>>20-slot</option>
-          </select>
-        </div>
+      </tbody>
+    </table>
 
-        <div>
-          <label>C6 (40 ft) mode</label>
-          <select name="mode_c6">
-            <option value="18-slot" <%= current.C6 === '18-slot' ? 'selected' : '' %>>18-slot</option>
-            <option value="20-slot" <%= current.C6 === '20-slot' ? 'selected' : '' %>>20-slot</option>
-          </select>
-        </div>
-
-        <div>
-          <label>C7 (40 ft) mode</label>
-          <select name="mode_c7">
-            <option value="18-slot" <%= current.C7 === '18-slot' ? 'selected' : '' %>>18-slot</option>
-            <option value="20-slot" <%= current.C7 === '20-slot' ? 'selected' : '' %>>20-slot</option>
-          </select>
-        </div>
-      </div>
-
-      <button type="submit">Save</button>
-    </form>
-  </div>
-
-  <p style="margin-top:16px;">
-    <a href="/inventory/yard">Back to Yard</a> |
-    <a href="/inventory/map?c=1">Container Map</a> |
-    <a href="/">Home</a>
-  </p>
+    <button type="submit">Save</button>
+  </form>
+</div>
 
 </body>
 </html>

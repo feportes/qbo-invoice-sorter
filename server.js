@@ -17,22 +17,16 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// Ensure DB schema exists + seed defaults/locations
 ensureSchema();
 seedDefaults();
 
-// Views
 app.set('views', path.join(__dirname, 'src', 'views'));
 app.set('view engine', 'ejs');
 
-// Logging
 app.use(morgan('dev'));
-
-// Body parsing (webhooks need raw body)
 app.use(express.json({ verify: rawBodySaver, limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Home
 app.get('/', (req, res) => {
   const conn = db.getConnection();
   res.render('index', {
@@ -42,7 +36,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Auth
 app.get('/auth/start', authStart);
 app.get('/auth/callback', authCallback);
 
@@ -56,7 +49,6 @@ app.get('/admin/sync', requireConnected, async (req, res) => {
     const customerCount = await syncCustomers(oauthClient, conn.realm_id);
     const categoryCount = await syncCategories(oauthClient, conn.realm_id);
 
-    // Ensure surcharge item id cached
     const surchargeItemName = db.getSetting('surcharge_item_name');
     const surcharge = await qboReadItemByName(oauthClient, conn.realm_id, surchargeItemName);
     if (surcharge?.Id) db.setSetting('surcharge_item_id', surcharge.Id);
@@ -111,7 +103,6 @@ app.post('/admin/rules/delete', requireConnected, (req, res) => {
   res.redirect('/admin/rules');
 });
 
-// Manual process endpoint (for testing invoice sorting/surcharge)
 app.post('/admin/process-invoice', requireConnected, async (req, res) => {
   const { invoice_id } = req.body;
   const conn = db.getConnectionOrThrow();
@@ -129,99 +120,101 @@ app.post('/admin/process-invoice', requireConnected, async (req, res) => {
   }
 });
 
-
-// ==========================================================
-// Inventory UI
-// ==========================================================
-
-// Container mode settings UI
+// ===============================
+// Inventory: Container Settings (mode + flip)
+// ===============================
 app.get('/inventory/settings/containers', requireConnected, (req, res) => {
-  const current = {
-    C1: db.getSetting('container_mode_C1') || '10-slot',
-    C2: db.getSetting('container_mode_C2') || '20-slot',
-    C3: db.getSetting('container_mode_C3') || '20-slot',
-    C4: db.getSetting('container_mode_C4') || '20-slot',
-    C5: db.getSetting('container_mode_C5') || '20-slot',
-    C6: db.getSetting('container_mode_C6') || '20-slot',
-    C7: db.getSetting('container_mode_C7') || '20-slot',
-  };
+  const current = {};
+  for (let c = 1; c <= 7; c++) {
+    const modeKey = `container_mode_C${c}`;
+    const flipKey = `container_flip_C${c}`;
+    const modeDefault = (c === 1) ? '8-slot' : '18-slot';
+    const flipDefault = 'L_LONG';
+    const mode = db.getSetting(modeKey) || modeDefault;
+    const flip = db.getSetting(flipKey) || flipDefault;
 
+    const label = db.getContainerDepths(c).label;
+    current[`C${c}`] = { mode, flip, label };
+  }
   res.render('inventory_container_settings', { current, msg: null });
 });
 
 app.post('/inventory/settings/containers', requireConnected, (req, res) => {
   try {
-    const { mode_c1, mode_c2, mode_c3, mode_c4, mode_c5, mode_c6, mode_c7 } = req.body;
-
-    // Validate values
-    const validC1 = new Set(['8-slot', '10-slot']);
+    const validC1 = new Set(['8-slot', '9-slot']);
     const valid40 = new Set(['18-slot', '20-slot']);
+    const validFlip = new Set(['L_LONG', 'R_LONG']);
 
-    if (!validC1.has(mode_c1)) throw new Error('Invalid mode for C1');
-    const list40 = [mode_c2, mode_c3, mode_c4, mode_c5, mode_c6, mode_c7];
-    if (list40.some(v => !valid40.has(v))) throw new Error('Invalid mode for C2–C7');
+    const modeC1 = req.body.mode_C1;
+    const flipC1 = req.body.flip_C1;
+    if (!validC1.has(modeC1)) throw new Error('Invalid mode for C1');
+    if (!validFlip.has(flipC1)) throw new Error('Invalid flip for C1');
+    db.setSetting('container_mode_C1', modeC1);
+    db.setSetting('container_flip_C1', flipC1);
 
-    db.setSetting('container_mode_C1', mode_c1);
-    db.setSetting('container_mode_C2', mode_c2);
-    db.setSetting('container_mode_C3', mode_c3);
-    db.setSetting('container_mode_C4', mode_c4);
-    db.setSetting('container_mode_C5', mode_c5);
-    db.setSetting('container_mode_C6', mode_c6);
-    db.setSetting('container_mode_C7', mode_c7);
+    for (let c = 2; c <= 7; c++) {
+      const mode = req.body[`mode_C${c}`];
+      const flip = req.body[`flip_C${c}`];
+      if (!valid40.has(mode)) throw new Error(`Invalid mode for C${c}`);
+      if (!validFlip.has(flip)) throw new Error(`Invalid flip for C${c}`);
+      db.setSetting(`container_mode_C${c}`, mode);
+      db.setSetting(`container_flip_C${c}`, flip);
+    }
 
-    const current = {
-      C1: mode_c1, C2: mode_c2, C3: mode_c3, C4: mode_c4, C5: mode_c5, C6: mode_c6, C7: mode_c7
-    };
+    const current = {};
+    for (let c = 1; c <= 7; c++) {
+      const label = db.getContainerDepths(c).label;
+      current[`C${c}`] = {
+        mode: db.getSetting(`container_mode_C${c}`),
+        flip: db.getSetting(`container_flip_C${c}`),
+        label
+      };
+    }
 
     res.render('inventory_container_settings', { current, msg: 'Saved successfully.' });
   } catch (e) {
-    const current = {
-      C1: db.getSetting('container_mode_C1') || '10-slot',
-      C2: db.getSetting('container_mode_C2') || '20-slot',
-      C3: db.getSetting('container_mode_C3') || '20-slot',
-      C4: db.getSetting('container_mode_C4') || '20-slot',
-      C5: db.getSetting('container_mode_C5') || '20-slot',
-      C6: db.getSetting('container_mode_C6') || '20-slot',
-      C7: db.getSetting('container_mode_C7') || '20-slot',
-    };
+    const current = {};
+    for (let c = 1; c <= 7; c++) {
+      const label = db.getContainerDepths(c).label;
+      current[`C${c}`] = {
+        mode: db.getSetting(`container_mode_C${c}`) || ((c === 1) ? '8-slot' : '18-slot'),
+        flip: db.getSetting(`container_flip_C${c}`) || 'L_LONG',
+        label
+      };
+    }
     res.status(400).render('inventory_container_settings', { current, msg: e?.message || String(e) });
   }
 });
 
-
-// Multi-container yard view (drag/drop across all containers)
+// ===============================
+// Inventory: Yard + Map (asymmetric)
+// ===============================
 app.get('/inventory/yard', requireConnected, (req, res) => {
   const containers = db.listContainers();
-
   const yard = containers.map(containerNo => {
     const pallets = db.listPalletsInContainer(containerNo);
     const palletByLoc = new Map();
     for (const p of pallets) palletByLoc.set(p.location_code, p);
 
-    // Use per-container max depth (C1 uses 8/10-slot; C2-7 use 18/20-slot)
-    const maxDepth = db.getContainerMaxDepth(containerNo);
-
-    // Only show C1 mode label (optional)
-    const c1Mode = (containerNo === 1)
-      ? (db.getSetting('container_mode_C1') || '10-slot')
-      : null;
-
+    const depths = db.getContainerDepths(containerNo);
     const left = [];
     const right = [];
-    for (let depth = 1; depth <= maxDepth; depth++) {
-      const lCode = `C${containerNo}-L${String(depth).padStart(2, '0')}`;
-      const rCode = `C${containerNo}-R${String(depth).padStart(2, '0')}`;
-      left.push({ code: lCode, pallet: palletByLoc.get(lCode) || null });
-      right.push({ code: rCode, pallet: palletByLoc.get(rCode) || null });
+
+    for (let d = 1; d <= depths.leftMax; d++) {
+      const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
+      left.push({ code, pallet: palletByLoc.get(code) || null });
+    }
+    for (let d = 1; d <= depths.rightMax; d++) {
+      const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
+      right.push({ code, pallet: palletByLoc.get(code) || null });
     }
 
-    return { containerNo, c1Mode, left, right };
+    return { containerNo, label: depths.label, left, right };
   });
 
   res.render('inventory_yard', { yard });
 });
 
-// Container map (with dropdown slot options + drag/drop)
 app.get('/inventory/map', requireConnected, (req, res) => {
   const containerNo = Number(req.query.c || 1);
   const containers = db.listContainers();
@@ -230,172 +223,29 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   const palletByLoc = new Map();
   for (const p of pallets) palletByLoc.set(p.location_code, p);
 
-  // Only used for label on C1
-  const c1Mode = (containerNo === 1)
-    ? (db.getSetting('container_mode_C1') || '10-slot')
-    : null;
-
-  // Use per-container max depth
-  const maxDepth = db.getContainerMaxDepth(containerNo);
-
+  const depths = db.getContainerDepths(containerNo);
   const left = [];
   const right = [];
-  for (let depth = 1; depth <= maxDepth; depth++) {
-    const lCode = `C${containerNo}-L${String(depth).padStart(2, '0')}`;
-    const rCode = `C${containerNo}-R${String(depth).padStart(2, '0')}`;
-    left.push({ code: lCode, pallet: palletByLoc.get(lCode) || null });
-    right.push({ code: rCode, pallet: palletByLoc.get(rCode) || null });
+
+  for (let d = 1; d <= depths.leftMax; d++) {
+    const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
+    left.push({ code, pallet: palletByLoc.get(code) || null });
+  }
+  for (let d = 1; d <= depths.rightMax; d++) {
+    const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
+    right.push({ code, pallet: palletByLoc.get(code) || null });
   }
 
-  // Slot options for dropdown move (current container only + WALKIN + RETURNS)
-  const slotOptions = [
-    ...db.listValidSlotCodes(containerNo),
-    'WALKIN',
-    'RETURNS'
-  ];
+  const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
 
-  res.render('inventory_map', { containerNo, containers, left, right, c1Mode, slotOptions });
-});
-
-// Walk-in list
-app.get('/inventory/walkin', requireConnected, (req, res) => {
-  const rows = db.listWalkinLoose();
-  res.render('inventory_walkin', { rows });
-});
-
-// Quick add pallet (container + slot dropdown)
-app.get('/inventory/add-pallet', requireConnected, (req, res) => {
-  const skus = db.listSkus();
-  const containers = db.listContainers();
-  const containerNo = Number(req.query.c || 1);
-  const slotOptions = db.listValidSlotCodes(containerNo);
-
-  res.render('inventory_add_pallet', {
-    skus,
-    msg: null,
-    containers,
+  res.render('inventory_map', {
     containerNo,
+    containers,
+    left,
+    right,
+    containerLabel: depths.label,
     slotOptions
   });
-});
-
-app.post('/inventory/add-pallet', requireConnected, (req, res) => {
-  try {
-    const { sku_id, lot_id, pallet_config_id, location_code, qty_units, notes } = req.body;
-
-    db.createPallet({
-      skuId: Number(sku_id),
-      lotId: lot_id ? Number(lot_id) : null,
-      palletConfigId: pallet_config_id ? Number(pallet_config_id) : null,
-      locationCode: location_code,
-      qtyUnits: Number(qty_units),
-      notes
-    });
-
-    const cMatch = (location_code || '').match(/^C(\d+)-/);
-    const cNo = cMatch ? Number(cMatch[1]) : 1;
-    res.redirect(`/inventory/map?c=${cNo}`);
-  } catch (e) {
-    const skus = db.listSkus();
-    const containers = db.listContainers();
-    const containerNo = 1;
-    const slotOptions = db.listValidSlotCodes(containerNo);
-    res.status(400).render('inventory_add_pallet', {
-      skus,
-      msg: e?.message || String(e),
-      containers,
-      containerNo,
-      slotOptions
-    });
-  }
-});
-
-// Move pallet between slots (form-based)
-app.post('/inventory/move', requireConnected, (req, res) => {
-  const { pallet_id, to_slot, container_no } = req.body;
-  try {
-    const loc = db.getLocationByCode(to_slot);
-    if (!loc) throw new Error(`Destination slot not found: ${to_slot}`);
-    db.movePallet(Number(pallet_id), loc.id, 'user');
-    res.redirect(`/inventory/map?c=${encodeURIComponent(container_no)}`);
-  } catch (e) {
-    res.status(500).send(`Move failed: ${e?.message || e}`);
-  }
-});
-
-// Move pallet (JSON endpoint for drag/drop)
-app.post('/inventory/move-json', requireConnected, (req, res) => {
-  try {
-    const { pallet_id, to_slot } = req.body;
-    const loc = db.getLocationByCode(to_slot);
-    if (!loc) return res.status(400).json({ ok: false, error: `Destination slot not found: ${to_slot}` });
-
-    db.movePallet(Number(pallet_id), loc.id, 'user');
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: e?.message || String(e) });
-  }
-});
-
-// Break pallet into walk-in (pull some qty for picking)
-app.post('/inventory/break-to-walkin', requireConnected, (req, res) => {
-  const { pallet_id, qty, container_no } = req.body;
-  try {
-    db.breakPalletToWalkin({
-      palletId: Number(pallet_id),
-      qty: Number(qty),
-      userName: 'user'
-    });
-    res.redirect(`/inventory/map?c=${encodeURIComponent(container_no)}`);
-  } catch (e) {
-    res.status(500).send(`Break failed: ${e?.message || e}`);
-  }
-});
-
-
-// Webhook endpoint
-app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
-  res.status(200).send('OK');
-
-  try {
-    const conn = db.getConnection();
-    if (!conn) return;
-
-    const oauthClient = getOAuthClient(conn);
-    const payload = req.body;
-
-    if (process.env.DEBUG_WEBHOOKS === '1') {
-      db.addLog({
-        invoice_id: null,
-        customer_name: null,
-        action: 'webhook_payload',
-        detail: JSON.stringify(payload).slice(0, 5000),
-        source: 'webhook'
-      });
-    }
-
-    const notifications = payload?.eventNotifications || [];
-    for (const n of notifications) {
-      const entities = n?.dataChangeEvent?.entities || [];
-      for (const ent of entities) {
-        if (ent?.name === 'Invoice' && ent?.id) {
-          const invoiceId = ent.id;
-          processInvoice({ oauthClient, realmId: conn.realm_id, invoiceId, source: 'webhook' })
-            .catch(err => {
-              db.addLog({
-                invoice_id: invoiceId,
-                customer_name: null,
-                action: 'error',
-                detail: `Processing failed: ${err?.message || err}`,
-                source: 'webhook'
-              });
-            });
-        }
-      }
-    }
-  } catch (e) {
-    // response already sent
-  }
 });
 
 const port = process.env.PORT || 3000;

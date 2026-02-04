@@ -12,9 +12,7 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
-  // ==========================================================
-  // Connection (single company)
-  // ==========================================================
+  // Connection
   getConnection() {
     return sqlite.prepare('SELECT * FROM connections WHERE id=1').get();
   },
@@ -37,9 +35,7 @@ export const db = {
     `).run(row);
   },
 
-  // ==========================================================
   // Settings
-  // ==========================================================
   getSetting(key) {
     const row = sqlite.prepare('SELECT value FROM settings WHERE key=?').get(key);
     return row?.value ?? null;
@@ -51,9 +47,7 @@ export const db = {
     `).run(key, String(value));
   },
 
-  // ==========================================================
   // Customers
-  // ==========================================================
   upsertCustomer({ id, display_name }) {
     sqlite.prepare(`
       INSERT INTO customers (id, display_name)
@@ -68,9 +62,7 @@ export const db = {
     return sqlite.prepare('SELECT * FROM customers WHERE id=?').get(id);
   },
 
-  // ==========================================================
   // Categories
-  // ==========================================================
   upsertCategory({ id, name }) {
     sqlite.prepare(`
       INSERT INTO categories (id, name)
@@ -99,9 +91,7 @@ export const db = {
     tx(categoryIdsInOrder);
   },
 
-  // ==========================================================
-  // Rules (surcharge)
-  // ==========================================================
+  // Rules
   listRules() {
     return sqlite.prepare(`
       SELECT * FROM customer_rules
@@ -132,9 +122,7 @@ export const db = {
     sqlite.prepare('DELETE FROM customer_rules WHERE id=?').run(id);
   },
 
-  // ==========================================================
   // Logs
-  // ==========================================================
   addLog({ invoice_id, customer_name, action, detail, source }) {
     sqlite.prepare(`
       INSERT INTO logs (invoice_id, customer_name, action, detail, source)
@@ -145,9 +133,7 @@ export const db = {
     return sqlite.prepare('SELECT * FROM logs ORDER BY created_at DESC LIMIT ?').all(limit);
   },
 
-  // ==========================================================
-  // Invoice processing lock / idempotency
-  // ==========================================================
+  // Idempotency
   hasProcessed(invoiceId, syncToken) {
     const row = sqlite.prepare('SELECT 1 FROM processed WHERE invoice_id=? AND sync_token=?').get(invoiceId, syncToken);
     return !!row;
@@ -156,35 +142,40 @@ export const db = {
     sqlite.prepare('INSERT INTO processed (invoice_id, sync_token) VALUES (?, ?)').run(invoiceId, syncToken);
   },
 
-  // ==========================================================
-  // Inventory: Containers / Slots helpers
-  // ==========================================================
+  // Containers
   listContainers() {
-    return [1, 2, 3, 4, 5, 6, 7];
+    return [1,2,3,4,5,6,7];
   },
 
-  // NEW: returns max depth for a container based on saved mode
-  // C1: 8-slot -> depth 4; 10-slot -> depth 5
-  // C2-C7: 18-slot -> depth 9; 20-slot -> depth 10
-  getContainerMaxDepth(containerNo) {
+  // ✅ Asymmetric per-container depths based on mode + flip
+  getContainerDepths(containerNo) {
     if (containerNo === 1) {
-      const mode = this.getSetting('container_mode_C1') || '10-slot';
-      return (mode === '8-slot') ? 4 : 5;
+      const mode = this.getSetting('container_mode_C1') || '8-slot';
+      const flip = this.getSetting('container_flip_C1') || 'L_LONG';
+
+      if (mode === '8-slot') return { leftMax: 4, rightMax: 4, label: '8-slot (4/4)' };
+
+      // 9-slot = 5/4 with flip
+      if (flip === 'R_LONG') return { leftMax: 4, rightMax: 5, label: '9-slot (4/5)' };
+      return { leftMax: 5, rightMax: 4, label: '9-slot (5/4)' };
     }
-    const mode = this.getSetting(`container_mode_C${containerNo}`) || '20-slot';
-    return (mode === '18-slot') ? 9 : 10;
+
+    const mode = this.getSetting(`container_mode_C${containerNo}`) || '18-slot';
+    const flip = this.getSetting(`container_flip_C${containerNo}`) || 'L_LONG';
+
+    if (mode === '18-slot') return { leftMax: 9, rightMax: 9, label: '18-slot (9/9)' };
+
+    // 20-slot = 11/9 with flip
+    if (flip === 'R_LONG') return { leftMax: 9, rightMax: 11, label: '20-slot (9/11)' };
+    return { leftMax: 11, rightMax: 9, label: '20-slot (11/9)' };
   },
 
-  // UPDATED: generates valid slot codes for dropdowns (respects each container mode)
+  // Slot options
   listValidSlotCodes(containerNo) {
-    const maxDepth = this.getContainerMaxDepth(containerNo);
-
+    const { leftMax, rightMax } = this.getContainerDepths(containerNo);
     const codes = [];
-    for (const side of ['L', 'R']) {
-      for (let d = 1; d <= maxDepth; d++) {
-        codes.push(`C${containerNo}-${side}${String(d).padStart(2, '0')}`);
-      }
-    }
+    for (let d = 1; d <= leftMax; d++) codes.push(`C${containerNo}-L${String(d).padStart(2,'0')}`);
+    for (let d = 1; d <= rightMax; d++) codes.push(`C${containerNo}-R${String(d).padStart(2,'0')}`);
     return codes;
   },
 
@@ -192,9 +183,7 @@ export const db = {
     return sqlite.prepare('SELECT * FROM locations WHERE code=?').get(code);
   },
 
-  // ==========================================================
-  // Inventory: Pallets / Walk-in / Moves
-  // ==========================================================
+  // Inventory: pallets in container
   listPalletsInContainer(containerNo) {
     return sqlite.prepare(`
       SELECT p.*,
@@ -211,20 +200,7 @@ export const db = {
     `).all(containerNo);
   },
 
-  getPalletById(palletId) {
-    return sqlite.prepare(`
-      SELECT p.*, l.code AS location_code,
-             s.name AS sku_name, s.unit_type AS unit_type,
-             lo.lot_number AS lot_number
-      FROM pallets p
-      JOIN locations l ON l.id = p.location_id
-      JOIN skus s ON s.id = p.sku_id
-      LEFT JOIN lots lo ON lo.id = p.lot_id
-      WHERE p.id=?
-    `).get(palletId);
-  },
-
-  movePallet(palletId, toLocationId, userName = 'system') {
+  movePallet(palletId, toLocationId, userName='system') {
     const tx = sqlite.transaction(() => {
       const pallet = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(palletId);
       if (!pallet) throw new Error('Pallet not found');
@@ -280,141 +256,4 @@ export const db = {
     });
     tx();
   },
-
-  breakPalletToWalkin({ palletId, qty, userName = 'system' }) {
-    const tx = sqlite.transaction(() => {
-      const pallet = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(palletId);
-      if (!pallet) throw new Error('Pallet not found');
-
-      if (Number(pallet.qty_units) < Number(qty)) {
-        throw new Error(`Not enough qty on pallet. On pallet: ${pallet.qty_units}`);
-      }
-
-      const walkin = sqlite.prepare(`SELECT * FROM locations WHERE code='WALKIN'`).get();
-      if (!walkin) throw new Error('WALKIN location missing');
-
-      const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
-      const unitTypeRow = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(pallet.sku_id);
-
-      const newQty = Number(pallet.qty_units) - Number(qty);
-      const newStatus = newQty <= 0 ? 'DEPLETED' : 'OPEN';
-
-      sqlite.prepare('UPDATE pallets SET qty_units=?, status=? WHERE id=?')
-        .run(newQty, newStatus, palletId);
-
-      this.addLooseQty({
-        skuId: pallet.sku_id,
-        lotId: pallet.lot_id,
-        locationId: walkin.id,
-        qtyDelta: Number(qty)
-      });
-
-      sqlite.prepare(`
-        INSERT INTO inventory_movements
-          (user_name, sku_id, lot_id, qty_units, unit_type, from_location_id, to_location_id, from_pallet_id,
-           type, reference_type, reference_id, note)
-        VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?, 'BREAK_TO_LOOSE', 'MANUAL', NULL, ?)
-      `).run(
-        userName,
-        pallet.sku_id,
-        pallet.lot_id,
-        Number(qty),
-        unitTypeRow?.unit_type || 'unit',
-        fromLoc?.id ?? null,
-        walkin.id,
-        palletId,
-        `Broke pallet ${palletId} from ${fromLoc?.code ?? 'UNKNOWN'} to WALKIN (+${qty})`
-      );
-    });
-    tx.call(this);
-  },
-
-  listWalkinLoose() {
-    return sqlite.prepare(`
-      SELECT li.*,
-             s.name AS sku_name,
-             s.unit_type AS unit_type,
-             lo.lot_number AS lot_number
-      FROM loose_inventory li
-      JOIN skus s ON s.id = li.sku_id
-      LEFT JOIN lots lo ON lo.id = li.lot_id
-      JOIN locations l ON l.id = li.location_id
-      WHERE l.code='WALKIN'
-      ORDER BY sku_name COLLATE NOCASE, lot_number COLLATE NOCASE
-    `).all();
-  },
-
-  // ==========================================================
-  // Quick Add Pallet helpers
-  // ==========================================================
-  createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes }) {
-    const tx = sqlite.transaction(() => {
-      const loc = sqlite.prepare('SELECT * FROM locations WHERE code=?').get(locationCode);
-      if (!loc) throw new Error(`Location not found: ${locationCode}`);
-
-      const skuRow = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(skuId);
-      if (!skuRow) throw new Error('SKU not found');
-
-      const result = sqlite.prepare(`
-        INSERT INTO pallets
-          (sku_id, lot_id, pallet_config_id, location_id, qty_units, status, notes)
-        VALUES
-          (?, ?, ?, ?, ?, 'SEALED', ?)
-      `).run(
-        skuId,
-        lotId || null,
-        palletConfigId || null,
-        loc.id,
-        Number(qtyUnits),
-        notes || null
-      );
-
-      sqlite.prepare(`
-        INSERT INTO inventory_movements
-          (user_name, sku_id, lot_id, qty_units, unit_type, to_location_id, to_pallet_id,
-           type, reference_type, reference_id, note)
-        VALUES
-          (?, ?, ?, ?, ?, ?, ?, 'RECEIVE', 'MANUAL', NULL, ?)
-      `).run(
-        'user',
-        skuId,
-        lotId || null,
-        Number(qtyUnits),
-        skuRow.unit_type || 'unit',
-        loc.id,
-        result.lastInsertRowid,
-        'Quick add pallet'
-      );
-
-      return result.lastInsertRowid;
-    });
-
-    return tx();
-  },
-
-  listSkus() {
-    return sqlite.prepare(`
-      SELECT * FROM skus
-      WHERE active=1
-      ORDER BY name COLLATE NOCASE
-    `).all();
-  },
-
-  listLotsForSku(skuId) {
-    return sqlite.prepare(`
-      SELECT * FROM lots
-      WHERE sku_id=?
-      ORDER BY created_at DESC
-    `).all(skuId);
-  },
-
-  listPalletConfigsForSku(skuId) {
-    return sqlite.prepare(`
-      SELECT * FROM pallet_configs
-      WHERE sku_id=?
-      ORDER BY is_default DESC, name COLLATE NOCASE
-    `).all(skuId);
-  }
 };
-
