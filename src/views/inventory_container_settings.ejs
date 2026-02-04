@@ -2,32 +2,34 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Container Layout Settings</title>
+  <title>Container Settings</title>
   <style>
-    body { font-family: system-ui; margin: 24px; max-width: 980px; }
+    body { font-family: system-ui; margin: 24px; max-width: 900px; }
     h1 { margin: 0 0 6px 0; }
-    .muted { color:#666; font-size: 13px; }
+    .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    .nav { margin-top: 10px; margin-bottom: 18px; }
     .card { border:1px solid #ddd; border-radius: 12px; padding: 16px; margin-top: 14px; background:#fff; }
     table { border-collapse: collapse; width: 100%; }
-    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align:left; vertical-align: top; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align:left; }
     th { background:#fafafa; }
-    select { width: 100%; padding: 8px; border:1px solid #ddd; border-radius: 10px; }
-    button { margin-top: 16px; padding: 12px 16px; border-radius: 10px; border:1px solid #333; background:#111; color:#fff; }
-    .msg { margin-top: 12px; padding: 10px; border-radius: 10px; background: #f4f4f4; }
-    a { color:#111; text-decoration:none; }
-    .nav { margin-top: 10px; }
-    .small { font-size: 12px; color: #666; margin-top: 2px; }
-    .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #ddd; background:#fff; font-size:12px; }
+    select { padding:8px; border-radius:10px; border:1px solid #ddd; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; }
+    .msg { margin-top:12px; padding:10px; border-radius:10px; background:#f4f4f4; }
   </style>
 </head>
 <body>
 
-<h1>Container Layout Settings</h1>
-<div class="muted">Door side is <b>01</b>. Left/Right lanes are <b>L</b> and <b>R</b>.</div>
+<h1>Container Settings</h1>
+<div class="muted">
+  Configure pallet layout and orientation for each container.
+</div>
 
 <div class="nav muted">
   <a href="/inventory/yard">Yard</a> |
   <a href="/inventory/map?c=1">Container Map</a> |
+  <a href="/inventory/settings/skus">SKU Settings</a> |
+  <a href="/inventory/walkin">Walk-in</a> |
   <a href="/">Home</a>
 </div>
 
@@ -35,63 +37,54 @@
   <div class="msg"><%= msg %></div>
 <% } %>
 
-<div class="card">
-  <form method="post">
+<form method="post" action="/inventory/settings/containers">
+  <div class="card">
     <table>
       <thead>
         <tr>
-          <th style="width:90px;">Container</th>
-          <th style="width:240px;">Mode</th>
-          <th style="width:240px;">Flip</th>
-          <th>Effective Layout</th>
+          <th>Container</th>
+          <th>Layout Mode</th>
+          <th>Orientation</th>
+          <th>Preview</th>
         </tr>
       </thead>
       <tbody>
-
-        <tr>
-          <td><b>C1</b><div class="small">20 ft</div></td>
-          <td>
-            <select name="mode_C1">
-              <option value="8-slot" <%= current.C1.mode === '8-slot' ? 'selected' : '' %>>8-slot (4/4)</option>
-              <option value="9-slot" <%= current.C1.mode === '9-slot' ? 'selected' : '' %>>9-slot (5/4)</option>
-            </select>
-          </td>
-          <td>
-            <select name="flip_C1">
-              <option value="L_LONG" <%= current.C1.flip === 'L_LONG' ? 'selected' : '' %>>Left longer (L>R)</option>
-              <option value="R_LONG" <%= current.C1.flip === 'R_LONG' ? 'selected' : '' %>>Right longer (R>L)</option>
-            </select>
-            <div class="small">Flip matters only for 9-slot.</div>
-          </td>
-          <td><span class="pill"><%= current.C1.label %></span></td>
-        </tr>
-
-        <% ['C2','C3','C4','C5','C6','C7'].forEach(cn => { %>
+        <% Object.keys(current).forEach(k => { const c = current[k]; %>
           <tr>
-            <td><b><%= cn %></b><div class="small">40 ft</div></td>
+            <td><b><%= k %></b></td>
+
             <td>
-              <select name="mode_<%= cn %>">
-                <option value="18-slot" <%= current[cn].mode === '18-slot' ? 'selected' : '' %>>18-slot (9/9)</option>
-                <option value="20-slot" <%= current[cn].mode === '20-slot' ? 'selected' : '' %>>20-slot (11/9)</option>
+              <select name="mode_<%= k %>">
+                <% if (k === 'C1') { %>
+                  <option value="8-slot" <%= c.mode==='8-slot'?'selected':'' %>>8-slot (4 / 4)</option>
+                  <option value="9-slot" <%= c.mode==='9-slot'?'selected':'' %>>9-slot (5 / 4 or 4 / 5)</option>
+                <% } else { %>
+                  <option value="18-slot" <%= c.mode==='18-slot'?'selected':'' %>>18-slot (9 / 9)</option>
+                  <option value="20-slot" <%= c.mode==='20-slot'?'selected':'' %>>20-slot (11 / 9 or 9 / 11)</option>
+                <% } %>
               </select>
             </td>
+
             <td>
-              <select name="flip_<%= cn %>">
-                <option value="L_LONG" <%= current[cn].flip === 'L_LONG' ? 'selected' : '' %>>Left longer (L>R)</option>
-                <option value="R_LONG" <%= current[cn].flip === 'R_LONG' ? 'selected' : '' %>>Right longer (R>L)</option>
+              <select name="flip_<%= k %>">
+                <option value="L_LONG" <%= c.flip==='L_LONG'?'selected':'' %>>Left side longer</option>
+                <option value="R_LONG" <%= c.flip==='R_LONG'?'selected':'' %>>Right side longer</option>
               </select>
-              <div class="small">Flip matters only for 20-slot.</div>
             </td>
-            <td><span class="pill"><%= current[cn].label %></span></td>
+
+            <td class="muted">
+              <%= c.label %>
+            </td>
           </tr>
         <% }) %>
-
       </tbody>
     </table>
 
-    <button type="submit">Save</button>
-  </form>
-</div>
+    <div style="margin-top:16px;">
+      <button type="submit">Save Container Settings</button>
+    </div>
+  </div>
+</form>
 
 </body>
 </html>
