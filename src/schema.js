@@ -3,10 +3,6 @@ import { db } from './db.js';
 export function ensureSchema() {
   const s = db.sqlite;
   s.exec(`
-    -- =========================
-    -- Core / Existing Tables
-    -- =========================
-
     CREATE TABLE IF NOT EXISTS connections (
       id INTEGER PRIMARY KEY CHECK (id=1),
       realm_id TEXT NOT NULL,
@@ -39,12 +35,12 @@ export function ensureSchema() {
 
     CREATE TABLE IF NOT EXISTS customer_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      match_type TEXT NOT NULL,              -- exact | prefix
-      customer_id TEXT,                      -- for exact
-      prefix TEXT,                           -- for prefix
-      rule_type TEXT NOT NULL,               -- always_0 | always_15 | conditional | exclude
-      threshold REAL,                        -- for conditional
-      amount REAL,                           -- for always/conditional (default 15)
+      match_type TEXT NOT NULL,
+      customer_id TEXT,
+      prefix TEXT,
+      rule_type TEXT NOT NULL,
+      threshold REAL,
+      amount REAL,
       enabled INTEGER NOT NULL DEFAULT 1
     );
 
@@ -104,11 +100,11 @@ export function ensureSchema() {
 
     CREATE TABLE IF NOT EXISTS locations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL,                    -- CONTAINER | WALKIN | RETURNS
-      code TEXT NOT NULL UNIQUE,             -- C3-R01, WALKIN, RETURNS
-      container_no INTEGER NULL,             -- 1..7
-      side TEXT NULL,                        -- L | R
-      depth INTEGER NULL,                   -- 1..10 (01 closest to door)
+      type TEXT NOT NULL,
+      code TEXT NOT NULL UNIQUE,
+      container_no INTEGER NULL,
+      side TEXT NULL,
+      depth INTEGER NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -118,9 +114,9 @@ export function ensureSchema() {
 
     CREATE TABLE IF NOT EXISTS container_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      container_no INTEGER NOT NULL,         -- 1..7
-      mode_name TEXT NOT NULL,               -- 8-slot | 10-slot | 18-slot | 20-slot
-      max_depth INTEGER NOT NULL,            -- 4,5,9,10
+      container_no INTEGER NOT NULL,
+      mode_name TEXT NOT NULL,
+      max_depth INTEGER NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -130,7 +126,7 @@ export function ensureSchema() {
 
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL,                    -- PACKING_LIST | BOL | OTHER
+      type TEXT NOT NULL,
       filename TEXT NOT NULL,
       storage_path TEXT NOT NULL,
       parsed_json TEXT,
@@ -171,7 +167,7 @@ export function ensureSchema() {
       pallet_config_id INTEGER REFERENCES pallet_configs(id),
       location_id INTEGER NOT NULL REFERENCES locations(id),
       qty_units REAL NOT NULL,
-      status TEXT NOT NULL DEFAULT 'SEALED', -- SEALED | OPEN | DEPLETED
+      status TEXT NOT NULL DEFAULT 'SEALED',
       received_receipt_id INTEGER REFERENCES receipts(id),
       notes TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -217,25 +213,24 @@ export function ensureSchema() {
 }
 
 export function seedDefaults() {
-  // -------------------------
   // Existing settings
-  // -------------------------
   if (!db.getSetting('default_surcharge_amount')) db.setSetting('default_surcharge_amount', '15');
   if (!db.getSetting('surcharge_item_name')) db.setSetting('surcharge_item_name', 'Operating Cost Surcharge');
   if (!db.getSetting('uncategorized_position')) db.setSetting('uncategorized_position', 'bottom');
 
-  // -------------------------
   // Inventory global defaults
-  // -------------------------
   if (!db.getSetting('default_pallet_pick_threshold')) db.setSetting('default_pallet_pick_threshold', '0.80');
   if (!db.getSetting('lane_priority')) db.setSetting('lane_priority', 'R_FIRST');
   if (!db.getSetting('walkin_first_default')) db.setSetting('walkin_first_default', '1');
+
+  // Container mode settings
   if (!db.getSetting('container_mode_C1')) db.setSetting('container_mode_C1', '10-slot');
+  for (let c = 2; c <= 7; c++) {
+    const key = `container_mode_C${c}`;
+    if (!db.getSetting(key)) db.setSetting(key, '20-slot'); // default 40ft = 20 slot
+  }
 
-
-  // -------------------------
-  // Seed customer rules (only once)
-  // -------------------------
+  // Seed customer rules only once
   const rules = db.listRules();
   if (rules.length === 0) {
     db.upsertRule({
@@ -248,7 +243,6 @@ export function seedDefaults() {
       amount: 0,
       enabled: 1
     });
-
     db.upsertRule({
       id: null,
       match_type: 'exact',
@@ -259,7 +253,6 @@ export function seedDefaults() {
       amount: 15,
       enabled: 0
     });
-
     db.upsertRule({
       id: null,
       match_type: 'exact',
@@ -270,7 +263,6 @@ export function seedDefaults() {
       amount: null,
       enabled: 0
     });
-
     db.upsertRule({
       id: null,
       match_type: 'exact',
@@ -292,15 +284,12 @@ function seedLocationsAndDefaults() {
   const upsertLoc = s.prepare(`
     INSERT INTO locations (type, code, container_no, side, depth, enabled)
     VALUES (@type, @code, @container_no, @side, @depth, @enabled)
-    ON CONFLICT(code) DO UPDATE SET
-      enabled = excluded.enabled
+    ON CONFLICT(code) DO UPDATE SET enabled = excluded.enabled
   `);
 
-  // Base locations
   upsertLoc.run({ type: 'WALKIN',  code: 'WALKIN',  container_no: null, side: null, depth: null, enabled: 1 });
   upsertLoc.run({ type: 'RETURNS', code: 'RETURNS', container_no: null, side: null, depth: null, enabled: 1 });
 
-  // Container templates
   const upsertTemplate = s.prepare(`
     INSERT INTO container_templates (container_no, mode_name, max_depth, enabled)
     VALUES (?, ?, ?, 1)
@@ -316,7 +305,6 @@ function seedLocationsAndDefaults() {
     upsertTemplate.run(c, '20-slot', 10);
   }
 
-  // Container slots: C1–C7, L/R01–10 (01 = closest to door)
   for (let containerNo = 1; containerNo <= 7; containerNo++) {
     for (const side of ['L', 'R']) {
       for (let depth = 1; depth <= 10; depth++) {
