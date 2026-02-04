@@ -187,7 +187,7 @@ app.post('/inventory/settings/containers', requireConnected, (req, res) => {
 });
 
 // ===============================
-// Inventory: SKU Sync + Settings  ✅ NEW
+// Inventory: SKU Sync + Settings
 // ===============================
 app.get('/inventory/settings/skus', requireConnected, (req, res) => {
   const skus = db.listSkusAll();
@@ -204,10 +204,21 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
     let total = 0;
 
     while (true) {
-      const q = `select Id, Name, Type, Active from Item where Type != 'Category' startposition ${start} maxresults ${pageSize}`;
+      // ✅ No filter. Fetch all Items; we'll just ignore ones without Id/Name.
+      const q = `select Id, Name, Type, Active from Item startposition ${start} maxresults ${pageSize}`;
       const r = await qboQuery(oauthClient, conn.realm_id, q);
 
       const items = r?.QueryResponse?.Item || [];
+
+      // Log batch count so you can confirm what QBO returned
+      db.addLog({
+        invoice_id: null,
+        customer_name: null,
+        action: 'sku_sync_batch',
+        detail: `Fetched ${items.length} items (start=${start})`,
+        source: 'sku_sync'
+      });
+
       for (const it of items) {
         if (!it?.Id || !it?.Name) continue;
         db.upsertSkuFromQbo({ qbo_item_id: String(it.Id), name: String(it.Name) });
@@ -261,6 +272,69 @@ app.post('/inventory/settings/skus/update', requireConnected, (req, res) => {
   }
 });
 
+// ===============================
+// Inventory: Yard + Map (asymmetric)
+// ===============================
+app.get('/inventory/yard', requireConnected, (req, res) => {
+  const containers = db.listContainers();
+  const yard = containers.map(containerNo => {
+    const pallets = db.listPalletsInContainer(containerNo);
+    const palletByLoc = new Map();
+    for (const p of pallets) palletByLoc.set(p.location_code, p);
+
+    const depths = db.getContainerDepths(containerNo);
+    const left = [];
+    const right = [];
+
+    for (let d = 1; d <= depths.leftMax; d++) {
+      const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
+      left.push({ code, pallet: palletByLoc.get(code) || null });
+    }
+    for (let d = 1; d <= depths.rightMax; d++) {
+      const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
+      right.push({ code, pallet: palletByLoc.get(code) || null });
+    }
+
+    return { containerNo, label: depths.label, left, right };
+  });
+
+  res.render('inventory_yard', { yard });
+});
+
+app.get('/inventory/map', requireConnected, (req, res) => {
+  const containerNo = Number(req.query.c || 1);
+  const containers = db.listContainers();
+
+  const pallets = db.listPalletsInContainer(containerNo);
+  const palletByLoc = new Map();
+  for (const p of pallets) palletByLoc.set(p.location_code, p);
+
+  const depths = db.getContainerDepths(containerNo);
+  const left = [];
+  const right = [];
+
+  for (let d = 1; d <= depths.leftMax; d++) {
+    const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
+    left.push({ code, pallet: palletByLoc.get(code) || null });
+  }
+  for (let d = 1; d <= depths.rightMax; d++) {
+    const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
+    right.push({ code, pallet: palletByLoc.get(code) || null });
+  }
+
+  const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
+  const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
+
+  res.render('inventory_map', {
+    containerNo,
+    containers,
+    left,
+    right,
+    containerLabel: depths.label,
+    slotOptions,
+    c1Mode
+  });
+});
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
-
