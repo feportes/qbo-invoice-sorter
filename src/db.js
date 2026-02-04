@@ -144,10 +144,10 @@ export const db = {
 
   // Containers
   listContainers() {
-    return [1, 2, 3, 4, 5, 6, 7];
+    return [1,2,3,4,5,6,7];
   },
 
-  // Asymmetric per-container depths based on mode + flip
+  // ✅ Asymmetric per-container depths based on mode + flip
   getContainerDepths(containerNo) {
     if (containerNo === 1) {
       const mode = this.getSetting('container_mode_C1') || '8-slot';
@@ -174,8 +174,8 @@ export const db = {
   listValidSlotCodes(containerNo) {
     const { leftMax, rightMax } = this.getContainerDepths(containerNo);
     const codes = [];
-    for (let d = 1; d <= leftMax; d++) codes.push(`C${containerNo}-L${String(d).padStart(2, '0')}`);
-    for (let d = 1; d <= rightMax; d++) codes.push(`C${containerNo}-R${String(d).padStart(2, '0')}`);
+    for (let d = 1; d <= leftMax; d++) codes.push(`C${containerNo}-L${String(d).padStart(2,'0')}`);
+    for (let d = 1; d <= rightMax; d++) codes.push(`C${containerNo}-R${String(d).padStart(2,'0')}`);
     return codes;
   },
 
@@ -258,7 +258,7 @@ export const db = {
   },
 
   // ============================
-  // SKU Sync / Settings helpers  ✅ NEW
+  // SKU Sync / Settings helpers ✅ NEW
   // ============================
 
   upsertSkuFromQbo({ qbo_item_id, name }) {
@@ -295,5 +295,5 @@ export const db = {
       pallet_pick_threshold,
       sku_id
     );
-  },
+  }
 };
