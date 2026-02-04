@@ -134,7 +134,7 @@ app.post('/admin/process-invoice', requireConnected, async (req, res) => {
 // Inventory UI
 // ==========================================================
 
-// Container map
+// Container map (with dropdown slot options + drag/drop)
 app.get('/inventory/map', requireConnected, (req, res) => {
   const containerNo = Number(req.query.c || 1);
   const containers = db.listContainers();
@@ -148,12 +148,9 @@ app.get('/inventory/map', requireConnected, (req, res) => {
     ? (db.getSetting('container_mode_C1') || '10-slot')
     : null;
 
-  // Build two columns (L/R) from door to deep (01..10) but respect C1 capacity
+  // Build two columns (L/R) from door to deep
   let maxDepth = 10;
-
-  if (containerNo === 1) {
-    maxDepth = (c1Mode === '8-slot') ? 4 : 5;
-  }
+  if (containerNo === 1) maxDepth = (c1Mode === '8-slot') ? 4 : 5;
 
   const left = [];
   const right = [];
@@ -164,7 +161,14 @@ app.get('/inventory/map', requireConnected, (req, res) => {
     right.push({ code: rCode, pallet: palletByLoc.get(rCode) || null });
   }
 
-  res.render('inventory_map', { containerNo, containers, left, right, c1Mode });
+  // Slot options for dropdown move (current container only + WALKIN + RETURNS)
+  const slotOptions = [
+    ...db.listValidSlotCodes(containerNo),
+    'WALKIN',
+    'RETURNS'
+  ];
+
+  res.render('inventory_map', { containerNo, containers, left, right, c1Mode, slotOptions });
 });
 
 // Walk-in list
@@ -173,10 +177,20 @@ app.get('/inventory/walkin', requireConnected, (req, res) => {
   res.render('inventory_walkin', { rows });
 });
 
-// Quick add pallet
+// Quick add pallet (container + slot dropdown)
 app.get('/inventory/add-pallet', requireConnected, (req, res) => {
   const skus = db.listSkus();
-  res.render('inventory_add_pallet', { skus, msg: null });
+  const containers = db.listContainers();
+  const containerNo = Number(req.query.c || 1);
+  const slotOptions = db.listValidSlotCodes(containerNo);
+
+  res.render('inventory_add_pallet', {
+    skus,
+    msg: null,
+    containers,
+    containerNo,
+    slotOptions
+  });
 });
 
 app.post('/inventory/add-pallet', requireConnected, (req, res) => {
@@ -192,27 +206,48 @@ app.post('/inventory/add-pallet', requireConnected, (req, res) => {
       notes
     });
 
-    // redirect to the container map for that container if location is Cx-...
     const cMatch = (location_code || '').match(/^C(\d+)-/);
     const cNo = cMatch ? Number(cMatch[1]) : 1;
     res.redirect(`/inventory/map?c=${cNo}`);
   } catch (e) {
     const skus = db.listSkus();
-    res.status(400).render('inventory_add_pallet', { skus, msg: e?.message || String(e) });
+    const containers = db.listContainers();
+    const containerNo = 1;
+    const slotOptions = db.listValidSlotCodes(containerNo);
+    res.status(400).render('inventory_add_pallet', {
+      skus,
+      msg: e?.message || String(e),
+      containers,
+      containerNo,
+      slotOptions
+    });
   }
 });
 
-// Move pallet between slots
+// Move pallet between slots (form-based)
 app.post('/inventory/move', requireConnected, (req, res) => {
   const { pallet_id, to_slot, container_no } = req.body;
   try {
     const loc = db.getLocationByCode(to_slot);
     if (!loc) throw new Error(`Destination slot not found: ${to_slot}`);
-
     db.movePallet(Number(pallet_id), loc.id, 'user');
     res.redirect(`/inventory/map?c=${encodeURIComponent(container_no)}`);
   } catch (e) {
     res.status(500).send(`Move failed: ${e?.message || e}`);
+  }
+});
+
+// Move pallet (JSON endpoint for drag/drop)
+app.post('/inventory/move-json', requireConnected, (req, res) => {
+  try {
+    const { pallet_id, to_slot } = req.body;
+    const loc = db.getLocationByCode(to_slot);
+    if (!loc) return res.status(400).json({ ok: false, error: `Destination slot not found: ${to_slot}` });
+
+    db.movePallet(Number(pallet_id), loc.id, 'user');
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
@@ -234,7 +269,6 @@ app.post('/inventory/break-to-walkin', requireConnected, (req, res) => {
 
 // Webhook endpoint
 app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
-  // Always respond quickly
   res.status(200).send('OK');
 
   try {
