@@ -134,6 +134,60 @@ app.post('/admin/process-invoice', requireConnected, async (req, res) => {
 // Inventory UI
 // ==========================================================
 
+// Container mode settings UI
+app.get('/inventory/settings/containers', requireConnected, (req, res) => {
+  const current = {
+    C1: db.getSetting('container_mode_C1') || '10-slot',
+    C2: db.getSetting('container_mode_C2') || '20-slot',
+    C3: db.getSetting('container_mode_C3') || '20-slot',
+    C4: db.getSetting('container_mode_C4') || '20-slot',
+    C5: db.getSetting('container_mode_C5') || '20-slot',
+    C6: db.getSetting('container_mode_C6') || '20-slot',
+    C7: db.getSetting('container_mode_C7') || '20-slot',
+  };
+
+  res.render('inventory_container_settings', { current, msg: null });
+});
+
+app.post('/inventory/settings/containers', requireConnected, (req, res) => {
+  try {
+    const { mode_c1, mode_c2, mode_c3, mode_c4, mode_c5, mode_c6, mode_c7 } = req.body;
+
+    // Validate values
+    const validC1 = new Set(['8-slot', '10-slot']);
+    const valid40 = new Set(['18-slot', '20-slot']);
+
+    if (!validC1.has(mode_c1)) throw new Error('Invalid mode for C1');
+    const list40 = [mode_c2, mode_c3, mode_c4, mode_c5, mode_c6, mode_c7];
+    if (list40.some(v => !valid40.has(v))) throw new Error('Invalid mode for C2–C7');
+
+    db.setSetting('container_mode_C1', mode_c1);
+    db.setSetting('container_mode_C2', mode_c2);
+    db.setSetting('container_mode_C3', mode_c3);
+    db.setSetting('container_mode_C4', mode_c4);
+    db.setSetting('container_mode_C5', mode_c5);
+    db.setSetting('container_mode_C6', mode_c6);
+    db.setSetting('container_mode_C7', mode_c7);
+
+    const current = {
+      C1: mode_c1, C2: mode_c2, C3: mode_c3, C4: mode_c4, C5: mode_c5, C6: mode_c6, C7: mode_c7
+    };
+
+    res.render('inventory_container_settings', { current, msg: 'Saved successfully.' });
+  } catch (e) {
+    const current = {
+      C1: db.getSetting('container_mode_C1') || '10-slot',
+      C2: db.getSetting('container_mode_C2') || '20-slot',
+      C3: db.getSetting('container_mode_C3') || '20-slot',
+      C4: db.getSetting('container_mode_C4') || '20-slot',
+      C5: db.getSetting('container_mode_C5') || '20-slot',
+      C6: db.getSetting('container_mode_C6') || '20-slot',
+      C7: db.getSetting('container_mode_C7') || '20-slot',
+    };
+    res.status(400).render('inventory_container_settings', { current, msg: e?.message || String(e) });
+  }
+});
+
 
 // Multi-container yard view (drag/drop across all containers)
 app.get('/inventory/yard', requireConnected, (req, res) => {
