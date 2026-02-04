@@ -163,14 +163,21 @@ export const db = {
     return [1, 2, 3, 4, 5, 6, 7];
   },
 
-  // NEW: generates valid slot codes for dropdowns (respects C1 mode)
-  listValidSlotCodes(containerNo) {
-    let maxDepth = 10;
-
+  // NEW: returns max depth for a container based on saved mode
+  // C1: 8-slot -> depth 4; 10-slot -> depth 5
+  // C2-C7: 18-slot -> depth 9; 20-slot -> depth 10
+  getContainerMaxDepth(containerNo) {
     if (containerNo === 1) {
       const mode = this.getSetting('container_mode_C1') || '10-slot';
-      maxDepth = (mode === '8-slot') ? 4 : 5;
+      return (mode === '8-slot') ? 4 : 5;
     }
+    const mode = this.getSetting(`container_mode_C${containerNo}`) || '20-slot';
+    return (mode === '18-slot') ? 9 : 10;
+  },
+
+  // UPDATED: generates valid slot codes for dropdowns (respects each container mode)
+  listValidSlotCodes(containerNo) {
+    const maxDepth = this.getContainerMaxDepth(containerNo);
 
     const codes = [];
     for (const side of ['L', 'R']) {
@@ -410,3 +417,4 @@ export const db = {
     `).all(skuId);
   }
 };
+
