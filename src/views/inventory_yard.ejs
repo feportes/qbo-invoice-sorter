@@ -98,11 +98,23 @@
   <% yard.forEach(c => { %>
     <div class="container">
       <h2>C<%= c.containerNo %></h2>
+
       <div class="meta muted">
         <% if (c.containerNo === 1 && c.c1Mode) { %>
           Mode: <b><%= c.c1Mode %></b>
+          <% if (c.c1Mode === '8-slot') { %>
+            (L01–L04 / R01–R04)
+          <% } else { %>
+            (L01–L05 / R01–R05)
+          <% } %>
         <% } else { %>
-          40ft slots shown: L01–L10 / R01–L10
+          <% 
+            // Determine depth from rendered slots (server already respected mode)
+            const maxDepth = (c.left && c.left.length) ? c.left.length : 10;
+            const modeLabel = (maxDepth === 9) ? '18-slot' : '20-slot';
+            const rangeLabel = (maxDepth === 9) ? 'L01–L09 / R01–R09' : 'L01–L10 / R01–R10';
+          %>
+          Mode: <b><%= modeLabel %></b> (<%= rangeLabel %>)
         <% } %>
       </div>
 
