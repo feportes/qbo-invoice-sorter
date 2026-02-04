@@ -46,8 +46,7 @@ export const db = {
   },
   setSetting(key, value) {
     sqlite.prepare(`
-      INSERT INTO settings (key, value)
-      VALUES (?, ?)
+      INSERT INTO settings (key, value) VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value
     `).run(key, String(value));
   },
@@ -94,21 +93,18 @@ export const db = {
   saveCategoryOrder(categoryIdsInOrder) {
     const tx = sqlite.transaction((arr) => {
       sqlite.prepare('DELETE FROM category_order').run();
-      const ins = sqlite.prepare(
-        'INSERT INTO category_order (category_id, sort_index) VALUES (?, ?)'
-      );
+      const ins = sqlite.prepare('INSERT INTO category_order (category_id, sort_index) VALUES (?, ?)');
       arr.forEach((id, idx) => ins.run(id, idx));
     });
     tx(categoryIdsInOrder);
   },
 
   // ==========================================================
-  // Customer Rules (surcharge logic)
+  // Rules (surcharge)
   // ==========================================================
   listRules() {
     return sqlite.prepare(`
-      SELECT *
-      FROM customer_rules
+      SELECT * FROM customer_rules
       ORDER BY enabled DESC, match_type ASC, rule_type ASC
     `).all();
   },
@@ -128,10 +124,8 @@ export const db = {
       return;
     }
     sqlite.prepare(`
-      INSERT INTO customer_rules
-        (match_type, customer_id, prefix, rule_type, threshold, amount, enabled)
-      VALUES
-        (@match_type, @customer_id, @prefix, @rule_type, @threshold, @amount, @enabled)
+      INSERT INTO customer_rules (match_type, customer_id, prefix, rule_type, threshold, amount, enabled)
+      VALUES (@match_type, @customer_id, @prefix, @rule_type, @threshold, @amount, @enabled)
     `).run(r);
   },
   deleteRule(id) {
@@ -139,16 +133,37 @@ export const db = {
   },
 
   // ==========================================================
-  // Inventory helpers
+  // Logs
+  // ==========================================================
+  addLog({ invoice_id, customer_name, action, detail, source }) {
+    sqlite.prepare(`
+      INSERT INTO logs (invoice_id, customer_name, action, detail, source)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(invoice_id, customer_name, action, detail, source);
+  },
+  listLogs(limit = 50) {
+    return sqlite.prepare('SELECT * FROM logs ORDER BY created_at DESC LIMIT ?').all(limit);
+  },
+
+  // ==========================================================
+  // Invoice processing lock / idempotency
+  // ==========================================================
+  hasProcessed(invoiceId, syncToken) {
+    const row = sqlite.prepare('SELECT 1 FROM processed WHERE invoice_id=? AND sync_token=?').get(invoiceId, syncToken);
+    return !!row;
+  },
+  markProcessed(invoiceId, syncToken) {
+    sqlite.prepare('INSERT INTO processed (invoice_id, sync_token) VALUES (?, ?)').run(invoiceId, syncToken);
+  },
+
+  // ==========================================================
+  // Inventory: Containers / Slots helpers
   // ==========================================================
   listContainers() {
     return [1, 2, 3, 4, 5, 6, 7];
   },
 
-  /**
-   * Returns valid slot codes for a container,
-   * respecting C1 8-slot / 10-slot mode
-   */
+  // NEW: generates valid slot codes for dropdowns (respects C1 mode)
   listValidSlotCodes(containerNo) {
     let maxDepth = 10;
 
@@ -166,33 +181,232 @@ export const db = {
     return codes;
   },
 
-  // ==========================================================
-  // Logs
-  // ==========================================================
-  addLog({ invoice_id, customer_name, action, detail, source }) {
-    sqlite.prepare(`
-      INSERT INTO logs (invoice_id, customer_name, action, detail, source)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(invoice_id, customer_name, action, detail, source);
-  },
-  listLogs(limit = 50) {
-    return sqlite
-      .prepare('SELECT * FROM logs ORDER BY created_at DESC LIMIT ?')
-      .all(limit);
+  getLocationByCode(code) {
+    return sqlite.prepare('SELECT * FROM locations WHERE code=?').get(code);
   },
 
   // ==========================================================
-  // Invoice idempotency
+  // Inventory: Pallets / Walk-in / Moves
   // ==========================================================
-  hasProcessed(invoiceId, syncToken) {
-    const row = sqlite
-      .prepare('SELECT 1 FROM processed WHERE invoice_id=? AND sync_token=?')
-      .get(invoiceId, syncToken);
-    return !!row;
+  listPalletsInContainer(containerNo) {
+    return sqlite.prepare(`
+      SELECT p.*,
+             l.code AS location_code,
+             s.name AS sku_name,
+             s.unit_type AS unit_type,
+             lo.lot_number AS lot_number
+      FROM pallets p
+      JOIN locations l ON l.id = p.location_id
+      JOIN skus s ON s.id = p.sku_id
+      LEFT JOIN lots lo ON lo.id = p.lot_id
+      WHERE l.type='CONTAINER' AND l.container_no=?
+      ORDER BY l.depth ASC, l.side DESC
+    `).all(containerNo);
   },
-  markProcessed(invoiceId, syncToken) {
-    sqlite
-      .prepare('INSERT INTO processed (invoice_id, sync_token) VALUES (?, ?)')
-      .run(invoiceId, syncToken);
+
+  getPalletById(palletId) {
+    return sqlite.prepare(`
+      SELECT p.*, l.code AS location_code,
+             s.name AS sku_name, s.unit_type AS unit_type,
+             lo.lot_number AS lot_number
+      FROM pallets p
+      JOIN locations l ON l.id = p.location_id
+      JOIN skus s ON s.id = p.sku_id
+      LEFT JOIN lots lo ON lo.id = p.lot_id
+      WHERE p.id=?
+    `).get(palletId);
+  },
+
+  movePallet(palletId, toLocationId, userName = 'system') {
+    const tx = sqlite.transaction(() => {
+      const pallet = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(palletId);
+      if (!pallet) throw new Error('Pallet not found');
+
+      const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
+      const toLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(toLocationId);
+      if (!toLoc) throw new Error('Destination location not found');
+
+      sqlite.prepare('UPDATE pallets SET location_id=? WHERE id=?').run(toLocationId, palletId);
+
+      const unitTypeRow = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(pallet.sku_id);
+
+      sqlite.prepare(`
+        INSERT INTO inventory_movements
+          (user_name, sku_id, lot_id, qty_units, unit_type, from_location_id, to_location_id, from_pallet_id, to_pallet_id,
+           type, reference_type, reference_id, note)
+        VALUES
+          (?, ?, ?, 0, ?, ?, ?, ?, ?, 'MOVE_PALLET', 'MANUAL', NULL, ?)
+      `).run(
+        userName,
+        pallet.sku_id,
+        pallet.lot_id,
+        unitTypeRow?.unit_type || 'unit',
+        fromLoc?.id ?? null,
+        toLoc.id,
+        palletId,
+        palletId,
+        `Moved pallet from ${fromLoc?.code ?? 'UNKNOWN'} to ${toLoc.code}`
+      );
+    });
+    tx();
+  },
+
+  addLooseQty({ skuId, lotId, locationId, qtyDelta }) {
+    const tx = sqlite.transaction(() => {
+      const row = sqlite.prepare(`
+        SELECT * FROM loose_inventory
+        WHERE sku_id=? AND COALESCE(lot_id,0)=COALESCE(?,0) AND location_id=?
+      `).get(skuId, lotId, locationId);
+
+      if (!row) {
+        sqlite.prepare(`
+          INSERT INTO loose_inventory (sku_id, lot_id, location_id, qty_units)
+          VALUES (?, ?, ?, ?)
+        `).run(skuId, lotId || null, locationId, qtyDelta);
+      } else {
+        sqlite.prepare(`
+          UPDATE loose_inventory
+          SET qty_units = qty_units + ?, updated_at=CURRENT_TIMESTAMP
+          WHERE id=?
+        `).run(qtyDelta, row.id);
+      }
+    });
+    tx();
+  },
+
+  breakPalletToWalkin({ palletId, qty, userName = 'system' }) {
+    const tx = sqlite.transaction(() => {
+      const pallet = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(palletId);
+      if (!pallet) throw new Error('Pallet not found');
+
+      if (Number(pallet.qty_units) < Number(qty)) {
+        throw new Error(`Not enough qty on pallet. On pallet: ${pallet.qty_units}`);
+      }
+
+      const walkin = sqlite.prepare(`SELECT * FROM locations WHERE code='WALKIN'`).get();
+      if (!walkin) throw new Error('WALKIN location missing');
+
+      const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
+      const unitTypeRow = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(pallet.sku_id);
+
+      const newQty = Number(pallet.qty_units) - Number(qty);
+      const newStatus = newQty <= 0 ? 'DEPLETED' : 'OPEN';
+
+      sqlite.prepare('UPDATE pallets SET qty_units=?, status=? WHERE id=?')
+        .run(newQty, newStatus, palletId);
+
+      this.addLooseQty({
+        skuId: pallet.sku_id,
+        lotId: pallet.lot_id,
+        locationId: walkin.id,
+        qtyDelta: Number(qty)
+      });
+
+      sqlite.prepare(`
+        INSERT INTO inventory_movements
+          (user_name, sku_id, lot_id, qty_units, unit_type, from_location_id, to_location_id, from_pallet_id,
+           type, reference_type, reference_id, note)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, 'BREAK_TO_LOOSE', 'MANUAL', NULL, ?)
+      `).run(
+        userName,
+        pallet.sku_id,
+        pallet.lot_id,
+        Number(qty),
+        unitTypeRow?.unit_type || 'unit',
+        fromLoc?.id ?? null,
+        walkin.id,
+        palletId,
+        `Broke pallet ${palletId} from ${fromLoc?.code ?? 'UNKNOWN'} to WALKIN (+${qty})`
+      );
+    });
+    tx.call(this);
+  },
+
+  listWalkinLoose() {
+    return sqlite.prepare(`
+      SELECT li.*,
+             s.name AS sku_name,
+             s.unit_type AS unit_type,
+             lo.lot_number AS lot_number
+      FROM loose_inventory li
+      JOIN skus s ON s.id = li.sku_id
+      LEFT JOIN lots lo ON lo.id = li.lot_id
+      JOIN locations l ON l.id = li.location_id
+      WHERE l.code='WALKIN'
+      ORDER BY sku_name COLLATE NOCASE, lot_number COLLATE NOCASE
+    `).all();
+  },
+
+  // ==========================================================
+  // Quick Add Pallet helpers
+  // ==========================================================
+  createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes }) {
+    const tx = sqlite.transaction(() => {
+      const loc = sqlite.prepare('SELECT * FROM locations WHERE code=?').get(locationCode);
+      if (!loc) throw new Error(`Location not found: ${locationCode}`);
+
+      const skuRow = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(skuId);
+      if (!skuRow) throw new Error('SKU not found');
+
+      const result = sqlite.prepare(`
+        INSERT INTO pallets
+          (sku_id, lot_id, pallet_config_id, location_id, qty_units, status, notes)
+        VALUES
+          (?, ?, ?, ?, ?, 'SEALED', ?)
+      `).run(
+        skuId,
+        lotId || null,
+        palletConfigId || null,
+        loc.id,
+        Number(qtyUnits),
+        notes || null
+      );
+
+      sqlite.prepare(`
+        INSERT INTO inventory_movements
+          (user_name, sku_id, lot_id, qty_units, unit_type, to_location_id, to_pallet_id,
+           type, reference_type, reference_id, note)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, 'RECEIVE', 'MANUAL', NULL, ?)
+      `).run(
+        'user',
+        skuId,
+        lotId || null,
+        Number(qtyUnits),
+        skuRow.unit_type || 'unit',
+        loc.id,
+        result.lastInsertRowid,
+        'Quick add pallet'
+      );
+
+      return result.lastInsertRowid;
+    });
+
+    return tx();
+  },
+
+  listSkus() {
+    return sqlite.prepare(`
+      SELECT * FROM skus
+      WHERE active=1
+      ORDER BY name COLLATE NOCASE
+    `).all();
+  },
+
+  listLotsForSku(skuId) {
+    return sqlite.prepare(`
+      SELECT * FROM lots
+      WHERE sku_id=?
+      ORDER BY created_at DESC
+    `).all(skuId);
+  },
+
+  listPalletConfigsForSku(skuId) {
+    return sqlite.prepare(`
+      SELECT * FROM pallet_configs
+      WHERE sku_id=?
+      ORDER BY is_default DESC, name COLLATE NOCASE
+    `).all(skuId);
   }
 };
