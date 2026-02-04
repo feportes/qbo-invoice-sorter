@@ -1,0 +1,218 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Inventory Yard (C1–C7)</title>
+  <style>
+    body { font-family: system-ui; margin: 24px; }
+    .top { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    a { color:#111; text-decoration:none; }
+    .muted { color:#666; font-size:13px; }
+
+    .dropzone {
+      border:2px dashed #bbb; border-radius:12px; padding:10px;
+      margin: 12px 0; max-width: 1000px;
+    }
+    .dropzone.drop-hover { border-color:#111; }
+
+    .yard {
+      display:grid;
+      grid-template-columns: repeat(2, minmax(320px, 1fr));
+      gap:16px;
+      align-items:start;
+    }
+
+    .container {
+      border:1px solid #ddd; border-radius:12px; padding:12px;
+      background:#fff;
+    }
+
+    .container h2 { margin:0 0 6px 0; font-size:18px; }
+    .container .meta { margin-bottom:10px; }
+
+    .grid {
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:12px;
+    }
+
+    .col { border:1px solid #eee; border-radius:12px; padding:10px; }
+    .col h3 { margin:0 0 8px 0; font-size:14px; }
+    .slot {
+      border:1px solid #f0f0f0;
+      border-radius:12px;
+      padding:8px;
+      margin-bottom:8px;
+      min-height: 44px;
+    }
+    .slot.drop-hover { outline:2px dashed #111; }
+
+    .code { font-weight:700; font-size:13px; }
+    .empty { color:#999; font-size:12px; margin-top:2px; }
+
+    .pallet {
+      margin-top:6px;
+      border:1px solid #ddd;
+      border-radius:10px;
+      padding:8px;
+      background:#fafafa;
+      cursor: grab;
+    }
+    .pill {
+      display:inline-block;
+      padding:2px 8px;
+      border-radius:999px;
+      border:1px solid #ddd;
+      font-size:12px;
+      margin-left:6px;
+      background:#fff;
+    }
+  </style>
+</head>
+<body>
+
+<div class="top">
+  <h1 style="margin:0;">Inventory Yard (C1–C7)</h1>
+  <span class="muted">Drag a pallet and drop it into any slot. This moves pallets across containers instantly.</span>
+  <span class="muted">|</span>
+  <a href="/inventory/map?c=1">Container Map</a>
+  <span class="muted">|</span>
+  <a href="/inventory/add-pallet?c=1">+ Add Pallet</a>
+  <span class="muted">|</span>
+  <a href="/inventory/walkin">Walk-in</a>
+  <span class="muted">|</span>
+  <a href="/">Home</a>
+</div>
+
+<div class="dropzone" id="walkinDrop" data-slot="WALKIN">
+  <b>Drop Here → WALKIN</b>
+  <div class="muted">Drop a pallet here to move it into the walk-in freezer location.</div>
+</div>
+
+<div class="dropzone" id="returnsDrop" data-slot="RETURNS">
+  <b>Drop Here → RETURNS</b>
+  <div class="muted">Drop a pallet here if it’s returned/staging.</div>
+</div>
+
+<div class="yard">
+  <% yard.forEach(c => { %>
+    <div class="container">
+      <h2>C<%= c.containerNo %></h2>
+      <div class="meta muted">
+        <% if (c.containerNo === 1 && c.c1Mode) { %>
+          Mode: <b><%= c.c1Mode %></b>
+        <% } else { %>
+          40ft slots shown: L01–L10 / R01–L10
+        <% } %>
+      </div>
+
+      <div class="grid">
+        <div class="col">
+          <h3>LEFT (L)</h3>
+          <% c.left.forEach(s => { %>
+            <div class="slot" data-slot="<%= s.code %>">
+              <div class="code"><%= s.code %></div>
+              <% if (!s.pallet) { %>
+                <div class="empty">Empty</div>
+              <% } else { %>
+                <div class="pallet" draggable="true" data-pallet-id="<%= s.pallet.id %>">
+                  <div>
+                    <b>#<%= s.pallet.id %></b>
+                    <span class="pill"><%= s.pallet.status %></span>
+                  </div>
+                  <div class="muted">
+                    <%= s.pallet.sku_name %>
+                    <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
+                    • <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
+                  </div>
+                </div>
+              <% } %>
+            </div>
+          <% }) %>
+        </div>
+
+        <div class="col">
+          <h3>RIGHT (R)</h3>
+          <% c.right.forEach(s => { %>
+            <div class="slot" data-slot="<%= s.code %>">
+              <div class="code"><%= s.code %></div>
+              <% if (!s.pallet) { %>
+                <div class="empty">Empty</div>
+              <% } else { %>
+                <div class="pallet" draggable="true" data-pallet-id="<%= s.pallet.id %>">
+                  <div>
+                    <b>#<%= s.pallet.id %></b>
+                    <span class="pill"><%= s.pallet.status %></span>
+                  </div>
+                  <div class="muted">
+                    <%= s.pallet.sku_name %>
+                    <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
+                    • <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
+                  </div>
+                </div>
+              <% } %>
+            </div>
+          <% }) %>
+        </div>
+      </div>
+    </div>
+  <% }) %>
+</div>
+
+<script>
+  let draggedPalletId = null;
+
+  function postMove(palletId, toSlot) {
+    return fetch('/inventory/move-json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pallet_id: palletId, to_slot: toSlot })
+    });
+  }
+
+  document.querySelectorAll('.pallet').forEach(el => {
+    el.addEventListener('dragstart', (e) => {
+      draggedPalletId = el.dataset.palletId;
+      e.dataTransfer.setData('text/plain', draggedPalletId);
+      e.dataTransfer.effectAllowed = 'move';
+    });
+  });
+
+  function makeDroppable(node) {
+    node.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      node.classList.add('drop-hover');
+      e.dataTransfer.dropEffect = 'move';
+    });
+
+    node.addEventListener('dragleave', () => {
+      node.classList.remove('drop-hover');
+    });
+
+    node.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      node.classList.remove('drop-hover');
+
+      const palletId = e.dataTransfer.getData('text/plain') || draggedPalletId;
+      const toSlot = node.dataset.slot;
+
+      if (!palletId || !toSlot) return;
+
+      const resp = await postMove(palletId, toSlot);
+      const json = await resp.json().catch(() => null);
+
+      if (!resp.ok || !json?.ok) {
+        alert('Move failed: ' + (json?.error || resp.statusText));
+        return;
+      }
+      window.location.reload();
+    });
+  }
+
+  document.querySelectorAll('.slot').forEach(makeDroppable);
+  makeDroppable(document.getElementById('walkinDrop'));
+  makeDroppable(document.getElementById('returnsDrop'));
+</script>
+
+</body>
+</html>

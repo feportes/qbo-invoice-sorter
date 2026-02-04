@@ -134,6 +134,39 @@ app.post('/admin/process-invoice', requireConnected, async (req, res) => {
 // Inventory UI
 // ==========================================================
 
+
+// Multi-container yard view (drag/drop across all containers)
+app.get('/inventory/yard', requireConnected, (req, res) => {
+  const containers = db.listContainers();
+
+  const yard = containers.map(containerNo => {
+    const pallets = db.listPalletsInContainer(containerNo);
+    const palletByLoc = new Map();
+    for (const p of pallets) palletByLoc.set(p.location_code, p);
+
+    // Respect C1 mode for depth; all others show full 10
+    let maxDepth = 10;
+    let c1Mode = null;
+    if (containerNo === 1) {
+      c1Mode = db.getSetting('container_mode_C1') || '10-slot';
+      maxDepth = (c1Mode === '8-slot') ? 4 : 5;
+    }
+
+    const left = [];
+    const right = [];
+    for (let depth = 1; depth <= maxDepth; depth++) {
+      const lCode = `C${containerNo}-L${String(depth).padStart(2, '0')}`;
+      const rCode = `C${containerNo}-R${String(depth).padStart(2, '0')}`;
+      left.push({ code: lCode, pallet: palletByLoc.get(lCode) || null });
+      right.push({ code: rCode, pallet: palletByLoc.get(rCode) || null });
+    }
+
+    return { containerNo, c1Mode, left, right };
+  });
+
+  res.render('inventory_yard', { yard });
+});
+
 // Container map (with dropdown slot options + drag/drop)
 app.get('/inventory/map', requireConnected, (req, res) => {
   const containerNo = Number(req.query.c || 1);
