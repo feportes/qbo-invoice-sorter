@@ -144,13 +144,13 @@ app.get('/inventory/yard', requireConnected, (req, res) => {
     const palletByLoc = new Map();
     for (const p of pallets) palletByLoc.set(p.location_code, p);
 
-    // Respect C1 mode for depth; all others show full 10
-    let maxDepth = 10;
-    let c1Mode = null;
-    if (containerNo === 1) {
-      c1Mode = db.getSetting('container_mode_C1') || '10-slot';
-      maxDepth = (c1Mode === '8-slot') ? 4 : 5;
-    }
+    // Use per-container max depth (C1 uses 8/10-slot; C2-7 use 18/20-slot)
+    const maxDepth = db.getContainerMaxDepth(containerNo);
+
+    // Only show C1 mode label (optional)
+    const c1Mode = (containerNo === 1)
+      ? (db.getSetting('container_mode_C1') || '10-slot')
+      : null;
 
     const left = [];
     const right = [];
@@ -176,14 +176,13 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   const palletByLoc = new Map();
   for (const p of pallets) palletByLoc.set(p.location_code, p);
 
-  // Determine active C1 mode (for label + slot depth)
+  // Only used for label on C1
   const c1Mode = (containerNo === 1)
     ? (db.getSetting('container_mode_C1') || '10-slot')
     : null;
 
-  // Build two columns (L/R) from door to deep
-  let maxDepth = 10;
-  if (containerNo === 1) maxDepth = (c1Mode === '8-slot') ? 4 : 5;
+  // Use per-container max depth
+  const maxDepth = db.getContainerMaxDepth(containerNo);
 
   const left = [];
   const right = [];
