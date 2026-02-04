@@ -238,13 +238,17 @@ app.get('/inventory/map', requireConnected, (req, res) => {
 
   const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
 
+  // ✅ FIX: provide c1Mode so existing EJS header block doesn't crash
+  const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
+
   res.render('inventory_map', {
     containerNo,
     containers,
     left,
     right,
     containerLabel: depths.label,
-    slotOptions
+    slotOptions,
+    c1Mode
   });
 });
 
