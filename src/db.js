@@ -144,10 +144,10 @@ export const db = {
 
   // Containers
   listContainers() {
-    return [1,2,3,4,5,6,7];
+    return [1, 2, 3, 4, 5, 6, 7];
   },
 
-  // ✅ Asymmetric per-container depths based on mode + flip
+  // Asymmetric per-container depths based on mode + flip
   getContainerDepths(containerNo) {
     if (containerNo === 1) {
       const mode = this.getSetting('container_mode_C1') || '8-slot';
@@ -174,8 +174,8 @@ export const db = {
   listValidSlotCodes(containerNo) {
     const { leftMax, rightMax } = this.getContainerDepths(containerNo);
     const codes = [];
-    for (let d = 1; d <= leftMax; d++) codes.push(`C${containerNo}-L${String(d).padStart(2,'0')}`);
-    for (let d = 1; d <= rightMax; d++) codes.push(`C${containerNo}-R${String(d).padStart(2,'0')}`);
+    for (let d = 1; d <= leftMax; d++) codes.push(`C${containerNo}-L${String(d).padStart(2, '0')}`);
+    for (let d = 1; d <= rightMax; d++) codes.push(`C${containerNo}-R${String(d).padStart(2, '0')}`);
     return codes;
   },
 
@@ -255,5 +255,45 @@ export const db = {
       }
     });
     tx();
+  },
+
+  // ============================
+  // SKU Sync / Settings helpers  ✅ NEW
+  // ============================
+
+  upsertSkuFromQbo({ qbo_item_id, name }) {
+    sqlite.prepare(`
+      INSERT INTO skus (qbo_item_id, name, unit_type, is_organic, is_lot_tracked, active)
+      VALUES (?, ?, 'unit', 0, 0, 1)
+      ON CONFLICT(qbo_item_id) DO UPDATE SET
+        name = excluded.name
+    `).run(String(qbo_item_id), String(name));
+  },
+
+  listSkusAll() {
+    return sqlite.prepare(`
+      SELECT *
+      FROM skus
+      ORDER BY name COLLATE NOCASE
+    `).all();
+  },
+
+  updateSkuSettings({ sku_id, active, is_organic, is_lot_tracked, unit_type, pallet_pick_threshold }) {
+    sqlite.prepare(`
+      UPDATE skus
+      SET active = ?,
+          is_organic = ?,
+          is_lot_tracked = ?,
+          unit_type = ?,
+          pallet_pick_threshold = ?
+      WHERE id = ?
+    `).run(
+      active,
+      is_organic,
+      is_lot_tracked,
+      unit_type,
+      pallet_pick_threshold,
+      sku_id
+    );
   },
 };

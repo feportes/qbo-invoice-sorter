@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { db } from './src/db.js';
 import { ensureSchema, seedDefaults } from './src/schema.js';
 import { getOAuthClient, authStart, authCallback, requireConnected } from './src/oauth.js';
-import { qboReadItemByName } from './src/qbo.js';
+import { qboReadItemByName, qboQuery } from './src/qbo.js';
 import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
@@ -187,70 +187,80 @@ app.post('/inventory/settings/containers', requireConnected, (req, res) => {
 });
 
 // ===============================
-// Inventory: Yard + Map (asymmetric)
+// Inventory: SKU Sync + Settings  ✅ NEW
 // ===============================
-app.get('/inventory/yard', requireConnected, (req, res) => {
-  const containers = db.listContainers();
-  const yard = containers.map(containerNo => {
-    const pallets = db.listPalletsInContainer(containerNo);
-    const palletByLoc = new Map();
-    for (const p of pallets) palletByLoc.set(p.location_code, p);
-
-    const depths = db.getContainerDepths(containerNo);
-    const left = [];
-    const right = [];
-
-    for (let d = 1; d <= depths.leftMax; d++) {
-      const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
-      left.push({ code, pallet: palletByLoc.get(code) || null });
-    }
-    for (let d = 1; d <= depths.rightMax; d++) {
-      const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
-      right.push({ code, pallet: palletByLoc.get(code) || null });
-    }
-
-    return { containerNo, label: depths.label, left, right };
-  });
-
-  res.render('inventory_yard', { yard });
+app.get('/inventory/settings/skus', requireConnected, (req, res) => {
+  const skus = db.listSkusAll();
+  res.render('inventory_sku_settings', { skus, msg: null });
 });
 
-app.get('/inventory/map', requireConnected, (req, res) => {
-  const containerNo = Number(req.query.c || 1);
-  const containers = db.listContainers();
+app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => {
+  const conn = db.getConnectionOrThrow();
+  const oauthClient = getOAuthClient(conn);
 
-  const pallets = db.listPalletsInContainer(containerNo);
-  const palletByLoc = new Map();
-  for (const p of pallets) palletByLoc.set(p.location_code, p);
+  try {
+    let start = 1;
+    const pageSize = 1000;
+    let total = 0;
 
-  const depths = db.getContainerDepths(containerNo);
-  const left = [];
-  const right = [];
+    while (true) {
+      const q = `select Id, Name, Type, Active from Item where Type != 'Category' startposition ${start} maxresults ${pageSize}`;
+      const r = await qboQuery(oauthClient, conn.realm_id, q);
 
-  for (let d = 1; d <= depths.leftMax; d++) {
-    const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
-    left.push({ code, pallet: palletByLoc.get(code) || null });
+      const items = r?.QueryResponse?.Item || [];
+      for (const it of items) {
+        if (!it?.Id || !it?.Name) continue;
+        db.upsertSkuFromQbo({ qbo_item_id: String(it.Id), name: String(it.Name) });
+      }
+
+      total += items.length;
+      if (items.length < pageSize) break;
+      start += pageSize;
+    }
+
+    const skus = db.listSkusAll();
+    res.render('inventory_sku_settings', { skus, msg: `Synced ${total} items from QuickBooks.` });
+  } catch (e) {
+    const skus = db.listSkusAll();
+    res.status(500).render('inventory_sku_settings', { skus, msg: `Sync failed: ${e?.message || e}` });
   }
-  for (let d = 1; d <= depths.rightMax; d++) {
-    const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
-    right.push({ code, pallet: palletByLoc.get(code) || null });
+});
+
+app.post('/inventory/settings/skus/update', requireConnected, (req, res) => {
+  try {
+    const sku_id = Number(req.body.sku_id);
+
+    const active = req.body.active === 'on' ? 1 : 0;
+    const is_lot_tracked = req.body.is_lot_tracked === 'on' ? 1 : 0;
+    const is_organic = req.body.is_organic === 'on' ? 1 : 0;
+    const unit_type = (req.body.unit_type || 'unit').toString();
+
+    let threshold = req.body.pallet_pick_threshold;
+    threshold = (threshold === undefined || threshold === null || String(threshold).trim() === '')
+      ? null
+      : Number(threshold);
+
+    if (threshold !== null && (threshold < 0.1 || threshold > 1.0)) {
+      throw new Error('Pallet threshold must be between 0.10 and 1.00 (or blank).');
+    }
+
+    db.updateSkuSettings({
+      sku_id,
+      active,
+      is_organic,
+      is_lot_tracked,
+      unit_type,
+      pallet_pick_threshold: threshold
+    });
+
+    const skus = db.listSkusAll();
+    res.render('inventory_sku_settings', { skus, msg: 'Saved SKU settings.' });
+  } catch (e) {
+    const skus = db.listSkusAll();
+    res.status(400).render('inventory_sku_settings', { skus, msg: e?.message || String(e) });
   }
-
-  const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
-
-  // ✅ FIX: provide c1Mode so existing EJS header block doesn't crash
-  const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
-
-  res.render('inventory_map', {
-    containerNo,
-    containers,
-    left,
-    right,
-    containerLabel: depths.label,
-    slotOptions,
-    c1Mode
-  });
 });
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
+
