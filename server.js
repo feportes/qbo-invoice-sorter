@@ -139,14 +139,16 @@ app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
     const r = await qboQuery(oauthClient, conn.realm_id, q);
 
     const items = r?.QueryResponse?.Item || [];
-    const meta = {
-      realm_id: conn.realm_id,
-      company_name: conn.company_name || null,
-      returned_count: items.length,
-      startPosition: r?.QueryResponse?.startPosition ?? null,
-      maxResults: r?.QueryResponse?.maxResults ?? null,
-      totalCount: r?.QueryResponse?.totalCount ?? null
-    };
+    const meta = db.getConnection()
+      ? {
+          realm_id: conn.realm_id,
+          company_name: conn.company_name || null,
+          returned_count: items.length,
+          startPosition: r?.QueryResponse?.startPosition ?? null,
+          maxResults: r?.QueryResponse?.maxResults ?? null,
+          totalCount: r?.QueryResponse?.totalCount ?? null
+        }
+      : null;
 
     const preview = items.slice(0, 10).map(it => ({
       Id: it.Id,
@@ -379,28 +381,79 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   });
 });
 
-// Webhook endpoint (invoice sorter/surcharge)
+// ==========================================================
+// Webhook endpoint (invoice sorter/surcharge) ✅ UPDATED with logs
+// ==========================================================
 app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
+  // respond immediately so Intuit doesn't retry
   res.status(200).send('OK');
 
   try {
     const conn = db.getConnection();
-    if (!conn) return;
+    if (!conn) {
+      db.addLog({
+        invoice_id: null,
+        customer_name: null,
+        action: 'webhook_skip',
+        detail: 'Received webhook but no connection saved (go to /auth/start).',
+        source: 'webhook'
+      });
+      return;
+    }
 
     const oauthClient = getOAuthClient(conn);
     const payload = req.body;
 
     const notifications = payload?.eventNotifications || [];
+    let invoiceIds = [];
+
     for (const n of notifications) {
       const entities = n?.dataChangeEvent?.entities || [];
       for (const ent of entities) {
-        if (ent?.name === 'Invoice' && ent?.id) {
-          processInvoice({ oauthClient, realmId: conn.realm_id, invoiceId: ent.id, source: 'webhook' })
-            .catch(() => {});
-        }
+        if (ent?.name === 'Invoice' && ent?.id) invoiceIds.push(String(ent.id));
       }
     }
-  } catch {}
+
+    db.addLog({
+      invoice_id: null,
+      customer_name: null,
+      action: 'webhook_received',
+      detail: `Received webhook: notifications=${notifications.length}, invoices=${invoiceIds.length}, ids=${invoiceIds.slice(0, 20).join(',')}`,
+      source: 'webhook'
+    });
+
+    for (const invoiceId of invoiceIds) {
+      processInvoice({ oauthClient, realmId: conn.realm_id, invoiceId, source: 'webhook' })
+        .then(() => {
+          db.addLog({
+            invoice_id: invoiceId,
+            customer_name: null,
+            action: 'webhook_processed_ok',
+            detail: 'Invoice processed successfully.',
+            source: 'webhook'
+          });
+        })
+        .catch(err => {
+          db.addLog({
+            invoice_id: invoiceId,
+            customer_name: null,
+            action: 'webhook_processed_error',
+            detail: `Processing failed: ${err?.message || String(err)}`,
+            source: 'webhook'
+          });
+        });
+    }
+  } catch (e) {
+    try {
+      db.addLog({
+        invoice_id: null,
+        customer_name: null,
+        action: 'webhook_fatal_error',
+        detail: `Fatal webhook handler error: ${e?.message || String(e)}`,
+        source: 'webhook'
+      });
+    } catch {}
+  }
 });
 
 const port = process.env.PORT || 3000;
