@@ -121,6 +121,48 @@ app.post('/admin/process-invoice', requireConnected, async (req, res) => {
 });
 
 // ===============================
+// DEBUG: QBO Item query check ✅ NEW
+// ===============================
+app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
+  const conn = db.getConnectionOrThrow();
+  const oauthClient = getOAuthClient(conn);
+
+  try {
+    const q = `select Id, Name, Type, Active from Item startposition 1 maxresults 25`;
+    const r = await qboQuery(oauthClient, conn.realm_id, q);
+
+    const items = r?.QueryResponse?.Item || [];
+    const meta = {
+      realm_id: conn.realm_id,
+      company_name: conn.company_name || null,
+      returned_count: items.length,
+      startPosition: r?.QueryResponse?.startPosition ?? null,
+      maxResults: r?.QueryResponse?.maxResults ?? null,
+      totalCount: r?.QueryResponse?.totalCount ?? null
+    };
+
+    db.addLog({
+      invoice_id: null,
+      customer_name: null,
+      action: 'qbo_items_check',
+      detail: JSON.stringify(meta),
+      source: 'debug'
+    });
+
+    const preview = items.slice(0, 10).map(it => ({
+      Id: it.Id,
+      Name: it.Name,
+      Type: it.Type,
+      Active: it.Active
+    }));
+
+    res.status(200).send(`<pre>${JSON.stringify({ meta, preview }, null, 2)}</pre>`);
+  } catch (e) {
+    res.status(500).send(`QBO items check failed: ${e?.message || e}`);
+  }
+});
+
+// ===============================
 // Inventory: Container Settings (mode + flip)
 // ===============================
 app.get('/inventory/settings/containers', requireConnected, (req, res) => {
@@ -204,13 +246,11 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
     let total = 0;
 
     while (true) {
-      // ✅ No filter. Fetch all Items; we'll just ignore ones without Id/Name.
       const q = `select Id, Name, Type, Active from Item startposition ${start} maxresults ${pageSize}`;
       const r = await qboQuery(oauthClient, conn.realm_id, q);
 
       const items = r?.QueryResponse?.Item || [];
 
-      // Log batch count so you can confirm what QBO returned
       db.addLog({
         invoice_id: null,
         customer_name: null,
