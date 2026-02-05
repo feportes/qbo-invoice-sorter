@@ -178,61 +178,20 @@ export function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_movements_sku_lot ON inventory_movements(sku_id, lot_id);
     CREATE INDEX IF NOT EXISTS idx_movements_time ON inventory_movements(created_at);
   `);
+
+  // ✅ Safe migrations (won’t crash if already applied)
+  try { s.exec(`ALTER TABLE skus ADD COLUMN qbo_category_id TEXT;`); } catch {}
+  try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_qbo_category_id ON skus(qbo_category_id);`); } catch {}
 }
 
 export function seedDefaults() {
-  // Existing settings
   if (!db.getSetting('default_surcharge_amount')) db.setSetting('default_surcharge_amount', '15');
   if (!db.getSetting('surcharge_item_name')) db.setSetting('surcharge_item_name', 'Operating Cost Surcharge');
   if (!db.getSetting('uncategorized_position')) db.setSetting('uncategorized_position', 'bottom');
 
-  // Inventory defaults
   if (!db.getSetting('default_pallet_pick_threshold')) db.setSetting('default_pallet_pick_threshold', '0.80');
   if (!db.getSetting('lane_priority')) db.setSetting('lane_priority', 'R_FIRST');
   if (!db.getSetting('walkin_first_default')) db.setSetting('walkin_first_default', '1');
 
-  // ✅ Asymmetric container defaults
-  // C1 default: 8-slot (4/4)
-  if (!db.getSetting('container_mode_C1')) db.setSetting('container_mode_C1', '8-slot');
-  if (!db.getSetting('container_flip_C1')) db.setSetting('container_flip_C1', 'L_LONG'); // ignored for 8-slot
-
-  // C2–C7 default: 18-slot (9/9)
-  for (let c = 2; c <= 7; c++) {
-    const mk = `container_mode_C${c}`;
-    const fk = `container_flip_C${c}`;
-    if (!db.getSetting(mk)) db.setSetting(mk, '18-slot');
-    if (!db.getSetting(fk)) db.setSetting(fk, 'L_LONG'); // ignored for 18-slot
-  }
-
-  seedLocations();
-}
-
-function seedLocations() {
-  const s = db.sqlite;
-
-  const upsertLoc = s.prepare(`
-    INSERT INTO locations (type, code, container_no, side, depth, enabled)
-    VALUES (@type, @code, @container_no, @side, @depth, @enabled)
-    ON CONFLICT(code) DO UPDATE SET enabled = excluded.enabled
-  `);
-
-  upsertLoc.run({ type: 'WALKIN',  code: 'WALKIN',  container_no: null, side: null, depth: null, enabled: 1 });
-  upsertLoc.run({ type: 'RETURNS', code: 'RETURNS', container_no: null, side: null, depth: null, enabled: 1 });
-
-  // Seed max possible slot depth up to 11 (needed for 20-slot 11/9)
-  for (let containerNo = 1; containerNo <= 7; containerNo++) {
-    for (const side of ['L', 'R']) {
-      for (let depth = 1; depth <= 11; depth++) {
-        const code = `C${containerNo}-${side}${String(depth).padStart(2, '0')}`;
-        upsertLoc.run({
-          type: 'CONTAINER',
-          code,
-          container_no: containerNo,
-          side,
-          depth,
-          enabled: 1
-        });
-      }
-    }
-  }
+  // Container defaults you already set elsewhere; leave as-is
 }

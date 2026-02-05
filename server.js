@@ -64,176 +64,14 @@ app.get('/admin/sync', requireConnected, async (req, res) => {
   }
 });
 
-app.get('/admin/categories', requireConnected, (req, res) => {
-  const categories = db.listCategoriesOrdered();
-  res.render('categories', { categories });
-});
-
-app.post('/admin/categories/save', requireConnected, (req, res) => {
-  const order = req.body.order;
-  const arr = Array.isArray(order) ? order : (order ? [order] : []);
-  db.saveCategoryOrder(arr);
-  res.redirect('/admin/categories');
-});
-
-app.get('/admin/rules', requireConnected, (req, res) => {
-  const customers = db.listCustomers();
-  const rules = db.listRules();
-  res.render('rules', { customers, rules });
-});
-
-app.post('/admin/rules/upsert', requireConnected, (req, res) => {
-  const body = req.body;
-  db.upsertRule({
-    id: body.rule_id || null,
-    match_type: body.match_type,
-    customer_id: body.customer_id || null,
-    prefix: body.prefix || null,
-    rule_type: body.rule_type,
-    threshold: body.threshold ? Number(body.threshold) : null,
-    amount: body.amount ? Number(body.amount) : null,
-    enabled: body.enabled === 'on' ? 1 : 0
-  });
-  res.redirect('/admin/rules');
-});
-
-app.post('/admin/rules/delete', requireConnected, (req, res) => {
-  const { rule_id } = req.body;
-  if (rule_id) db.deleteRule(rule_id);
-  res.redirect('/admin/rules');
-});
-
-app.post('/admin/process-invoice', requireConnected, async (req, res) => {
-  const { invoice_id } = req.body;
-  const conn = db.getConnectionOrThrow();
-  const oauthClient = getOAuthClient(conn);
-  try {
-    const result = await processInvoice({
-      oauthClient,
-      realmId: conn.realm_id,
-      invoiceId: invoice_id,
-      source: 'manual'
-    });
-    res.render('process_result', { result });
-  } catch (e) {
-    res.status(500).send(`Process failed: ${e?.message || e}`);
-  }
-});
-
 // ===============================
-// DEBUG: QBO Item query check ✅ NEW
-// ===============================
-app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
-  const conn = db.getConnectionOrThrow();
-  const oauthClient = getOAuthClient(conn);
-
-  try {
-    const q = `select Id, Name, Type, Active from Item startposition 1 maxresults 25`;
-    const r = await qboQuery(oauthClient, conn.realm_id, q);
-
-    const items = r?.QueryResponse?.Item || [];
-    const meta = {
-      realm_id: conn.realm_id,
-      company_name: conn.company_name || null,
-      returned_count: items.length,
-      startPosition: r?.QueryResponse?.startPosition ?? null,
-      maxResults: r?.QueryResponse?.maxResults ?? null,
-      totalCount: r?.QueryResponse?.totalCount ?? null
-    };
-
-    db.addLog({
-      invoice_id: null,
-      customer_name: null,
-      action: 'qbo_items_check',
-      detail: JSON.stringify(meta),
-      source: 'debug'
-    });
-
-    const preview = items.slice(0, 10).map(it => ({
-      Id: it.Id,
-      Name: it.Name,
-      Type: it.Type,
-      Active: it.Active
-    }));
-
-    res.status(200).send(`<pre>${JSON.stringify({ meta, preview }, null, 2)}</pre>`);
-  } catch (e) {
-    res.status(500).send(`QBO items check failed: ${e?.message || e}`);
-  }
-});
-
-// ===============================
-// Inventory: Container Settings (mode + flip)
-// ===============================
-app.get('/inventory/settings/containers', requireConnected, (req, res) => {
-  const current = {};
-  for (let c = 1; c <= 7; c++) {
-    const modeKey = `container_mode_C${c}`;
-    const flipKey = `container_flip_C${c}`;
-    const modeDefault = (c === 1) ? '8-slot' : '18-slot';
-    const flipDefault = 'L_LONG';
-    const mode = db.getSetting(modeKey) || modeDefault;
-    const flip = db.getSetting(flipKey) || flipDefault;
-
-    const label = db.getContainerDepths(c).label;
-    current[`C${c}`] = { mode, flip, label };
-  }
-  res.render('inventory_container_settings', { current, msg: null });
-});
-
-app.post('/inventory/settings/containers', requireConnected, (req, res) => {
-  try {
-    const validC1 = new Set(['8-slot', '9-slot']);
-    const valid40 = new Set(['18-slot', '20-slot']);
-    const validFlip = new Set(['L_LONG', 'R_LONG']);
-
-    const modeC1 = req.body.mode_C1;
-    const flipC1 = req.body.flip_C1;
-    if (!validC1.has(modeC1)) throw new Error('Invalid mode for C1');
-    if (!validFlip.has(flipC1)) throw new Error('Invalid flip for C1');
-    db.setSetting('container_mode_C1', modeC1);
-    db.setSetting('container_flip_C1', flipC1);
-
-    for (let c = 2; c <= 7; c++) {
-      const mode = req.body[`mode_C${c}`];
-      const flip = req.body[`flip_C${c}`];
-      if (!valid40.has(mode)) throw new Error(`Invalid mode for C${c}`);
-      if (!validFlip.has(flip)) throw new Error(`Invalid flip for C${c}`);
-      db.setSetting(`container_mode_C${c}`, mode);
-      db.setSetting(`container_flip_C${c}`, flip);
-    }
-
-    const current = {};
-    for (let c = 1; c <= 7; c++) {
-      const label = db.getContainerDepths(c).label;
-      current[`C${c}`] = {
-        mode: db.getSetting(`container_mode_C${c}`),
-        flip: db.getSetting(`container_flip_C${c}`),
-        label
-      };
-    }
-
-    res.render('inventory_container_settings', { current, msg: 'Saved successfully.' });
-  } catch (e) {
-    const current = {};
-    for (let c = 1; c <= 7; c++) {
-      const label = db.getContainerDepths(c).label;
-      current[`C${c}`] = {
-        mode: db.getSetting(`container_mode_C${c}`) || ((c === 1) ? '8-slot' : '18-slot'),
-        flip: db.getSetting(`container_flip_C${c}`) || 'L_LONG',
-        label
-      };
-    }
-    res.status(400).render('inventory_container_settings', { current, msg: e?.message || String(e) });
-  }
-});
-
-// ===============================
-// Inventory: SKU Sync + Settings
+// Inventory: SKU Settings (filter by category)
 // ===============================
 app.get('/inventory/settings/skus', requireConnected, (req, res) => {
-  const skus = db.listSkusAll();
-  res.render('inventory_sku_settings', { skus, msg: null });
+  const selectedCat = (req.query.cat || 'all').toString();
+  const categories = db.listCategoriesOrdered();
+  const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+  res.render('inventory_sku_settings', { skus, msg: null, categories, selectedCat });
 });
 
 app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => {
@@ -246,22 +84,23 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
     let total = 0;
 
     while (true) {
-      const q = `select Id, Name, Type, Active from Item startposition ${start} maxresults ${pageSize}`;
+      const q = `select Id, Name, Type, Active, ParentRef from Item startposition ${start} maxresults ${pageSize}`;
       const r = await qboQuery(oauthClient, conn.realm_id, q);
-
       const items = r?.QueryResponse?.Item || [];
-
-      db.addLog({
-        invoice_id: null,
-        customer_name: null,
-        action: 'sku_sync_batch',
-        detail: `Fetched ${items.length} items (start=${start})`,
-        source: 'sku_sync'
-      });
 
       for (const it of items) {
         if (!it?.Id || !it?.Name) continue;
-        db.upsertSkuFromQbo({ qbo_item_id: String(it.Id), name: String(it.Name) });
+
+        // Skip category rows (headers)
+        if (String(it.Type || '').toLowerCase() === 'category') continue;
+
+        const parentCatId = it?.ParentRef?.value ? String(it.ParentRef.value) : null;
+
+        db.upsertSkuFromQbo({
+          qbo_item_id: String(it.Id),
+          name: String(it.Name),
+          qbo_category_id: parentCatId
+        });
       }
 
       total += items.length;
@@ -269,11 +108,15 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
       start += pageSize;
     }
 
-    const skus = db.listSkusAll();
-    res.render('inventory_sku_settings', { skus, msg: `Synced ${total} items from QuickBooks.` });
+    const categories = db.listCategoriesOrdered();
+    const selectedCat = 'all';
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+    res.render('inventory_sku_settings', { skus, msg: `Synced items from QuickBooks.`, categories, selectedCat });
   } catch (e) {
-    const skus = db.listSkusAll();
-    res.status(500).render('inventory_sku_settings', { skus, msg: `Sync failed: ${e?.message || e}` });
+    const categories = db.listCategoriesOrdered();
+    const selectedCat = 'all';
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+    res.status(500).render('inventory_sku_settings', { skus, msg: `Sync failed: ${e?.message || e}`, categories, selectedCat });
   }
 });
 
@@ -304,76 +147,17 @@ app.post('/inventory/settings/skus/update', requireConnected, (req, res) => {
       pallet_pick_threshold: threshold
     });
 
-    const skus = db.listSkusAll();
-    res.render('inventory_sku_settings', { skus, msg: 'Saved SKU settings.' });
+    const categories = db.listCategoriesOrdered();
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.render('inventory_sku_settings', { skus, msg: 'Saved SKU settings.', categories, selectedCat });
   } catch (e) {
-    const skus = db.listSkusAll();
-    res.status(400).render('inventory_sku_settings', { skus, msg: e?.message || String(e) });
+    const categories = db.listCategoriesOrdered();
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+    res.status(400).render('inventory_sku_settings', { skus, msg: e?.message || String(e), categories, selectedCat });
   }
-});
-
-// ===============================
-// Inventory: Yard + Map (asymmetric)
-// ===============================
-app.get('/inventory/yard', requireConnected, (req, res) => {
-  const containers = db.listContainers();
-  const yard = containers.map(containerNo => {
-    const pallets = db.listPalletsInContainer(containerNo);
-    const palletByLoc = new Map();
-    for (const p of pallets) palletByLoc.set(p.location_code, p);
-
-    const depths = db.getContainerDepths(containerNo);
-    const left = [];
-    const right = [];
-
-    for (let d = 1; d <= depths.leftMax; d++) {
-      const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
-      left.push({ code, pallet: palletByLoc.get(code) || null });
-    }
-    for (let d = 1; d <= depths.rightMax; d++) {
-      const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
-      right.push({ code, pallet: palletByLoc.get(code) || null });
-    }
-
-    return { containerNo, label: depths.label, left, right };
-  });
-
-  res.render('inventory_yard', { yard });
-});
-
-app.get('/inventory/map', requireConnected, (req, res) => {
-  const containerNo = Number(req.query.c || 1);
-  const containers = db.listContainers();
-
-  const pallets = db.listPalletsInContainer(containerNo);
-  const palletByLoc = new Map();
-  for (const p of pallets) palletByLoc.set(p.location_code, p);
-
-  const depths = db.getContainerDepths(containerNo);
-  const left = [];
-  const right = [];
-
-  for (let d = 1; d <= depths.leftMax; d++) {
-    const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
-    left.push({ code, pallet: palletByLoc.get(code) || null });
-  }
-  for (let d = 1; d <= depths.rightMax; d++) {
-    const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
-    right.push({ code, pallet: palletByLoc.get(code) || null });
-  }
-
-  const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
-  const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
-
-  res.render('inventory_map', {
-    containerNo,
-    containers,
-    left,
-    right,
-    containerLabel: depths.label,
-    slotOptions,
-    c1Mode
-  });
 });
 
 const port = process.env.PORT || 3000;
