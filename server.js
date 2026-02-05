@@ -400,6 +400,22 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
       });
       return;
     }
+// TEMP DEBUG: bypass verifier to confirm payload + handler execution
+app.post('/webhooks/qbo-debug', async (req, res) => {
+  res.status(200).send('OK');
+
+  try {
+    db.addLog({
+      invoice_id: null,
+      customer_name: null,
+      action: 'webhook_debug_hit',
+      detail: JSON.stringify(req.body).slice(0, 3000),
+      source: 'webhook_debug'
+    });
+  } catch (e) {
+    console.error('webhook_debug_hit failed', e);
+  }
+});
 
     const oauthClient = getOAuthClient(conn);
     const payload = req.body;
