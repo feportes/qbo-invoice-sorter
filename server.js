@@ -403,4 +403,44 @@ app.post('/webhooks/qbo-debug', (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
+
+// ==========================================================
+// Webhook endpoint (invoice sorter/surcharge)
+// ==========================================================
+app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
+  // respond immediately so Intuit doesn't retry
+  res.status(200).send('OK');
+
+  try {
+    const conn = db.getConnection();
+    if (!conn) {
+      console.log('[webhook] skip: no connection');
+      return;
+    }
+
+    const oauthClient = getOAuthClient(conn);
+    const payload = req.body;
+
+    const notifications = payload?.eventNotifications || [];
+    const invoiceIds = [];
+
+    for (const n of notifications) {
+      const entities = n?.dataChangeEvent?.entities || [];
+      for (const ent of entities) {
+        if (ent?.name === 'Invoice' && ent?.id) invoiceIds.push(String(ent.id));
+      }
+    }
+
+    console.log(`[webhook] received invoices=${invoiceIds.length} ids=${invoiceIds.slice(0, 20).join(',')}`);
+
+    for (const invoiceId of invoiceIds) {
+      processInvoice({ oauthClient, realmId: conn.realm_id, invoiceId, source: 'webhook' })
+        .then(() => console.log(`[webhook] processed ok invoiceId=${invoiceId}`))
+        .catch(err => console.log(`[webhook] processed error invoiceId=${invoiceId} err=${err?.message || err}`));
+    }
+  } catch (e) {
+    console.log('[webhook] fatal error', e?.message || e);
+  }
+});
+
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
