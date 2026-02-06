@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Inventory Engine Settings</title>
+  <style>
+    body { font-family: system-ui; margin: 24px; max-width: 900px; }
+    .muted { color:#666; font-size:13px; }
+    .card { border:1px solid #ddd; border-radius:12px; padding:16px; margin-top:14px; background:#fff; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; }
+    .msg { margin-top:12px; padding:10px; border-radius:10px; background:#f4f4f4; }
+    a { color:#111; text-decoration:none; }
+    .nav { margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<h1>Inventory Engine</h1>
+<div class="muted">
+  Auto-allocation runs on invoice webhooks only when enabled. Future invoices are blocked.
+</div>
+
+<div class="nav muted">
+  <a href="/inventory/allocate">Manual Allocate</a> |
+  <a href="/inventory/settings/pallet-configs">Pallet Configs</a> |
+  <a href="/inventory/settings/skus">SKU Settings</a> |
+  <a href="/">Home</a>
+</div>
+
+<% if (msg) { %>
+  <div class="msg"><%= msg %></div>
+<% } %>
+
+<div class="card">
+  <form method="post" action="/inventory/settings/engine">
+    <label>
+      <input type="checkbox" name="enabled" <%= enabled ? 'checked' : '' %> />
+      Enable auto-allocation on webhook
+    </label>
+
+    <div class="muted" style="margin-top:10px;">
+      Timezone: <b><%= timezone %></b> — allocates when TxnDate ≤ today.
+    </div>
+
+    <div style="margin-top:12px;">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+</div>
+
+</body>
+</html>

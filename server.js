@@ -11,6 +11,8 @@ import { qboReadItemByName, qboQuery, qboReadInvoice, qboReadInvoiceWithRetry } 
 import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
+import { runAutoAllocateForInvoice } from './src/inventory_engine.js';
+
 
 // ✅ Inventory allocation engine (you created this file)
 import { buildPlanFromInvoice, applyPlan } from './src/inventory_allocate.js';
@@ -511,7 +513,25 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
 
     for (const invoiceId of invoiceIds) {
       processInvoice({ oauthClient, realmId: conn.realm_id, invoiceId, source: 'webhook' })
-        .then(() => console.log(`[webhook] processed ok invoiceId=${invoiceId}`))
+        .then(async () => {
+      console.log(`[webhook] processed ok invoiceId=${invoiceId}`);
+
+      // ✅ Auto allocation runs only if enabled
+      if (db.getAutoAllocateEnabled()) {
+        try {
+          const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
+          const invoice = invResp?.Invoice;
+          if (invoice) {
+            await runAutoAllocateForInvoice({ invoice, invoiceId });
+            console.log(`[inv_engine] ok invoiceId=${invoiceId}`);
+          } else {
+            console.log(`[inv_engine] skip invoiceId=${invoiceId} (invoice missing in response)`);
+          }
+        } catch (e) {
+          console.log(`[inv_engine] error invoiceId=${invoiceId} err=${e?.message || e}`);
+        }
+      }
+    })
         .catch(err => console.log(`[webhook] processed error invoiceId=${invoiceId} err=${err?.message || err}`));
     }
   } catch (e) {
@@ -601,6 +621,23 @@ app.post('/inventory/settings/pallet-configs/delete', requireConnected, (req, re
 });
 
 const port = process.env.PORT || 3000;
+
+// ==========================================================
+// Inventory Engine Settings (toggle)
+// ==========================================================
+app.get('/inventory/settings/engine', (req, res) => {
+  const enabled = db.getAutoAllocateEnabled();
+  const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
+  res.render('inventory_engine_settings', { enabled, timezone, msg: null });
+});
+
+app.post('/inventory/settings/engine', (req, res) => {
+  const enabled = req.body.enabled === 'on';
+  db.setAutoAllocateEnabled(enabled);
+  const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
+  res.render('inventory_engine_settings', { enabled, timezone, msg: 'Saved.' });
+});
+
 
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
 
