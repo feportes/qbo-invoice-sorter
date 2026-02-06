@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { db } from './src/db.js';
 import { ensureSchema, seedDefaults } from './src/schema.js';
 import { getOAuthClient, authStart, authCallback, requireConnected } from './src/oauth.js';
-import { qboReadItemByName, qboQuery, qboReadInvoice } from './src/qbo.js';
+import { qboReadItemByName, qboQuery, qboReadInvoice, qboReadInvoiceWithRetry } from './src/qbo.js';
 import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
@@ -405,7 +405,8 @@ app.post('/inventory/allocate/preview', async (req, res) => {
     const conn = db.getConnectionOrThrow();
     const oauthClient = getOAuthClient(conn);
 
-    const invResp = await qboReadInvoice(oauthClient, conn.realm_id, invoiceId);
+    // ✅ Retry read to avoid "invoice not found" right after creation
+    const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
     const invoice = invResp?.Invoice;
     if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
 
@@ -434,7 +435,8 @@ app.post('/inventory/allocate/apply', async (req, res) => {
     const conn = db.getConnectionOrThrow();
     const oauthClient = getOAuthClient(conn);
 
-    const invResp = await qboReadInvoice(oauthClient, conn.realm_id, invoiceId);
+    // ✅ Retry read to avoid "invoice not found" right after creation
+    const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
     const invoice = invResp?.Invoice;
     if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
 
@@ -601,3 +603,4 @@ app.post('/inventory/settings/pallet-configs/delete', requireConnected, (req, re
 const port = process.env.PORT || 3000;
 
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
+
