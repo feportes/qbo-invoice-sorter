@@ -13,6 +13,93 @@ export const db = {
   sqlite,
 
   // ==========================================================
+  // Pallet Configs (UI + default per SKU)
+  // ==========================================================
+  listPalletConfigsAll() {
+    return sqlite.prepare(`
+      SELECT pc.*,
+             s.name AS sku_name,
+             s.unit_type AS unit_type
+      FROM pallet_configs pc
+      JOIN skus s ON s.id = pc.sku_id
+      ORDER BY s.name COLLATE NOCASE, pc.is_default DESC, pc.name COLLATE NOCASE
+    `).all();
+  },
+
+  listPalletConfigsForSku(skuId) {
+    return sqlite.prepare(`
+      SELECT *
+      FROM pallet_configs
+      WHERE sku_id=?
+      ORDER BY is_default DESC, name COLLATE NOCASE
+    `).all(skuId);
+  },
+
+  addPalletConfig({ sku_id, name, ti, hi, units_per_pallet, is_default, notes }) {
+    const tx = sqlite.transaction(() => {
+      if (is_default) {
+        sqlite.prepare(`UPDATE pallet_configs SET is_default=0 WHERE sku_id=?`).run(sku_id);
+      }
+      sqlite.prepare(`
+        INSERT INTO pallet_configs
+          (sku_id, name, ti, hi, units_per_pallet, is_default, notes)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        sku_id,
+        name,
+        ti ?? null,
+        hi ?? null,
+        units_per_pallet,
+        is_default ? 1 : 0,
+        notes ?? null
+      );
+    });
+    tx();
+  },
+
+  updatePalletConfig({ id, sku_id, name, ti, hi, units_per_pallet, is_default, notes }) {
+    const tx = sqlite.transaction(() => {
+      if (is_default) {
+        sqlite.prepare(`UPDATE pallet_configs SET is_default=0 WHERE sku_id=?`).run(sku_id);
+      }
+      sqlite.prepare(`
+        UPDATE pallet_configs
+        SET name=?,
+            ti=?,
+            hi=?,
+            units_per_pallet=?,
+            is_default=?,
+            notes=?
+        WHERE id=?
+      `).run(
+        name,
+        ti ?? null,
+        hi ?? null,
+        units_per_pallet,
+        is_default ? 1 : 0,
+        notes ?? null,
+        id
+      );
+    });
+    tx();
+  },
+
+  deletePalletConfig(id) {
+    sqlite.prepare(`DELETE FROM pallet_configs WHERE id=?`).run(id);
+  },
+
+  getDefaultPalletConfigForSku(skuId) {
+    return sqlite.prepare(`
+      SELECT *
+      FROM pallet_configs
+      WHERE sku_id=? AND is_default=1
+      LIMIT 1
+    `).get(skuId);
+  },
+
+
+  // ==========================================================
   // Invoice processing lock / idempotency (needed by sorter)
   // ==========================================================
   hasProcessed(invoiceId, syncToken) {

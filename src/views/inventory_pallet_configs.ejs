@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Pallet Configs</title>
+  <style>
+    body { font-family: system-ui; margin: 24px; max-width: 1200px; }
+    h1 { margin: 0 0 6px 0; }
+    .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    .nav { margin-top: 10px; }
+    .card { border:1px solid #ddd; border-radius: 12px; padding: 16px; margin-top: 14px; background:#fff; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; }
+    input, select, textarea { padding:8px; border:1px solid #ddd; border-radius:10px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align:left; vertical-align: top; }
+    th { background:#fafafa; position: sticky; top: 0; }
+    .msg { margin-top: 12px; padding: 10px; border-radius: 10px; background: #f4f4f4; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+    .w-260 { width:260px; }
+    .w-160 { width:160px; }
+    .w-120 { width:120px; }
+    .w-90 { width:90px; }
+    .btn-small { padding:8px 10px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; }
+    .danger { background:#b00020; border-color:#b00020; }
+    label { display:block; }
+  </style>
+</head>
+<body>
+
+<h1>Pallet Configs</h1>
+<div class="muted">
+  Define <b>units per pallet</b> for each SKU. This is required for the 80% pallet logic later.
+</div>
+
+<div class="nav muted">
+  <a href="/inventory/yard">Yard</a> |
+  <a href="/inventory/map?c=1">Container Map</a> |
+  <a href="/inventory/settings/containers">Container Settings</a> |
+  <a href="/inventory/settings/skus">SKU Settings</a> |
+  <a href="/">Home</a>
+</div>
+
+<% if (msg) { %>
+  <div class="msg"><%= msg %></div>
+<% } %>
+
+<div class="card">
+  <h3 style="margin-top:0;">Add Pallet Config</h3>
+  <form method="post" action="/inventory/settings/pallet-configs/add">
+    <div class="row">
+      <div>
+        <label class="muted">SKU</label>
+        <select name="sku_id" class="w-260" required>
+          <option value="">Select SKU</option>
+          <% (skus || []).forEach(s => { %>
+            <option value="<%= s.id %>"><%= s.name %></option>
+          <% }) %>
+        </select>
+      </div>
+
+      <div>
+        <label class="muted">Name</label>
+        <input name="name" class="w-160" placeholder="e.g. Standard" required />
+      </div>
+
+      <div>
+        <label class="muted">Units / Pallet</label>
+        <input name="units_per_pallet" class="w-120" type="number" step="1" min="1" required />
+      </div>
+
+      <div>
+        <label class="muted">TI</label>
+        <input name="ti" class="w-90" type="number" step="1" min="1" />
+      </div>
+
+      <div>
+        <label class="muted">HI</label>
+        <input name="hi" class="w-90" type="number" step="1" min="1" />
+      </div>
+
+      <div>
+        <label class="muted">Default</label>
+        <input type="checkbox" name="is_default" />
+      </div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <label class="muted">Notes</label>
+      <textarea name="notes" rows="2" style="width:100%;"></textarea>
+    </div>
+
+    <div style="margin-top:12px;">
+      <button type="submit">Add Config</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Existing Configs</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>SKU</th>
+        <th>Name</th>
+        <th>Units/Pallet</th>
+        <th>TI</th>
+        <th>HI</th>
+        <th>Default</th>
+        <th>Notes</th>
+        <th>Save</th>
+        <th>Delete</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% (configs || []).forEach(c => { %>
+        <tr>
+          <form method="post" action="/inventory/settings/pallet-configs/update">
+            <input type="hidden" name="id" value="<%= c.id %>"/>
+            <input type="hidden" name="sku_id" value="<%= c.sku_id %>"/>
+
+            <td><b><%= c.sku_name %></b></td>
+            <td><input name="name" value="<%= c.name %>" /></td>
+            <td><input name="units_per_pallet" type="number" step="1" min="1" value="<%= c.units_per_pallet %>" /></td>
+            <td><input name="ti" type="number" step="1" min="1" value="<%= c.ti ?? '' %>" /></td>
+            <td><input name="hi" type="number" step="1" min="1" value="<%= c.hi ?? '' %>" /></td>
+            <td><input type="checkbox" name="is_default" <%= c.is_default ? 'checked' : '' %> /></td>
+            <td><input name="notes" value="<%= c.notes ?? '' %>" /></td>
+
+            <td><button class="btn-small" type="submit">Save</button></td>
+          </form>
+
+          <td>
+            <form method="post" action="/inventory/settings/pallet-configs/delete" onsubmit="return confirm('Delete this pallet config?');">
+              <input type="hidden" name="id" value="<%= c.id %>"/>
+              <button class="btn-small danger" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>
