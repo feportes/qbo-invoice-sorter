@@ -28,8 +28,9 @@ export const db = {
       .run(String(invoiceId), String(syncToken));
   },
 
-
+  // ==========================================================
   // Connection
+  // ==========================================================
   getConnection() {
     return sqlite.prepare('SELECT * FROM connections WHERE id=1').get();
   },
@@ -52,7 +53,9 @@ export const db = {
     `).run(row);
   },
 
+  // ==========================================================
   // Settings
+  // ==========================================================
   getSetting(key) {
     const row = sqlite.prepare('SELECT value FROM settings WHERE key=?').get(key);
     return row?.value ?? null;
@@ -64,7 +67,9 @@ export const db = {
     `).run(key, String(value));
   },
 
+  // ==========================================================
   // Customers
+  // ==========================================================
   upsertCustomer({ id, display_name }) {
     sqlite.prepare(`
       INSERT INTO customers (id, display_name)
@@ -79,7 +84,9 @@ export const db = {
     return sqlite.prepare('SELECT * FROM customers WHERE id=?').get(id);
   },
 
+  // ==========================================================
   // Categories (QBO Item Category)
+  // ==========================================================
   upsertCategory({ id, name }) {
     sqlite.prepare(`
       INSERT INTO categories (id, name)
@@ -87,6 +94,7 @@ export const db = {
       ON CONFLICT(id) DO UPDATE SET name=excluded.name
     `).run(id, name);
   },
+
   listCategoriesOrdered() {
     return sqlite.prepare(`
       SELECT c.*, COALESCE(o.sort_index, 999999) AS sort_index
@@ -96,7 +104,19 @@ export const db = {
     `).all();
   },
 
-  // Rules
+  // ✅ Needed by /admin/categories/save
+  saveCategoryOrder(categoryIdsInOrder) {
+    const tx = sqlite.transaction((arr) => {
+      sqlite.prepare('DELETE FROM category_order').run();
+      const ins = sqlite.prepare('INSERT INTO category_order (category_id, sort_index) VALUES (?, ?)');
+      arr.forEach((id, idx) => ins.run(String(id), idx));
+    });
+    tx(categoryIdsInOrder);
+  },
+
+  // ==========================================================
+  // Rules (surcharge)
+  // ==========================================================
   listRules() {
     return sqlite.prepare(`
       SELECT * FROM customer_rules
@@ -127,7 +147,9 @@ export const db = {
     sqlite.prepare('DELETE FROM customer_rules WHERE id=?').run(id);
   },
 
+  // ==========================================================
   // Logs
+  // ==========================================================
   addLog({ invoice_id, customer_name, action, detail, source }) {
     sqlite.prepare(`
       INSERT INTO logs (invoice_id, customer_name, action, detail, source)
@@ -135,7 +157,9 @@ export const db = {
     `).run(invoice_id, customer_name, action, detail, source);
   },
 
-  // Containers (unchanged)
+  // ==========================================================
+  // Containers
+  // ==========================================================
   listContainers() { return [1,2,3,4,5,6,7]; },
 
   getContainerDepths(containerNo) {
@@ -181,10 +205,9 @@ export const db = {
     `).all(containerNo);
   },
 
-  // ============================
+  // ==========================================================
   // SKU Sync / Filter
-  // ============================
-
+  // ==========================================================
   upsertSkuFromQbo({ qbo_item_id, name, qbo_category_id }) {
     sqlite.prepare(`
       INSERT INTO skus (qbo_item_id, name, unit_type, is_organic, is_lot_tracked, active, qbo_category_id)
