@@ -8,7 +8,6 @@ import {
 } from './qbo.js';
 
 const AUTO_MARKER = '[AUTO_SORTED_V1]';
-const AUTO_SURCHARGE_TAG = '(AUTO)';
 
 function isMovableItemLine(line) {
   return line?.DetailType === 'SalesItemLineDetail' && line?.SalesItemLineDetail?.ItemRef?.value;
@@ -22,16 +21,10 @@ function normalize(s) {
   return (s || '').trim().toLowerCase();
 }
 
-function lineHasAutoTag(line) {
-  const d = (line?.Description || '').toString();
-  return d.includes(AUTO_SURCHARGE_TAG);
-}
-
-function buildSurchargeLine({ surchargeItemId, amount, autoTag }) {
+function buildSurchargeLine({ surchargeItemId, amount }) {
   return {
     DetailType: 'SalesItemLineDetail',
     Amount: Number(amount),
-    Description: autoTag ? `Operating Cost Surcharge ${AUTO_SURCHARGE_TAG}` : undefined,
     SalesItemLineDetail: {
       ItemRef: { value: String(surchargeItemId) }
     }
@@ -106,12 +99,12 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     db.setSetting('surcharge_item_id', surchargeItemId);
   }
 
-  // 1) Read invoice (FIXED: call signature)
+  // Read invoice (retry)
   const invResp = await qboReadInvoiceWithRetry(oauthClient, realmId, invoiceId, 6);
   const invoice = invResp?.Invoice;
   if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
 
-  // LOCK
+  // LOCK for webhooks
   if (shouldSkipBecauseLocked(invoice, source)) {
     db.addLog({
       invoice_id: invoice.Id,
@@ -123,7 +116,7 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     return { invoiceId: invoice.Id, status: 'noop', reason: 'invoice locked (manual edits preserved)' };
   }
 
-  // Idempotency (per SyncToken)
+  // Idempotency
   if (db.hasProcessed(invoice.Id, invoice.SyncToken)) {
     return { invoiceId: invoice.Id, status: 'noop', reason: 'already processed for this SyncToken' };
   }
@@ -141,7 +134,7 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
   const originalLines = invoice.Line || [];
   const rule = findRuleForCustomer({ customerId, customerName });
 
-  // 2) Determine desired surcharge amount from rules
+  // Determine desired surcharge amount
   const subtotal = computeSubtotalIgnoreDiscounts(originalLines, surchargeItemId);
 
   let desiredAmount = Number(db.getSetting('default_surcharge_amount') || 15);
@@ -163,14 +156,22 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
 
   let lines = [...originalLines];
 
-  // Detect existing surcharge line
   const surchargeIdx = findSurchargeLineIndex(lines, surchargeItemId);
-
-  // Manual override: surcharge line exists and is NOT tagged (AUTO)
   const hasSurchargeLine = surchargeIdx >= 0;
-  const manualSurchargeOverride = hasSurchargeLine && !lineHasAutoTag(lines[surchargeIdx]);
+  const currentSurchargeAmount = hasSurchargeLine ? Number(lines[surchargeIdx].Amount || 0) : null;
 
-  // Apply surcharge rule only if NOT manual override
+  // Manual override detection (no Description tag):
+  // If a surcharge line exists but doesn't match our computed rule, treat as manual override.
+  const manualSurchargeOverride =
+    hasSurchargeLine &&
+    (
+      // rule says exclude but user kept a line
+      (!shouldHaveSurchargeLine) ||
+      // amount differs from what rule would set
+      (Math.abs(currentSurchargeAmount - Number(desiredAmount)) > 0.0001)
+    );
+
+  // Apply surcharge only if NOT manual override
   if (!manualSurchargeOverride) {
     if (!shouldHaveSurchargeLine) {
       if (surchargeIdx >= 0) {
@@ -189,7 +190,7 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
         lines[surchargeIdx] = {
           ...existing,
           Amount: Number(desiredAmount),
-          Description: existing?.Description || `Operating Cost Surcharge ${AUTO_SURCHARGE_TAG}`,
+          // ✅ no Description modification
           SalesItemLineDetail: {
             ...existing.SalesItemLineDetail,
             ItemRef: { value: String(surchargeItemId) }
@@ -203,7 +204,7 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
           source
         });
       } else {
-        lines.push(buildSurchargeLine({ surchargeItemId, amount: desiredAmount, autoTag: true }));
+        lines.push(buildSurchargeLine({ surchargeItemId, amount: desiredAmount }));
         db.addLog({
           invoice_id: invoice.Id,
           customer_name: customerName,
@@ -218,15 +219,15 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
       invoice_id: invoice.Id,
       customer_name: customerName,
       action: 'manual_surcharge_override',
-      detail: `Detected manual surcharge line; app will not modify/remove/reposition it.`,
+      detail: `Detected manual surcharge override; app will not modify/remove/reposition surcharge line.`,
       source
     });
   }
 
-  // 3) Sort item lines by category order
+  // Sort item lines
   const movableIdxs = [];
   const movableLines = [];
-  let autoSurchargeLine = null;
+  let surchargeLineForBottom = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -234,14 +235,12 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
 
     const itemId = getItemId(line);
 
-    // Exclude AUTO surcharge from sorting and handle placement later
-    if (!manualSurchargeOverride && itemId === String(surchargeItemId)) {
-      autoSurchargeLine = line;
-      continue;
-    }
+    // If manual override, leave surcharge wherever it is (do not reposition)
+    if (manualSurchargeOverride && itemId === String(surchargeItemId)) continue;
 
-    // Manual override surcharge line stays where it is
-    if (manualSurchargeOverride && itemId === String(surchargeItemId)) {
+    // If auto-managed surcharge, pull it out and put it at bottom later
+    if (!manualSurchargeOverride && itemId === String(surchargeItemId)) {
+      surchargeLineForBottom = line;
       continue;
     }
 
@@ -292,17 +291,13 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     lines[idx] = sortedMovable[cursor++];
   }
 
-  // 4) Force AUTO surcharge to bottom
+  // Force surcharge to bottom only if auto-managed (not manual override)
   if (!manualSurchargeOverride && shouldHaveSurchargeLine) {
     lines = lines.filter(l => !(isMovableItemLine(l) && getItemId(l) === String(surchargeItemId)));
-    if (autoSurchargeLine) {
-      lines.push(autoSurchargeLine);
-    } else {
-      lines.push(buildSurchargeLine({ surchargeItemId, amount: desiredAmount, autoTag: true }));
-    }
+    if (surchargeLineForBottom) lines.push(surchargeLineForBottom);
   }
 
-  // 5) Lock invoice after first processing
+  // Lock invoice after first processing
   const nextPrivateNote = ensureAutoMarkerInPrivateNote(invoice.PrivateNote);
 
   const linesChanged = JSON.stringify(originalLines) !== JSON.stringify(lines);
@@ -313,7 +308,6 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     return { invoiceId: invoice.Id, status: 'noop', reason: 'no changes needed' };
   }
 
-  // 6) Update invoice
   const payload = {
     Id: invoice.Id,
     SyncToken: invoice.SyncToken,
