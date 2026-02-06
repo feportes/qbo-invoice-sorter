@@ -181,7 +181,9 @@ export function ensureSchema() {
 
   // ✅ Safe migrations (won’t crash if already applied)
   try { s.exec(`ALTER TABLE skus ADD COLUMN qbo_category_id TEXT;`); } catch {}
-  // ✅ Safe migrations for allocation tracking
+  try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_qbo_category_id ON skus(qbo_category_id);`); } catch {}
+
+  // ✅ Allocation tracking (already in your file)
   try { s.exec(`
     CREATE TABLE IF NOT EXISTS invoice_allocations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,7 +199,25 @@ export function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_invoice_allocations_invoice ON invoice_allocations(qbo_invoice_id);
   `); } catch {}
 
-  try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_qbo_category_id ON skus(qbo_category_id);`); } catch {}
+  // ✅ Engine state tables (NEW)
+  try { s.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_state (
+      qbo_invoice_id TEXT PRIMARY KEY,
+      last_hash TEXT NOT NULL,
+      last_txn_date TEXT,
+      last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS invoice_line_totals (
+      qbo_invoice_id TEXT NOT NULL,
+      sku_id INTEGER NOT NULL,
+      qty_units REAL NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (qbo_invoice_id, sku_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invoice_line_totals_invoice ON invoice_line_totals(qbo_invoice_id);
+  `); } catch {}
 }
 
 export function seedDefaults() {
@@ -208,6 +228,10 @@ export function seedDefaults() {
   if (!db.getSetting('default_pallet_pick_threshold')) db.setSetting('default_pallet_pick_threshold', '0.80');
   if (!db.getSetting('lane_priority')) db.setSetting('lane_priority', 'R_FIRST');
   if (!db.getSetting('walkin_first_default')) db.setSetting('walkin_first_default', '1');
+
+  // ✅ Engine toggle defaults (NEW)
+  if (!db.getSetting('auto_allocate_enabled')) db.setSetting('auto_allocate_enabled', '0'); // OFF by default
+  if (!db.getSetting('inventory_timezone')) db.setSetting('inventory_timezone', 'America/Los_Angeles');
 
   // Container defaults you already set elsewhere; leave as-is
 }

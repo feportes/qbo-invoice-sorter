@@ -47,7 +47,6 @@ export const db = {
   listWalkinLotsForSku(skuId) {
     const walkin = this.getWalkinLocation();
     if (!walkin) return [];
-    // trace lots first (lot_id not null), then no-trace (null)
     return sqlite.prepare(`
       SELECT li.lot_id, li.qty_units
       FROM loose_inventory li
@@ -94,6 +93,111 @@ export const db = {
     );
   },
 
+  // ==========================================================
+  // Inventory Engine: toggle + invoice state/totals + reversals
+  // ==========================================================
+  getAutoAllocateEnabled() {
+    return String(this.getSetting('auto_allocate_enabled') || '0') === '1';
+  },
+
+  setAutoAllocateEnabled(on) {
+    this.setSetting('auto_allocate_enabled', on ? '1' : '0');
+  },
+
+  getInvoiceState(invoiceId) {
+    return sqlite.prepare(`
+      SELECT * FROM invoice_state WHERE qbo_invoice_id=?
+    `).get(String(invoiceId));
+  },
+
+  upsertInvoiceState({ invoiceId, hash, txnDate }) {
+    sqlite.prepare(`
+      INSERT INTO invoice_state (qbo_invoice_id, last_hash, last_txn_date, last_seen_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(qbo_invoice_id) DO UPDATE SET
+        last_hash=excluded.last_hash,
+        last_txn_date=excluded.last_txn_date,
+        last_seen_at=CURRENT_TIMESTAMP
+    `).run(String(invoiceId), String(hash), txnDate ? String(txnDate) : null);
+  },
+
+  getInvoiceTotals(invoiceId) {
+    return sqlite.prepare(`
+      SELECT sku_id, qty_units
+      FROM invoice_line_totals
+      WHERE qbo_invoice_id=?
+    `).all(String(invoiceId));
+  },
+
+  replaceInvoiceTotals(invoiceId, totals /* array {sku_id, qty_units} */) {
+    const tx = sqlite.transaction(() => {
+      sqlite.prepare(`DELETE FROM invoice_line_totals WHERE qbo_invoice_id=?`).run(String(invoiceId));
+      const ins = sqlite.prepare(`
+        INSERT INTO invoice_line_totals (qbo_invoice_id, sku_id, qty_units, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      `);
+      for (const t of totals) {
+        ins.run(String(invoiceId), Number(t.sku_id), Number(t.qty_units));
+      }
+    });
+    tx();
+  },
+
+  getAllocationsForInvoice(invoiceId) {
+    return sqlite.prepare(`
+      SELECT *
+      FROM invoice_allocations
+      WHERE qbo_invoice_id=?
+      ORDER BY id ASC
+    `).all(String(invoiceId));
+  },
+
+  deleteAllocationsForInvoice(invoiceId) {
+    sqlite.prepare(`DELETE FROM invoice_allocations WHERE qbo_invoice_id=?`).run(String(invoiceId));
+  },
+
+  reverseInvoiceAllocations(invoiceId) {
+    const s = sqlite;
+    const walkin = this.getWalkinLocation();
+    if (!walkin) throw new Error('WALKIN location missing');
+
+    const allocs = this.getAllocationsForInvoice(invoiceId);
+
+    const tx = s.transaction(() => {
+      for (const a of allocs) {
+        const qty = Number(a.qty_units);
+
+        if (a.source_type === 'WALKIN') {
+          const row = s.prepare(`
+            SELECT * FROM loose_inventory
+            WHERE sku_id=? AND COALESCE(lot_id,0)=COALESCE(?,0) AND location_id=?
+          `).get(a.sku_id, a.lot_id ?? null, walkin.id);
+
+          if (!row) {
+            s.prepare(`
+              INSERT INTO loose_inventory (sku_id, lot_id, location_id, qty_units)
+              VALUES (?, ?, ?, ?)
+            `).run(a.sku_id, a.lot_id ?? null, walkin.id, qty);
+          } else {
+            s.prepare(`UPDATE loose_inventory SET qty_units = qty_units + ?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+              .run(qty, row.id);
+          }
+        } else if (a.source_type === 'PALLET') {
+          const pallet = s.prepare(`SELECT * FROM pallets WHERE id=?`).get(a.source_pallet_id);
+          if (pallet) {
+            const newQty = Number(pallet.qty_units) + qty;
+            s.prepare(`UPDATE pallets SET qty_units=?, status='OPEN' WHERE id=?`)
+              .run(newQty, a.source_pallet_id);
+          }
+        }
+      }
+
+      // remove allocations
+      this.deleteAllocationsForInvoice(invoiceId);
+    });
+
+    tx.call(this);
+  },
 
   // ==========================================================
   // Pallet Configs (UI + default per SKU)
@@ -180,7 +284,6 @@ export const db = {
       LIMIT 1
     `).get(skuId);
   },
-
 
   // ==========================================================
   // Invoice processing lock / idempotency (needed by sorter)
@@ -274,7 +377,6 @@ export const db = {
     `).all();
   },
 
-  // ✅ Needed by /admin/categories/save
   saveCategoryOrder(categoryIdsInOrder) {
     const tx = sqlite.transaction((arr) => {
       sqlite.prepare('DELETE FROM category_order').run();
