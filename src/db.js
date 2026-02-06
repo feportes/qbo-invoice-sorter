@@ -13,6 +13,89 @@ export const db = {
   sqlite,
 
   // ==========================================================
+  // Allocation helpers (walk-in + pallets)
+  // ==========================================================
+  getSkuByQboItemId(qboItemId) {
+    return sqlite.prepare(`SELECT * FROM skus WHERE qbo_item_id=? LIMIT 1`).get(String(qboItemId));
+  },
+
+  getDefaultUnitsPerPalletForSku(skuId) {
+    const row = sqlite.prepare(`
+      SELECT units_per_pallet
+      FROM pallet_configs
+      WHERE sku_id=? AND is_default=1
+      LIMIT 1
+    `).get(skuId);
+    return row ? Number(row.units_per_pallet) : null;
+  },
+
+  getWalkinLocation() {
+    return sqlite.prepare(`SELECT * FROM locations WHERE code='WALKIN' LIMIT 1`).get();
+  },
+
+  getWalkinQtyBySkuLot(skuId, lotId) {
+    const walkin = this.getWalkinLocation();
+    if (!walkin) return 0;
+    const row = sqlite.prepare(`
+      SELECT qty_units
+      FROM loose_inventory
+      WHERE sku_id=? AND COALESCE(lot_id,0)=COALESCE(?,0) AND location_id=?
+    `).get(skuId, lotId ?? null, walkin.id);
+    return row ? Number(row.qty_units) : 0;
+  },
+
+  listWalkinLotsForSku(skuId) {
+    const walkin = this.getWalkinLocation();
+    if (!walkin) return [];
+    // trace lots first (lot_id not null), then no-trace (null)
+    return sqlite.prepare(`
+      SELECT li.lot_id, li.qty_units
+      FROM loose_inventory li
+      WHERE li.sku_id=? AND li.location_id=? AND li.qty_units > 0
+      ORDER BY CASE WHEN li.lot_id IS NOT NULL THEN 0 ELSE 1 END, li.updated_at DESC
+    `).all(skuId, walkin.id);
+  },
+
+  // Pallets ordered by "closest to door" with lane priority
+  listPalletsForSkuDoorFirst(skuId) {
+    const lane = this.getSetting('lane_priority') || 'R_FIRST';
+    const sideCase = (lane === 'R_FIRST')
+      ? "CASE l.side WHEN 'R' THEN 0 WHEN 'L' THEN 1 ELSE 9 END"
+      : "CASE l.side WHEN 'L' THEN 0 WHEN 'R' THEN 1 ELSE 9 END";
+
+    return sqlite.prepare(`
+      SELECT p.id, p.sku_id, p.lot_id, p.qty_units, p.status,
+             l.code AS location_code, l.container_no, l.side, l.depth, l.id AS location_id
+      FROM pallets p
+      JOIN locations l ON l.id = p.location_id
+      WHERE p.sku_id=? AND l.type='CONTAINER' AND p.qty_units > 0
+      ORDER BY
+        CASE WHEN p.lot_id IS NOT NULL THEN 0 ELSE 1 END,
+        l.container_no ASC,
+        l.depth ASC,
+        ${sideCase} ASC,
+        p.id ASC
+    `).all(skuId);
+  },
+
+  addInvoiceAllocation(row) {
+    sqlite.prepare(`
+      INSERT INTO invoice_allocations
+        (qbo_invoice_id, sku_id, lot_id, source_type, source_location_code, source_pallet_id, qty_units)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      String(row.qbo_invoice_id),
+      row.sku_id,
+      row.lot_id ?? null,
+      row.source_type,
+      row.source_location_code,
+      row.source_pallet_id ?? null,
+      Number(row.qty_units)
+    );
+  },
+
+
+  // ==========================================================
   // Pallet Configs (UI + default per SKU)
   // ==========================================================
   listPalletConfigsAll() {

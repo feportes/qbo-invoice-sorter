@@ -181,6 +181,22 @@ export function ensureSchema() {
 
   // ✅ Safe migrations (won’t crash if already applied)
   try { s.exec(`ALTER TABLE skus ADD COLUMN qbo_category_id TEXT;`); } catch {}
+  // ✅ Safe migrations for allocation tracking
+  try { s.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_allocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      qbo_invoice_id TEXT NOT NULL,
+      sku_id INTEGER NOT NULL,
+      lot_id INTEGER,
+      source_type TEXT NOT NULL,         -- WALKIN | PALLET
+      source_location_code TEXT NOT NULL,
+      source_pallet_id INTEGER,
+      qty_units REAL NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_invoice_allocations_invoice ON invoice_allocations(qbo_invoice_id);
+  `); } catch {}
+
   try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_qbo_category_id ON skus(qbo_category_id);`); } catch {}
 }
 

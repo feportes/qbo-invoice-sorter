@@ -7,10 +7,13 @@ import { fileURLToPath } from 'url';
 import { db } from './src/db.js';
 import { ensureSchema, seedDefaults } from './src/schema.js';
 import { getOAuthClient, authStart, authCallback, requireConnected } from './src/oauth.js';
-import { qboReadItemByName, qboQuery } from './src/qbo.js';
+import { qboReadItemByName, qboQuery, qboReadInvoice } from './src/qbo.js';
 import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
+
+// ✅ Inventory allocation engine (you created this file)
+import { buildPlanFromInvoice, applyPlan } from './src/inventory_allocate.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -382,6 +385,79 @@ app.get('/inventory/map', requireConnected, (req, res) => {
 });
 
 // ==========================================================
+// Inventory Allocation (Preview + Apply)  <-- NO LOGIN for now
+// ==========================================================
+
+app.get('/inventory/allocate', async (req, res) => {
+  const conn = db.getConnection();
+  return res.render('inventory_allocate', {
+    connected: !!conn,
+    msg: null,
+    plan: null
+  });
+});
+
+app.post('/inventory/allocate/preview', async (req, res) => {
+  try {
+    const invoiceId = String(req.body.invoice_id || '').trim();
+    if (!invoiceId) throw new Error('Missing invoice id');
+
+    const conn = db.getConnectionOrThrow();
+    const oauthClient = getOAuthClient(conn);
+
+    const invResp = await qboReadInvoice(oauthClient, conn.realm_id, invoiceId);
+    const invoice = invResp?.Invoice;
+    if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
+
+    const plan = buildPlanFromInvoice(invoice);
+
+    return res.render('inventory_allocate', {
+      connected: true,
+      msg: null,
+      plan
+    });
+  } catch (e) {
+    const conn = db.getConnection();
+    return res.status(400).render('inventory_allocate', {
+      connected: !!conn,
+      msg: e?.message || String(e),
+      plan: null
+    });
+  }
+});
+
+app.post('/inventory/allocate/apply', async (req, res) => {
+  try {
+    const invoiceId = String(req.body.invoice_id || '').trim();
+    if (!invoiceId) throw new Error('Missing invoice id');
+
+    const conn = db.getConnectionOrThrow();
+    const oauthClient = getOAuthClient(conn);
+
+    const invResp = await qboReadInvoice(oauthClient, conn.realm_id, invoiceId);
+    const invoice = invResp?.Invoice;
+    if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
+
+    const plan = buildPlanFromInvoice(invoice);
+
+    applyPlan(plan);
+
+    return res.render('inventory_allocate', {
+      connected: true,
+      msg: '✅ Allocation applied successfully.',
+      plan
+    });
+  } catch (e) {
+    const conn = db.getConnection();
+    return res.status(400).render('inventory_allocate', {
+      connected: !!conn,
+      msg: e?.message || String(e),
+      plan: null
+    });
+  }
+});
+
+// ==========================================================
 // TEMP DEBUG: bypass verifier to confirm payload reaches Express ✅ NEW
 // ==========================================================
 app.post('/webhooks/qbo-debug', (req, res) => {
@@ -401,8 +477,6 @@ app.post('/webhooks/qbo-debug', (req, res) => {
     console.log('webhook_debug_hit db.addLog failed', e?.message || e);
   }
 });
-
-const port = process.env.PORT || 3000;
 
 // ==========================================================
 // Webhook endpoint (invoice sorter/surcharge)
@@ -524,5 +598,6 @@ app.post('/inventory/settings/pallet-configs/delete', requireConnected, (req, re
   }
 });
 
+const port = process.env.PORT || 3000;
 
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));

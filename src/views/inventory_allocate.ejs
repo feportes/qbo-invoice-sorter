@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Inventory Allocation</title>
+  <style>
+    body { font-family: system-ui; margin: 24px; max-width: 1100px; }
+    .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    .card { border:1px solid #ddd; border-radius:12px; padding:16px; margin-top:14px; background:#fff; }
+    input { padding:10px; border:1px solid #ddd; border-radius:10px; width: 260px; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align:left; vertical-align: top; }
+    th { background:#fafafa; }
+    .msg { margin-top:12px; padding:10px; border-radius:10px; background:#f4f4f4; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #ddd; background:#fff; font-size:12px; }
+    .bad { border-color:#b00020; color:#b00020; }
+    .ok { border-color:#0a7; color:#0a7; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body>
+
+<h1>Inventory Allocation</h1>
+<div class="muted">
+  Preview and apply inventory allocations for an invoice. Future invoices are blocked (TxnDate must be ≤ today).
+</div>
+
+<div class="muted" style="margin-top:10px;">
+  <a href="/inventory/yard">Yard</a> |
+  <a href="/inventory/map?c=1">Map</a> |
+  <a href="/inventory/settings/skus">SKU Settings</a> |
+  <a href="/inventory/settings/pallet-configs">Pallet Configs</a> |
+  <a href="/">Home</a>
+</div>
+
+<% if (!connected) { %>
+  <div class="msg">
+    ⚠️ Not connected to QBO. Go to <a href="/auth/start">/auth/start</a> first.
+  </div>
+<% } %>
+
+<% if (msg) { %>
+  <div class="msg"><%= msg %></div>
+<% } %>
+
+<div class="card">
+  <form method="post" action="/inventory/allocate/preview" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+    <label class="muted">QBO Invoice ID</label>
+    <input name="invoice_id" placeholder="e.g. 87070" required />
+    <button type="submit">Preview</button>
+  </form>
+</div>
+
+<% if (plan) { %>
+  <div class="card">
+    <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+      <div><b>Invoice:</b> <%= plan.docNumber || plan.invoiceId %></div>
+      <div><b>Customer:</b> <%= plan.customerName || '' %></div>
+      <div><b>TxnDate:</b> <code><%= plan.txnDate %></code></div>
+      <div><b>Today:</b> <code><%= plan.today %></code></div>
+
+      <% if (plan.eligibleToApply) { %>
+        <span class="pill ok">Eligible</span>
+      <% } else { %>
+        <span class="pill bad">Future blocked</span>
+      <% } %>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>SKU</th>
+          <th>Requested</th>
+          <th>Mode</th>
+          <th>Picks</th>
+          <th>Unfilled</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% plan.items.forEach(it => { %>
+          <tr>
+            <td>
+              <b><%= it.qboName %></b>
+              <% if (it.skipped) { %>
+                <div class="muted">Skipped: <%= it.reason %></div>
+              <% } else { %>
+                <div class="muted"><%= it.sku_name %> (#<%= it.sku_id %>) • <%= it.unit_type %></div>
+              <% } %>
+            </td>
+            <td><%= it.qtyRequested %></td>
+            <td>
+              <% if (!it.skipped) { %>
+                <div><b><%= it.palletMode ? 'Pallet-first' : 'Walk-in-first' %></b></div>
+                <div class="muted">threshold: <%= it.threshold %></div>
+                <div class="muted">units/pallet: <%= it.unitsPerPallet || '-' %></div>
+              <% } %>
+            </td>
+            <td>
+              <% if (!it.skipped) { %>
+                <% (it.picks || []).forEach(p => { %>
+                  <div>
+                    <% if (p.source === 'WALKIN') { %>
+                      WALKIN (<%= p.lot_id ? ('LOT ' + p.lot_id) : 'NO-TRACE' %>) → <b><%= p.qty %></b>
+                    <% } else { %>
+                      <%= p.location %> (pallet #<%= p.pallet_id %>) → <b><%= p.qty %></b>
+                    <% } %>
+                  </div>
+                <% }) %>
+              <% } %>
+            </td>
+            <td><%= it.remainingUnfilled %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+
+    <form method="post" action="/inventory/allocate/apply" style="margin-top:12px;">
+      <input type="hidden" name="invoice_id" value="<%= plan.invoiceId %>"/>
+      <button type="submit" <%= plan.eligibleToApply ? '' : 'disabled' %>>
+        Apply Allocation
+      </button>
+      <% if (!plan.eligibleToApply) { %>
+        <span class="muted" style="margin-left:10px;">Apply disabled for future invoices.</span>
+      <% } %>
+    </form>
+  </div>
+<% } %>
+
+</body>
+</html>
