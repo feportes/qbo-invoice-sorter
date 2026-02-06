@@ -12,6 +12,23 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+  // ==========================================================
+  // Invoice processing lock / idempotency (needed by sorter)
+  // ==========================================================
+  hasProcessed(invoiceId, syncToken) {
+    const row = sqlite
+      .prepare('SELECT 1 FROM processed WHERE invoice_id=? AND sync_token=?')
+      .get(String(invoiceId), String(syncToken));
+    return !!row;
+  },
+
+  markProcessed(invoiceId, syncToken) {
+    sqlite
+      .prepare('INSERT OR IGNORE INTO processed (invoice_id, sync_token) VALUES (?, ?)')
+      .run(String(invoiceId), String(syncToken));
+  },
+
+
   // Connection
   getConnection() {
     return sqlite.prepare('SELECT * FROM connections WHERE id=1').get();
