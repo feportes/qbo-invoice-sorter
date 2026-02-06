@@ -7,12 +7,11 @@ import { fileURLToPath } from 'url';
 import { db } from './src/db.js';
 import { ensureSchema, seedDefaults } from './src/schema.js';
 import { getOAuthClient, authStart, authCallback, requireConnected } from './src/oauth.js';
-import { qboReadItemByName, qboQuery, qboReadInvoice, qboReadInvoiceWithRetry } from './src/qbo.js';
+import { qboReadItemByName, qboQuery, qboReadInvoiceWithRetry } from './src/qbo.js';
 import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
 import { runAutoAllocateForInvoice } from './src/inventory_engine.js';
-
 
 // ✅ Inventory allocation engine (you created this file)
 import { buildPlanFromInvoice, applyPlan } from './src/inventory_allocate.js';
@@ -35,6 +34,32 @@ app.use(morgan('dev'));
 // Body parsing (webhooks need raw body)
 app.use(express.json({ verify: rawBodySaver, limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// ==========================================================
+// Helper: retry processInvoice on "Invoice not found"
+// ==========================================================
+async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 6 }) {
+  let lastErr = null;
+
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await processInvoice({ oauthClient, realmId, invoiceId, source });
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e?.message || e).toLowerCase();
+      const isNotFound = msg.includes('invoice not found') || msg.includes('not found') || msg.includes('404');
+
+      if (!isNotFound) throw e;
+
+      // backoff: 1s, 2s, 3s, 5s, 8s...
+      const delays = [1000, 2000, 3000, 5000, 8000, 12000];
+      const delay = delays[Math.min(i, delays.length - 1)];
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+
+  throw lastErr || new Error(`Invoice not found after retry: ${invoiceId}`);
+}
 
 // Home
 app.get('/', (req, res) => {
@@ -121,20 +146,23 @@ app.post('/admin/process-invoice', requireConnected, async (req, res) => {
   const { invoice_id } = req.body;
   const conn = db.getConnectionOrThrow();
   const oauthClient = getOAuthClient(conn);
+
   try {
-    const result = await processInvoice({
+    const result = await processInvoiceWithRetry({
       oauthClient,
       realmId: conn.realm_id,
       invoiceId: invoice_id,
-      source: 'manual'
+      source: 'manual',
+      retries: 6
     });
+
     res.render('process_result', { result });
   } catch (e) {
     res.status(500).send(`Process failed: ${e?.message || e}`);
   }
 });
 
-// Debug endpoint (optional but handy)
+// Debug endpoint (optional)
 app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
   const conn = db.getConnectionOrThrow();
   const oauthClient = getOAuthClient(conn);
@@ -235,121 +263,6 @@ app.post('/inventory/settings/containers', requireConnected, (req, res) => {
   }
 });
 
-// SKU Settings (category filter)
-app.get('/inventory/settings/skus', requireConnected, (req, res) => {
-  const selectedCat = (req.query.cat || 'all').toString();
-  const categories = db.listCategoriesOrdered();
-  const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-  res.render('inventory_sku_settings', { skus, msg: null, categories, selectedCat });
-});
-
-app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => {
-  const conn = db.getConnectionOrThrow();
-  const oauthClient = getOAuthClient(conn);
-
-  try {
-    let start = 1;
-    const pageSize = 1000;
-
-    while (true) {
-      const q = `select Id, Name, Type, Active, ParentRef from Item startposition ${start} maxresults ${pageSize}`;
-      const r = await qboQuery(oauthClient, conn.realm_id, q);
-      const items = r?.QueryResponse?.Item || [];
-
-      for (const it of items) {
-        if (!it?.Id || !it?.Name) continue;
-        if (String(it.Type || '').toLowerCase() === 'category') continue;
-
-        const parentCatId = it?.ParentRef?.value ? String(it.ParentRef.value) : null;
-        db.upsertSkuFromQbo({
-          qbo_item_id: String(it.Id),
-          name: String(it.Name),
-          qbo_category_id: parentCatId
-        });
-      }
-
-      if (items.length < pageSize) break;
-      start += pageSize;
-    }
-
-    const categories = db.listCategoriesOrdered();
-    const selectedCat = 'all';
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.render('inventory_sku_settings', { skus, msg: 'Synced items from QuickBooks.', categories, selectedCat });
-  } catch (e) {
-    const categories = db.listCategoriesOrdered();
-    const selectedCat = 'all';
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.status(500).render('inventory_sku_settings', { skus, msg: `Sync failed: ${e?.message || e}`, categories, selectedCat });
-  }
-});
-
-app.post('/inventory/settings/skus/update', requireConnected, (req, res) => {
-  try {
-    const sku_id = Number(req.body.sku_id);
-
-    const active = req.body.active === 'on' ? 1 : 0;
-    const is_lot_tracked = req.body.is_lot_tracked === 'on' ? 1 : 0;
-    const is_organic = req.body.is_organic === 'on' ? 1 : 0;
-    const unit_type = (req.body.unit_type || 'unit').toString();
-
-    let threshold = req.body.pallet_pick_threshold;
-    threshold = (threshold === undefined || threshold === null || String(threshold).trim() === '')
-      ? null
-      : Number(threshold);
-
-    if (threshold !== null && (threshold < 0.1 || threshold > 1.0)) {
-      throw new Error('Pallet threshold must be between 0.10 and 1.00 (or blank).');
-    }
-
-    db.updateSkuSettings({
-      sku_id,
-      active,
-      is_organic,
-      is_lot_tracked,
-      unit_type,
-      pallet_pick_threshold: threshold
-    });
-
-    const categories = db.listCategoriesOrdered();
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.render('inventory_sku_settings', { skus, msg: 'Saved SKU settings.', categories, selectedCat });
-  } catch (e) {
-    const categories = db.listCategoriesOrdered();
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.status(400).render('inventory_sku_settings', { skus, msg: e?.message || String(e), categories, selectedCat });
-  }
-});
-
-// Yard
-app.get('/inventory/yard', requireConnected, (req, res) => {
-  const containers = db.listContainers();
-  const yard = containers.map(containerNo => {
-    const pallets = db.listPalletsInContainer(containerNo);
-    const palletByLoc = new Map();
-    for (const p of pallets) palletByLoc.set(p.location_code, p);
-
-    const depths = db.getContainerDepths(containerNo);
-    const left = [];
-    const right = [];
-
-    for (let d = 1; d <= depths.leftMax; d++) {
-      const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
-      left.push({ code, pallet: palletByLoc.get(code) || null });
-    }
-    for (let d = 1; d <= depths.rightMax; d++) {
-      const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
-      right.push({ code, pallet: palletByLoc.get(code) || null });
-    }
-
-    return { containerNo, label: depths.label, left, right };
-  });
-
-  res.render('inventory_yard', { yard });
-});
-
 // Map
 app.get('/inventory/map', requireConnected, (req, res) => {
   const containerNo = Number(req.query.c || 1);
@@ -389,14 +302,9 @@ app.get('/inventory/map', requireConnected, (req, res) => {
 // ==========================================================
 // Inventory Allocation (Preview + Apply)  <-- NO LOGIN for now
 // ==========================================================
-
 app.get('/inventory/allocate', async (req, res) => {
   const conn = db.getConnection();
-  return res.render('inventory_allocate', {
-    connected: !!conn,
-    msg: null,
-    plan: null
-  });
+  return res.render('inventory_allocate', { connected: !!conn, msg: null, plan: null });
 });
 
 app.post('/inventory/allocate/preview', async (req, res) => {
@@ -407,25 +315,16 @@ app.post('/inventory/allocate/preview', async (req, res) => {
     const conn = db.getConnectionOrThrow();
     const oauthClient = getOAuthClient(conn);
 
-    // ✅ Retry read to avoid "invoice not found" right after creation
     const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
     const invoice = invResp?.Invoice;
     if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
 
     const plan = buildPlanFromInvoice(invoice);
 
-    return res.render('inventory_allocate', {
-      connected: true,
-      msg: null,
-      plan
-    });
+    return res.render('inventory_allocate', { connected: true, msg: null, plan });
   } catch (e) {
     const conn = db.getConnection();
-    return res.status(400).render('inventory_allocate', {
-      connected: !!conn,
-      msg: e?.message || String(e),
-      plan: null
-    });
+    return res.status(400).render('inventory_allocate', { connected: !!conn, msg: e?.message || String(e), plan: null });
   }
 });
 
@@ -437,56 +336,24 @@ app.post('/inventory/allocate/apply', async (req, res) => {
     const conn = db.getConnectionOrThrow();
     const oauthClient = getOAuthClient(conn);
 
-    // ✅ Retry read to avoid "invoice not found" right after creation
     const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
     const invoice = invResp?.Invoice;
     if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
 
     const plan = buildPlanFromInvoice(invoice);
-
     applyPlan(plan);
 
-    return res.render('inventory_allocate', {
-      connected: true,
-      msg: '✅ Allocation applied successfully.',
-      plan
-    });
+    return res.render('inventory_allocate', { connected: true, msg: '✅ Allocation applied successfully.', plan });
   } catch (e) {
     const conn = db.getConnection();
-    return res.status(400).render('inventory_allocate', {
-      connected: !!conn,
-      msg: e?.message || String(e),
-      plan: null
-    });
+    return res.status(400).render('inventory_allocate', { connected: !!conn, msg: e?.message || String(e), plan: null });
   }
 });
 
 // ==========================================================
-// TEMP DEBUG: bypass verifier to confirm payload reaches Express ✅ NEW
-// ==========================================================
-app.post('/webhooks/qbo-debug', (req, res) => {
-  res.status(200).send('OK');
-
-  console.log('QBO-DEBUG WEBHOOK HIT', JSON.stringify(req.body).slice(0, 800));
-
-  try {
-    db.addLog({
-      invoice_id: null,
-      customer_name: null,
-      action: 'webhook_debug_hit',
-      detail: JSON.stringify(req.body).slice(0, 5000),
-      source: 'webhook_debug'
-    });
-  } catch (e) {
-    console.log('webhook_debug_hit db.addLog failed', e?.message || e);
-  }
-});
-
-// ==========================================================
-// Webhook endpoint (invoice sorter/surcharge)
+// Webhook endpoint (invoice sorter/surcharge) + auto-allocation
 // ==========================================================
 app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
-  // respond immediately so Intuit doesn't retry
   res.status(200).send('OK');
 
   try {
@@ -512,115 +379,29 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
     console.log(`[webhook] received invoices=${invoiceIds.length} ids=${invoiceIds.slice(0, 20).join(',')}`);
 
     for (const invoiceId of invoiceIds) {
-      processInvoice({ oauthClient, realmId: conn.realm_id, invoiceId, source: 'webhook' })
+      processInvoiceWithRetry({ oauthClient, realmId: conn.realm_id, invoiceId, source: 'webhook', retries: 6 })
         .then(async () => {
-      console.log(`[webhook] processed ok invoiceId=${invoiceId}`);
+          console.log(`[webhook] processed ok invoiceId=${invoiceId}`);
 
-      // ✅ Auto allocation runs only if enabled
-      if (db.getAutoAllocateEnabled()) {
-        try {
-          const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
-          const invoice = invResp?.Invoice;
-          if (invoice) {
-            await runAutoAllocateForInvoice({ invoice, invoiceId });
-            console.log(`[inv_engine] ok invoiceId=${invoiceId}`);
-          } else {
-            console.log(`[inv_engine] skip invoiceId=${invoiceId} (invoice missing in response)`);
+          if (db.getAutoAllocateEnabled()) {
+            try {
+              const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
+              const invoice = invResp?.Invoice;
+              if (invoice) {
+                await runAutoAllocateForInvoice({ invoice, invoiceId });
+                console.log(`[inv_engine] ok invoiceId=${invoiceId}`);
+              }
+            } catch (e) {
+              console.log(`[inv_engine] error invoiceId=${invoiceId} err=${e?.message || e}`);
+            }
           }
-        } catch (e) {
-          console.log(`[inv_engine] error invoiceId=${invoiceId} err=${e?.message || e}`);
-        }
-      }
-    })
+        })
         .catch(err => console.log(`[webhook] processed error invoiceId=${invoiceId} err=${err?.message || err}`));
     }
   } catch (e) {
     console.log('[webhook] fatal error', e?.message || e);
   }
 });
-
-// ==========================================================
-// Inventory: Pallet Configs UI
-// ==========================================================
-app.get('/inventory/settings/pallet-configs', requireConnected, (req, res) => {
-  const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-  const configs = db.listPalletConfigsAll();
-  res.render('inventory_pallet_configs', { skus, configs, msg: null });
-});
-
-app.post('/inventory/settings/pallet-configs/add', requireConnected, (req, res) => {
-  try {
-    const sku_id = Number(req.body.sku_id);
-    const name = String(req.body.name || '').trim();
-    const units_per_pallet = Number(req.body.units_per_pallet);
-
-    if (!sku_id) throw new Error('SKU is required');
-    if (!name) throw new Error('Name is required');
-    if (!Number.isFinite(units_per_pallet) || units_per_pallet <= 0) throw new Error('Units per pallet must be > 0');
-
-    const ti = req.body.ti ? Number(req.body.ti) : null;
-    const hi = req.body.hi ? Number(req.body.hi) : null;
-    const is_default = req.body.is_default === 'on';
-    const notes = req.body.notes ? String(req.body.notes) : null;
-
-    db.addPalletConfig({ sku_id, name, ti, hi, units_per_pallet, is_default, notes });
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Added pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-app.post('/inventory/settings/pallet-configs/update', requireConnected, (req, res) => {
-  try {
-    const id = Number(req.body.id);
-    const sku_id = Number(req.body.sku_id);
-    const name = String(req.body.name || '').trim();
-    const units_per_pallet = Number(req.body.units_per_pallet);
-
-    if (!id) throw new Error('Missing config id');
-    if (!sku_id) throw new Error('SKU is required');
-    if (!name) throw new Error('Name is required');
-    if (!Number.isFinite(units_per_pallet) || units_per_pallet <= 0) throw new Error('Units per pallet must be > 0');
-
-    const ti = req.body.ti ? Number(req.body.ti) : null;
-    const hi = req.body.hi ? Number(req.body.hi) : null;
-    const is_default = req.body.is_default === 'on';
-    const notes = req.body.notes ? String(req.body.notes) : null;
-
-    db.updatePalletConfig({ id, sku_id, name, ti, hi, units_per_pallet, is_default, notes });
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Updated pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-app.post('/inventory/settings/pallet-configs/delete', requireConnected, (req, res) => {
-  try {
-    const id = Number(req.body.id);
-    if (!id) throw new Error('Missing config id');
-    db.deletePalletConfig(id);
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Deleted pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-const port = process.env.PORT || 3000;
 
 // ==========================================================
 // Inventory Engine Settings (toggle)
@@ -638,6 +419,6 @@ app.post('/inventory/settings/engine', (req, res) => {
   res.render('inventory_engine_settings', { enabled, timezone, msg: 'Saved.' });
 });
 
-
+const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
 

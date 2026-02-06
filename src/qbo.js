@@ -1,12 +1,10 @@
-import OAuthClient from 'intuit-oauth';
-import { db } from './db.js';
-import { withFreshClient } from './oauth.js';
+import crypto from 'crypto';
 
 const BASE = (realmId) => `https://quickbooks.api.intuit.com/v3/company/${realmId}`;
 
 // Generic JSON fetch using intuit-oauth makeApiCall
-export async function qboFetchJson(oauthClient, { url, method='GET', body=null, headers={} }) {
-  const opts = { url, method, headers: { 'Accept': 'application/json', ...headers } };
+export async function qboFetchJson(oauthClient, { url, method = 'GET', body = null, headers = {} }) {
+  const opts = { url, method, headers: { Accept: 'application/json', ...headers } };
   if (body) opts.body = body;
 
   const resp = await oauthClient.makeApiCall(opts);
@@ -15,10 +13,9 @@ export async function qboFetchJson(oauthClient, { url, method='GET', body=null, 
   if (resp && typeof resp.getJson === 'function') return resp.getJson();
   if (resp && resp.json) return resp.json;
   if (resp && typeof resp.body === 'string') {
-    try { return JSON.parse(resp.body); } catch { /* fallthrough */ }
+    try { return JSON.parse(resp.body); } catch {}
   }
 
-  // Some versions expose raw response on resp.response / resp.getResponse?
   if (resp && resp.response && typeof resp.response.body === 'string') {
     try { return JSON.parse(resp.response.body); } catch {}
   }
@@ -83,7 +80,6 @@ export async function qboReadCustomer(oauthClient, realmId, customerId) {
 }
 
 export async function qboReadItemByName(oauthClient, realmId, itemName) {
-  // Query by name
   const safe = String(itemName).replace(/'/g, "\\'");
   const q = `select * from Item where Name = '${safe}' maxresults 1`;
   const r = await qboQuery(oauthClient, realmId, q);
@@ -91,12 +87,12 @@ export async function qboReadItemByName(oauthClient, realmId, itemName) {
 }
 
 export async function qboBatchReadItems(oauthClient, realmId, ids) {
-  // Batch supports read operations; we chunk to 30 items per batch to be safe.
+  // Batch supports read operations; chunk to 30 items per batch to be safe.
   const out = new Map();
   const chunkSize = 30;
 
-  for (let i=0; i<ids.length; i+=chunkSize) {
-    const chunk = ids.slice(i, i+chunkSize);
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
     const body = {
       BatchItemRequest: chunk.map((id, idx) => ({
         bId: `item_${i}_${idx}`,
@@ -119,5 +115,7 @@ export async function qboBatchReadItems(oauthClient, realmId, ids) {
       if (item?.Id) out.set(item.Id, item);
     }
   }
+
   return out;
 }
+

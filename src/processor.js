@@ -1,6 +1,6 @@
 import { db } from './db.js';
 import {
-  qboReadInvoice,
+  qboReadInvoiceWithRetry,
   qboUpdateInvoice,
   qboBatchReadItems,
   qboReadCustomer,
@@ -22,25 +22,50 @@ function normalize(s) {
   return (s || '').trim().toLowerCase();
 }
 
+function lineHasAutoTag(line) {
+  const d = (line?.Description || '').toString();
+  return d.includes(AUTO_SURCHARGE_TAG);
+}
+
+function buildSurchargeLine({ surchargeItemId, amount, autoTag }) {
+  return {
+    DetailType: 'SalesItemLineDetail',
+    Amount: Number(amount),
+    Description: autoTag ? `Operating Cost Surcharge ${AUTO_SURCHARGE_TAG}` : undefined,
+    SalesItemLineDetail: {
+      ItemRef: { value: String(surchargeItemId) }
+    }
+  };
+}
+
+function ensureAutoMarkerInPrivateNote(note) {
+  const cur = (note || '').toString();
+  if (cur.includes(AUTO_MARKER)) return cur;
+  return (cur + ' ' + AUTO_MARKER).trim();
+}
+
+function shouldSkipBecauseLocked(invoice, source) {
+  if (source !== 'webhook') return false;
+  const note = (invoice?.PrivateNote || '').toString();
+  return note.includes(AUTO_MARKER);
+}
+
 function findRuleForCustomer({ customerId, customerName }) {
   const rules = db.listRules().filter(r => r.enabled === 1);
 
-  // 1) exact match by customer_id
   const exact = rules.find(r => r.match_type === 'exact' && r.customer_id && r.customer_id === String(customerId));
   if (exact) return exact;
 
-  // 2) prefix match on name
   const name = customerName || '';
   const lower = normalize(name);
   const prefixRules = rules
     .filter(r => r.match_type === 'prefix' && r.prefix)
-    .sort((a, b) => (b.prefix.length - a.prefix.length)); // longest prefix wins
+    .sort((a, b) => (b.prefix.length - a.prefix.length));
 
   for (const r of prefixRules) {
     if (lower.startsWith(normalize(r.prefix))) return r;
   }
 
-  // 3) default
   return { rule_type: 'always_15', amount: Number(db.getSetting('default_surcharge_amount') || 15), threshold: null };
 }
 
@@ -49,9 +74,8 @@ function computeSubtotalIgnoreDiscounts(lines, surchargeItemId) {
   for (const line of lines) {
     if (!isMovableItemLine(line)) continue;
     const itemId = getItemId(line);
-    if (surchargeItemId && itemId === String(surchargeItemId)) continue; // threshold is before surcharge
-    const amt = Number(line.Amount || 0);
-    sum += amt;
+    if (surchargeItemId && itemId === String(surchargeItemId)) continue;
+    sum += Number(line.Amount || 0);
   }
   return sum;
 }
@@ -61,44 +85,18 @@ function findSurchargeLineIndex(lines, surchargeItemId) {
   return lines.findIndex(l => isMovableItemLine(l) && getItemId(l) === String(surchargeItemId));
 }
 
-
-function buildSurchargeLine({ surchargeItemId, amount }) {
-  return {
-    DetailType: 'SalesItemLineDetail',
-    Amount: Number(amount),
-    SalesItemLineDetail: {
-      ItemRef: { value: String(surchargeItemId) }
-    }
-  };
-}
-
-
-function ensureAutoMarkerInPrivateNote(note) {
-  const cur = (note || '').toString();
-  if (cur.includes(AUTO_MARKER)) return cur;
-  return (cur + ' ' + AUTO_MARKER).trim();
-}
-
-function shouldSkipBecauseLocked(invoice, source) {
-  // Only skip on webhooks. Manual processing can still re-run if you want.
-  if (source !== 'webhook') return false;
-  const note = (invoice?.PrivateNote || '').toString();
-  return note.includes(AUTO_MARKER);
-}
-
 /**
  * Extract a category order number from an item name like:
  * "01. Sorbets: ..." or "5 - Beverage: ..." etc.
  */
 function extractPrefixNumber(name) {
   const n = (name || '').trim();
-  // Matches: "01.", "1.", "05 -", "5 -", "05:", etc
   const m = n.match(/^(\d{1,2})\s*[.\-:]/);
   return m ? Number(m[1]) : null;
 }
 
 export async function processInvoice({ oauthClient, realmId, invoiceId, source }) {
-  // Ensure we have surcharge item id cached
+  // Ensure surcharge item id cached
   let surchargeItemId = db.getSetting('surcharge_item_id');
   if (!surchargeItemId) {
     const surchargeItemName = db.getSetting('surcharge_item_name');
@@ -108,12 +106,12 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     db.setSetting('surcharge_item_id', surchargeItemId);
   }
 
-  // 1) Read invoice
-  const invResp = await qboReadInvoice(oauthClient, realmId, invoiceId);
+  // 1) Read invoice (FIXED: call signature)
+  const invResp = await qboReadInvoiceWithRetry(oauthClient, realmId, invoiceId, 6);
   const invoice = invResp?.Invoice;
   if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
 
-  // LOCK: if already processed + locked, never overwrite later edits (webhooks)
+  // LOCK
   if (shouldSkipBecauseLocked(invoice, source)) {
     db.addLog({
       invoice_id: invoice.Id,
@@ -150,7 +148,7 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
   let shouldHaveSurchargeLine = true;
 
   if (rule.rule_type === 'exclude') {
-    shouldHaveSurchargeLine = false; // remove/never add (unless manual override exists)
+    shouldHaveSurchargeLine = false;
   } else if (rule.rule_type === 'always_0') {
     desiredAmount = 0;
   } else if (rule.rule_type === 'always_15') {
@@ -168,11 +166,7 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
   // Detect existing surcharge line
   const surchargeIdx = findSurchargeLineIndex(lines, surchargeItemId);
 
-  // Manual override logic:
-  // If a surcharge line exists and it is NOT tagged (AUTO), treat it as manual override:
-  // - do not change its amount
-  // - do not remove it
-  // - do not force it to the bottom
+  // Manual override: surcharge line exists and is NOT tagged (AUTO)
   const hasSurchargeLine = surchargeIdx >= 0;
   const manualSurchargeOverride = hasSurchargeLine && !lineHasAutoTag(lines[surchargeIdx]);
 
@@ -191,7 +185,6 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
       }
     } else {
       if (surchargeIdx >= 0) {
-        // correct amount on AUTO line
         const existing = lines[surchargeIdx];
         lines[surchargeIdx] = {
           ...existing,
@@ -210,7 +203,6 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
           source
         });
       } else {
-        // add AUTO line (even if amount 0, per your preference)
         lines.push(buildSurchargeLine({ surchargeItemId, amount: desiredAmount, autoTag: true }));
         db.addLog({
           invoice_id: invoice.Id,
@@ -232,8 +224,6 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
   }
 
   // 3) Sort item lines by category order
-  // NOTE: QBO isn't returning ParentRef (catId is null), so we sort by numeric prefix in item name.
-  // If a real ParentRef exists and matches your saved order, we will still use it.
   const movableIdxs = [];
   const movableLines = [];
   let autoSurchargeLine = null;
@@ -259,11 +249,9 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     movableLines.push(line);
   }
 
-  // Fetch Items for mapping
   const itemIds = [...new Set(movableLines.map(l => getItemId(l)).filter(Boolean))];
   const itemMap = await qboBatchReadItems(oauthClient, realmId, itemIds);
 
-  // Build category sort index mapping from your saved order page
   const categorySort = new Map();
   for (const c of db.listCategoriesOrdered()) {
     categorySort.set(String(c.id), Number(c.sort_index));
@@ -277,20 +265,16 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
       item?.Name ||
       '';
 
-    // 1) Try real QBO category first (if present)
     const catId = item?.ParentRef?.value ? String(item.ParentRef.value) : null;
     if (catId && categorySort.has(catId)) {
       return { catIdx: categorySort.get(catId), itemName: itemName.toLowerCase() };
     }
 
-    // 2) Fallback: numeric prefix in item name (your system)
     const prefixNum = extractPrefixNumber(itemName);
     if (prefixNum !== null) {
-      // multiply to keep room for future in-between ordering
       return { catIdx: prefixNum * 1000, itemName: itemName.toLowerCase() };
     }
 
-    // 3) Last fallback
     return { catIdx: 999999, itemName: itemName.toLowerCase() };
   }
 
@@ -303,28 +287,24 @@ export async function processInvoice({ oauthClient, realmId, invoiceId, source }
     return 0;
   });
 
-  // Rebuild in-place (keep non-movable lines where they are)
   let cursor = 0;
   for (const idx of movableIdxs) {
     lines[idx] = sortedMovable[cursor++];
   }
 
-  // 4) Force AUTO surcharge to bottom (below last item)
-  // Only do this for AUTO surcharge. If manual override, leave its placement untouched.
+  // 4) Force AUTO surcharge to bottom
   if (!manualSurchargeOverride && shouldHaveSurchargeLine) {
     lines = lines.filter(l => !(isMovableItemLine(l) && getItemId(l) === String(surchargeItemId)));
     if (autoSurchargeLine) {
       lines.push(autoSurchargeLine);
     } else {
-      // Should exist by now; add as AUTO if missing
       lines.push(buildSurchargeLine({ surchargeItemId, amount: desiredAmount, autoTag: true }));
     }
   }
 
-  // 5) Lock invoice after first processing (prevents overwriting later manual edits)
+  // 5) Lock invoice after first processing
   const nextPrivateNote = ensureAutoMarkerInPrivateNote(invoice.PrivateNote);
 
-  // Determine if anything changed
   const linesChanged = JSON.stringify(originalLines) !== JSON.stringify(lines);
   const noteChanged = (invoice.PrivateNote || '').toString() !== nextPrivateNote;
 
