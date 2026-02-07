@@ -25,6 +25,7 @@
     .w-160 { width:160px; }
     .w-90 { width:90px; }
     .bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .select-col { width: 70px; }
   </style>
 </head>
 <body>
@@ -48,79 +49,90 @@
 
 <div class="card">
   <div class="bar">
-   <!-- Sync -->
-<form method="post" action="/inventory/settings/skus/sync">
-  <button type="submit">Sync from QuickBooks</button>
-</form>
+    <!-- Sync -->
+    <form method="post" action="/inventory/settings/skus/sync">
+      <button type="submit">Sync from QuickBooks</button>
+    </form>
 
-<!-- Bulk actions -->
-<form method="post"
-      action="/inventory/settings/skus/bulk"
-      style="display:inline-flex; gap:8px; flex-wrap:wrap; align-items:center; margin-left:12px;">
-  <input type="hidden" name="selectedCat" value="<%= selectedCat %>" />
+    <!-- Bulk actions -->
+    <form method="post"
+          action="/inventory/settings/skus/bulk"
+          style="display:inline-flex; gap:8px; flex-wrap:wrap; align-items:center; margin-left:12px;">
+      <input type="hidden" name="selectedCat" value="<%= selectedCat %>" />
 
-  <button type="submit" name="action" value="active:off_all"
-          style="background:#b00020; border-color:#b00020;">
-    Deactivate ALL
-  </button>
+      <button type="submit" name="action" value="active:off_all"
+              style="background:#b00020; border-color:#b00020;">
+        Deactivate ALL
+      </button>
 
-  <button type="submit" name="action" value="active:off">
-    Deactivate this category
-  </button>
+      <button type="submit" name="action" value="active:off">
+        Deactivate this category
+      </button>
 
-  <button type="submit" name="action" value="active:on">
-    Activate this category
-  </button>
+      <button type="submit" name="action" value="active:on">
+        Activate this category
+      </button>
 
-  <span class="muted" style="margin-left:6px;">(Optional)</span>
+      <span class="muted" style="margin-left:6px;">(Optional)</span>
 
-  <button type="submit" name="action" value="lot:on">
-    Lot ON (this category)
-  </button>
+      <button type="submit" name="action" value="lot:on">
+        Lot ON (this category)
+      </button>
 
-  <button type="submit" name="action" value="lot:off">
-    Lot OFF (this category)
-  </button>
-</form>
+      <button type="submit" name="action" value="lot:off">
+        Lot OFF (this category)
+      </button>
+    </form>
 
-<!-- Category filter -->
-<form method="get" action="/inventory/settings/skus" class="bar">
-  <label class="muted"><b>Category filter:</b></label>
+    <!-- Category filter -->
+    <form method="get" action="/inventory/settings/skus" class="bar">
+      <label class="muted"><b>Category filter:</b></label>
 
-  <select name="cat" class="w-220" onchange="this.form.submit()">
-    <option value="all" <%= (selectedCat === 'all') ? 'selected' : '' %>>All categories</option>
-    <option value="uncategorized" <%= (selectedCat === 'uncategorized') ? 'selected' : '' %>>Uncategorized</option>
-    <% (categories || []).forEach(c => { %>
-      <option value="<%= c.id %>" <%= (String(selectedCat) === String(c.id)) ? 'selected' : '' %>>
-        <%= c.name %>
-      </option>
-    <% }) %>
-  </select>
-</form>
-
+      <select name="cat" class="w-220" onchange="this.form.submit()">
+        <option value="all" <%= (selectedCat === 'all') ? 'selected' : '' %>>All categories</option>
+        <option value="uncategorized" <%= (selectedCat === 'uncategorized') ? 'selected' : '' %>>Uncategorized</option>
+        <% (categories || []).forEach(c => { %>
+          <option value="<%= c.id %>" <%= (String(selectedCat) === String(c.id)) ? 'selected' : '' %>>
+            <%= c.name %>
+          </option>
+        <% }) %>
+      </select>
+    </form>
 
     <span class="muted">Tip: run <a href="/admin/sync">Admin Sync</a> to pull categories first.</span>
   </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th class="w-160">QBO Item ID</th>
-        <th class="w-90">Active</th>
-        <th class="w-90">Lot</th>
-        <th class="w-90">Organic</th>
-        <th class="w-90">Unit</th>
-        <th class="w-160">Pallet threshold</th>
-        <th class="w-90">Save</th>
-      </tr>
-    </thead>
-    <tbody>
-      <% (skus || []).forEach(s => { %>
+  <!-- BULK SAVE FORM WRAPS TABLE -->
+  <form method="post" action="/inventory/settings/skus/bulk-save">
+    <input type="hidden" name="selectedCat" value="<%= selectedCat %>"/>
+
+    <div style="display:flex; gap:10px; align-items:center; margin:12px 0;">
+      <button type="submit">Save selected</button>
+      <span class="muted">Tip: check the rows you changed, then click “Save selected”.</span>
+    </div>
+
+    <table>
+      <thead>
         <tr>
-          <form method="post" action="/inventory/settings/skus/update">
-            <input type="hidden" name="sku_id" value="<%= s.id %>"/>
-            <input type="hidden" name="selectedCat" value="<%= selectedCat %>"/>
+          <th class="select-col">Select</th>
+          <th>Name</th>
+          <th class="w-160">QBO Item ID</th>
+          <th class="w-90">Active</th>
+          <th class="w-90">Lot</th>
+          <th class="w-90">Organic</th>
+          <th class="w-90">Unit</th>
+          <th class="w-160">Pallet threshold</th>
+          <th class="w-90">Save</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        <% (skus || []).forEach(s => { %>
+          <tr>
+            <!-- Select this row -->
+            <td class="select-col">
+              <input class="checkbox" type="checkbox" name="selected_sku_ids" value="<%= s.id %>"/>
+            </td>
 
             <td>
               <b><%= s.name %></b>
@@ -129,12 +141,20 @@
 
             <td class="qboid"><%= s.qbo_item_id || '' %></td>
 
-            <td><input class="checkbox" type="checkbox" name="active" <%= s.active ? 'checked' : '' %> /></td>
-            <td><input class="checkbox" type="checkbox" name="is_lot_tracked" <%= s.is_lot_tracked ? 'checked' : '' %> /></td>
-            <td><input class="checkbox" type="checkbox" name="is_organic" <%= s.is_organic ? 'checked' : '' %> /></td>
+            <td>
+              <input class="checkbox" type="checkbox" name="active_<%= s.id %>" <%= s.active ? 'checked' : '' %> />
+            </td>
 
             <td>
-              <select name="unit_type">
+              <input class="checkbox" type="checkbox" name="is_lot_tracked_<%= s.id %>" <%= s.is_lot_tracked ? 'checked' : '' %> />
+            </td>
+
+            <td>
+              <input class="checkbox" type="checkbox" name="is_organic_<%= s.id %>" <%= s.is_organic ? 'checked' : '' %> />
+            </td>
+
+            <td>
+              <select name="unit_type_<%= s.id %>">
                 <% ['unit','tub','case','bucket','box','pint','bag'].forEach(u => { %>
                   <option value="<%= u %>" <%= (s.unit_type === u) ? 'selected' : '' %>><%= u %></option>
                 <% }) %>
@@ -143,18 +163,18 @@
 
             <td>
               <input type="number" step="0.01" min="0.10" max="1.00"
-                     name="pallet_pick_threshold"
+                     name="pallet_pick_threshold_<%= s.id %>"
                      placeholder="blank = default"
                      value="<%= (s.pallet_pick_threshold === null || typeof s.pallet_pick_threshold === 'undefined') ? '' : s.pallet_pick_threshold %>"/>
               <div class="muted">0.80 = 80%</div>
             </td>
 
-            <td><button class="btn-small" type="submit">Save</button></td>
-          </form>
-        </tr>
-      <% }) %>
-    </tbody>
-  </table>
+            <td class="muted">Use bulk save</td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </form>
 </div>
 
 </body>

@@ -429,6 +429,64 @@ app.get('/inventory/settings/skus', requireConnected, (req, res) => {
   res.render('inventory_sku_settings', { skus, msg: null, categories, selectedCat });
 });
 
+// Bulk save selected SKU rows (Active / Lot / Organic / Unit / Threshold)
+app.post('/inventory/settings/skus/bulk-save', requireConnected, (req, res) => {
+  try {
+    const selected = req.body.selected_sku_ids;
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const ids = Array.isArray(selected) ? selected.map(Number) : (selected ? [Number(selected)] : []);
+
+    if (ids.length === 0) throw new Error('No SKUs selected.');
+
+    for (const skuId of ids) {
+      const active = req.body[`active_${skuId}`] === 'on' ? 1 : 0;
+      const is_lot_tracked = req.body[`is_lot_tracked_${skuId}`] === 'on' ? 1 : 0;
+      const is_organic = req.body[`is_organic_${skuId}`] === 'on' ? 1 : 0;
+      const unit_type = (req.body[`unit_type_${skuId}`] || 'unit').toString();
+
+      let threshold = req.body[`pallet_pick_threshold_${skuId}`];
+      threshold = (threshold === undefined || threshold === null || String(threshold).trim() === '')
+        ? null
+        : Number(threshold);
+
+      if (threshold !== null && (threshold < 0.1 || threshold > 1.0)) {
+        throw new Error(`Pallet threshold must be between 0.10 and 1.00 (or blank). SKU ${skuId}`);
+      }
+
+      db.updateSkuSettings({
+        sku_id: skuId,
+        active,
+        is_organic,
+        is_lot_tracked,
+        unit_type,
+        pallet_pick_threshold: threshold
+      });
+    }
+
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.render('inventory_sku_settings', {
+      skus,
+      msg: `Saved ${ids.length} selected SKU(s).`,
+      categories,
+      selectedCat
+    });
+  } catch (e) {
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.status(400).render('inventory_sku_settings', {
+      skus,
+      msg: e?.message || String(e),
+      categories,
+      selectedCat
+    });
+  }
+});
+
+
 // Bulk update SKUs (Active / Lot / Organic) for current filter
 app.post('/inventory/settings/skus/bulk', requireConnected, (req, res) => {
   try {
