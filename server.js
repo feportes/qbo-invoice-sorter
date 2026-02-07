@@ -429,6 +429,70 @@ app.get('/inventory/settings/skus', requireConnected, (req, res) => {
   res.render('inventory_sku_settings', { skus, msg: null, categories, selectedCat });
 });
 
+// Bulk update SKUs (Active / Lot / Organic) for current filter
+app.post('/inventory/settings/skus/bulk', requireConnected, (req, res) => {
+  try {
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const action = (req.body.action || '').toString();
+
+    // action format:
+    // active:on | active:off
+    // lot:on | lot:off
+    // organic:on | organic:off
+    // active:off_all  (ignores selectedCat, applies to all)
+    const [field, value] = action.split(':');
+
+    if (!field || !value) throw new Error('Invalid bulk action');
+
+    const applyAll = value === 'off_all';
+    const cat = applyAll ? 'all' : selectedCat;
+
+    const rows = db.listSkusAllFiltered({ categoryId: cat });
+
+    let updates = 0;
+    for (const sku of rows) {
+      const patch = {
+        sku_id: sku.id,
+        active: sku.active,
+        is_organic: sku.is_organic,
+        is_lot_tracked: sku.is_lot_tracked,
+        unit_type: sku.unit_type || 'unit',
+        pallet_pick_threshold: sku.pallet_pick_threshold
+      };
+
+      if (field === 'active') patch.active = (value === 'on') ? 1 : 0;
+      else if (field === 'lot') patch.is_lot_tracked = (value === 'on') ? 1 : 0;
+      else if (field === 'organic') patch.is_organic = (value === 'on') ? 1 : 0;
+      else throw new Error('Unknown bulk field');
+
+      db.updateSkuSettings(patch);
+      updates++;
+    }
+
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.render('inventory_sku_settings', {
+      skus,
+      msg: `Bulk update applied to ${updates} SKUs (${applyAll ? 'ALL categories' : selectedCat}).`,
+      categories,
+      selectedCat
+    });
+  } catch (e) {
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.status(400).render('inventory_sku_settings', {
+      skus,
+      msg: e?.message || String(e),
+      categories,
+      selectedCat
+    });
+  }
+});
+
+
 app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => {
   const conn = db.getConnectionOrThrow();
   const oauthClient = getOAuthClient(conn);
