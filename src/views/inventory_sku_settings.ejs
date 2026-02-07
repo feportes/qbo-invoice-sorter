@@ -48,16 +48,19 @@
 
 <div class="card">
   <div class="bar">
-    <form method="post" action="/inventory/settings/skus/sync">
-      <button type="submit">Sync from QuickBooks</button>
-    </form>
+   <!-- Sync -->
+<form method="post" action="/inventory/settings/skus/sync">
+  <button type="submit">Sync from QuickBooks</button>
+</form>
 
-    <form method="get" action="/inventory/settings/skus" class="bar">
-      <label class="muted"><b>Category filter:</b></label>
-<form method="post" action="/inventory/settings/skus/bulk" style="display:inline-flex; gap:8px; flex-wrap:wrap; align-items:center; margin-left:12px;">
-  <input type="hidden" name="selectedCat" value="<%= selectedCat %>"/>
+<!-- Bulk actions -->
+<form method="post"
+      action="/inventory/settings/skus/bulk"
+      style="display:inline-flex; gap:8px; flex-wrap:wrap; align-items:center; margin-left:12px;">
+  <input type="hidden" name="selectedCat" value="<%= selectedCat %>" />
 
-  <button type="submit" name="action" value="active:off_all" style="background:#b00020; border-color:#b00020;">
+  <button type="submit" name="action" value="active:off_all"
+          style="background:#b00020; border-color:#b00020;">
     Deactivate ALL
   </button>
 
@@ -80,16 +83,21 @@
   </button>
 </form>
 
-      <select name="cat" class="w-220" onchange="this.form.submit()">
-        <option value="all" <%= (selectedCat === 'all') ? 'selected' : '' %>>All categories</option>
-        <option value="uncategorized" <%= (selectedCat === 'uncategorized') ? 'selected' : '' %>>Uncategorized</option>
-        <% (categories || []).forEach(c => { %>
-          <option value="<%= c.id %>" <%= (String(selectedCat) === String(c.id)) ? 'selected' : '' %>>
-            <%= c.name %>
-          </option>
-        <% }) %>
-      </select>
-    </form>
+<!-- Category filter -->
+<form method="get" action="/inventory/settings/skus" class="bar">
+  <label class="muted"><b>Category filter:</b></label>
+
+  <select name="cat" class="w-220" onchange="this.form.submit()">
+    <option value="all" <%= (selectedCat === 'all') ? 'selected' : '' %>>All categories</option>
+    <option value="uncategorized" <%= (selectedCat === 'uncategorized') ? 'selected' : '' %>>Uncategorized</option>
+    <% (categories || []).forEach(c => { %>
+      <option value="<%= c.id %>" <%= (String(selectedCat) === String(c.id)) ? 'selected' : '' %>>
+        <%= c.name %>
+      </option>
+    <% }) %>
+  </select>
+</form>
+
 
     <span class="muted">Tip: run <a href="/admin/sync">Admin Sync</a> to pull categories first.</span>
   </div>
