@@ -263,6 +263,22 @@ app.post('/inventory/settings/containers', requireConnected, (req, res) => {
   }
 });
 
+app.get('/inventory/add-pallet', requireConnected, (req, res) => {
+  const containerNo = Number(req.query.c || 1);
+  const containers = db.listContainers();
+
+  const depths = db.getContainerDepths(containerNo);
+  const left = [];
+  const right = [];
+
+  for (let d = 1; d <= depths.leftMax; d++) left.push({ code: `C${containerNo}-L${String(d).padStart(2,'0')}` });
+  for (let d = 1; d <= depths.rightMax; d++) right.push({ code: `C${containerNo}-R${String(d).padStart(2,'0')}` });
+
+  const skus = db.listSkusActiveOnly();
+  res.render('inventory_add_pallet', { msg: null, containers, containerNo, left, right, skus });
+});
+
+
 // ==========================================================
 // Inventory: Add Pallet (manual receive)
 // ==========================================================
@@ -473,7 +489,7 @@ app.post('/inventory/settings/engine', (req, res) => {
 app.get('/inventory/settings/skus', requireConnected, (req, res) => {
   const selectedCat = (req.query.cat || 'all').toString();
   const categories = db.listCategoriesOrdered();
-  const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+  const skus = db.listSkusActiveOnly();
   res.render('inventory_sku_settings', { skus, msg: null, categories, selectedCat });
 });
 

@@ -2,84 +2,141 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Quick Add Pallet</title>
+  <title>Add Pallet</title>
   <style>
-    body { font-family: system-ui; margin: 24px; max-width: 700px; }
-    label { display:block; margin-top: 14px; font-weight: 600; }
-    select, input, textarea {
-      width:100%;
-      padding:10px;
-      margin-top:4px;
-      border:1px solid #ddd;
-      border-radius:10px;
-    }
-    button {
-      margin-top:18px;
-      padding:12px 16px;
-      border-radius:10px;
-      border:1px solid #333;
-      background:#111;
-      color:#fff;
-      font-size:15px;
-    }
+    body { font-family: system-ui; margin: 24px; max-width: 1000px; }
     .muted { color:#666; font-size:13px; }
-    .error { background:#fee; border:1px solid #f99; padding:10px; border-radius:10px; margin-bottom:12px; }
     a { color:#111; text-decoration:none; }
+    .card { border:1px solid #ddd; border-radius:12px; padding:16px; background:#fff; margin-top:14px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+    label { display:block; font-size:13px; color:#666; margin-bottom:6px; }
+    select, input { padding:10px; border:1px solid #ddd; border-radius:10px; }
+    input[type="number"] { width: 140px; }
+    .btn { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; }
+    .msg { margin-top:12px; padding:10px; border-radius:10px; background:#f4f4f4; }
+
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:14px; }
+    .col { border:1px solid #eee; border-radius:12px; padding:12px; }
+    .slot {
+      border:1px solid #e6e6e6;
+      border-radius:12px;
+      padding:10px;
+      margin-bottom:10px;
+      cursor:pointer;
+      user-select:none;
+    }
+    .slot:hover { outline:2px dashed #111; }
+    .slot.selected { outline:2px solid #0a7; background:#f2fffb; }
+    .code { font-weight:700; }
+    .topbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   </style>
 </head>
 <body>
 
-<h1>Quick Add Pallet</h1>
-<p class="muted">This loads current inventory into a container slot or WALKIN (no typos).</p>
+<h1 style="margin:0;">Add Pallet</h1>
+<div class="muted">
+  Fast receive: pick SKU, qty, and click a slot.
+</div>
 
-<% if (msg) { %>
-  <div class="error"><%= msg %></div>
-<% } %>
-
-<form method="post">
-
-  <label>SKU</label>
-  <select name="sku_id" required>
-    <% skus.forEach(s => { %>
-      <option value="<%= s.id %>"><%= s.name %></option>
-    <% }) %>
-  </select>
-
-  <label>Lot ID (optional — required only for organic)</label>
-  <input name="lot_id" placeholder="Leave blank for non-tracked/local"/>
-
-  <label>Pallet Config ID (optional)</label>
-  <input name="pallet_config_id" placeholder="Optional"/>
-
-  <label>Container</label>
-  <select onchange="window.location.href='/inventory/add-pallet?c=' + this.value;">
-    <% containers.forEach(c => { %>
-      <option value="<%= c %>" <%= c===containerNo ? 'selected' : '' %>>C<%= c %></option>
-    <% }) %>
-  </select>
-
-  <label>Slot</label>
-  <select name="location_code" required>
-    <% slotOptions.forEach(code => { %>
-      <option value="<%= code %>"><%= code %></option>
-    <% }) %>
-    <option value="WALKIN">WALKIN</option>
-    <option value="RETURNS">RETURNS</option>
-  </select>
-
-  <label>Quantity</label>
-  <input name="qty_units" type="number" step="0.01" required/>
-
-  <label>Notes</label>
-  <textarea name="notes"></textarea>
-
-  <button type="submit">Create Pallet</button>
-</form>
-
-<p style="margin-top:20px;">
-  <a href="/inventory/map?c=<%= containerNo %>">Back to Container Map</a> |
+<div class="muted" style="margin-top:10px;">
+  <a href="/inventory/map?c=<%= containerNo %>">Container Map</a> |
+  <a href="/inventory/settings/pallet-configs">Pallet Configs</a> |
+  <a href="/inventory/settings/skus">SKU Settings</a> |
   <a href="/">Home</a>
-</p>
+</div>
+
+<% if (msg) { %><div class="msg"><%= msg %></div><% } %>
+
+<div class="card">
+  <form method="get" action="/inventory/add-pallet" class="topbar">
+    <label style="margin:0;">
+      <span class="muted"><b>Container</b></span><br/>
+      <select name="c" onchange="this.form.submit()">
+        <% containers.forEach(c => { %>
+          <option value="<%= c %>" <%= (c === containerNo) ? 'selected' : '' %>>C<%= c %></option>
+        <% }) %>
+      </select>
+    </label>
+  </form>
+
+  <form method="post" action="/inventory/add-pallet" id="addForm">
+    <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+    <input type="hidden" name="location_code" id="location_code" value=""/>
+
+    <div class="row" style="margin-top:12px;">
+      <div style="min-width:380px; flex:1;">
+        <label>SKU (active only)</label>
+        <select name="sku_id" required style="width:100%;">
+          <option value="">-- select SKU --</option>
+          <% (skus || []).forEach(s => { %>
+            <option value="<%= s.id %>"><%= s.name %></option>
+          <% }) %>
+        </select>
+      </div>
+
+      <div>
+        <label>Qty</label>
+        <input type="number" step="0.01" name="qty_units" min="0.01" required />
+      </div>
+
+      <div style="min-width:220px;">
+        <label>Notes (optional)</label>
+        <input type="text" name="notes" placeholder="ex: received today" style="width:100%;" />
+      </div>
+
+      <div>
+        <button class="btn" type="submit">Add Pallet</button>
+      </div>
+    </div>
+
+    <div class="muted" style="margin-top:10px;">
+      Selected slot: <b id="slotLabel">none</b>
+    </div>
+
+    <div class="grid">
+      <div class="col">
+        <h3 style="margin:0 0 10px 0;">LEFT (L) <span class="muted">01 = closest to door</span></h3>
+        <% left.forEach(s => { %>
+          <div class="slot" data-slot="<%= s.code %>">
+            <div class="code"><%= s.code %></div>
+          </div>
+        <% }) %>
+      </div>
+
+      <div class="col">
+        <h3 style="margin:0 0 10px 0;">RIGHT (R) <span class="muted">01 = closest to door</span></h3>
+        <% right.forEach(s => { %>
+          <div class="slot" data-slot="<%= s.code %>">
+            <div class="code"><%= s.code %></div>
+          </div>
+        <% }) %>
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+  const slots = document.querySelectorAll('.slot');
+  const loc = document.getElementById('location_code');
+  const label = document.getElementById('slotLabel');
+
+  slots.forEach(el => {
+    el.addEventListener('click', () => {
+      slots.forEach(x => x.classList.remove('selected'));
+      el.classList.add('selected');
+      const code = el.dataset.slot;
+      loc.value = code;
+      label.textContent = code;
+    });
+  });
+
+  document.getElementById('addForm').addEventListener('submit', (e) => {
+    if (!loc.value) {
+      e.preventDefault();
+      alert('Please click a slot first.');
+    }
+  });
+</script>
 
 </body>
 </html>
