@@ -17,7 +17,6 @@
     input[type="number"], select {
       padding: 8px; border:1px solid #ddd; border-radius:10px; width: 100%;
     }
-    .btn-small { padding:8px 10px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; }
     .msg { margin-top: 12px; padding: 10px; border-radius: 10px; background: #f4f4f4; }
     .checkbox { transform: scale(1.1); }
     .qboid { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color:#333; }
@@ -25,7 +24,20 @@
     .w-160 { width:160px; }
     .w-90 { width:90px; }
     .bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-    .select-col { width: 70px; }
+    .select-col { width: 90px; }
+    .dirty {
+      outline: 2px solid #0a7;
+      border-radius: 10px;
+    }
+    .pill {
+      display:inline-block;
+      padding:2px 8px;
+      border-radius:999px;
+      border:1px solid #ddd;
+      background:#fff;
+      font-size:12px;
+      margin-left:8px;
+    }
   </style>
 </head>
 <body>
@@ -103,18 +115,21 @@
   </div>
 
   <!-- BULK SAVE FORM WRAPS TABLE -->
-  <form method="post" action="/inventory/settings/skus/bulk-save">
+  <form method="post" action="/inventory/settings/skus/bulk-save" id="bulkSaveForm">
     <input type="hidden" name="selectedCat" value="<%= selectedCat %>"/>
 
-    <div style="display:flex; gap:10px; align-items:center; margin:12px 0;">
-      <button type="submit">Save selected</button>
-      <span class="muted">Tip: check the rows you changed, then click “Save selected”.</span>
+    <div style="display:flex; gap:10px; align-items:center; margin:12px 0; flex-wrap:wrap;">
+      <button type="submit">Save changed</button>
+      <button type="button" onclick="selectAll(true)">Select all</button>
+      <button type="button" onclick="selectAll(false)">Unselect all</button>
+      <span class="muted">Changed rows auto-select. You can also select/unselect manually.</span>
+      <span class="pill" id="changedCount">0 changed</span>
     </div>
 
     <table>
       <thead>
         <tr>
-          <th class="select-col">Select</th>
+          <th class="select-col">Save?</th>
           <th>Name</th>
           <th class="w-160">QBO Item ID</th>
           <th class="w-90">Active</th>
@@ -122,16 +137,15 @@
           <th class="w-90">Organic</th>
           <th class="w-90">Unit</th>
           <th class="w-160">Pallet threshold</th>
-          <th class="w-90">Save</th>
         </tr>
       </thead>
 
       <tbody>
         <% (skus || []).forEach(s => { %>
-          <tr>
-            <!-- Select this row -->
+          <tr data-sku-id="<%= s.id %>">
+            <!-- This checkbox is what server reads as "selected" -->
             <td class="select-col">
-              <input class="checkbox" type="checkbox" name="selected_sku_ids" value="<%= s.id %>"/>
+              <input class="checkbox selectBox" type="checkbox" name="selected_sku_ids" value="<%= s.id %>"/>
             </td>
 
             <td>
@@ -142,40 +156,118 @@
             <td class="qboid"><%= s.qbo_item_id || '' %></td>
 
             <td>
-              <input class="checkbox" type="checkbox" name="active_<%= s.id %>" <%= s.active ? 'checked' : '' %> />
+              <input class="checkbox trackField" type="checkbox"
+                     name="active_<%= s.id %>"
+                     <%= s.active ? 'checked' : '' %>
+                     data-initial="<%= s.active ? '1' : '0' %>"/>
             </td>
 
             <td>
-              <input class="checkbox" type="checkbox" name="is_lot_tracked_<%= s.id %>" <%= s.is_lot_tracked ? 'checked' : '' %> />
+              <input class="checkbox trackField" type="checkbox"
+                     name="is_lot_tracked_<%= s.id %>"
+                     <%= s.is_lot_tracked ? 'checked' : '' %>
+                     data-initial="<%= s.is_lot_tracked ? '1' : '0' %>"/>
             </td>
 
             <td>
-              <input class="checkbox" type="checkbox" name="is_organic_<%= s.id %>" <%= s.is_organic ? 'checked' : '' %> />
+              <input class="checkbox trackField" type="checkbox"
+                     name="is_organic_<%= s.id %>"
+                     <%= s.is_organic ? 'checked' : '' %>
+                     data-initial="<%= s.is_organic ? '1' : '0' %>"/>
             </td>
 
             <td>
-              <select name="unit_type_<%= s.id %>">
+              <select class="trackField" name="unit_type_<%= s.id %>"
+                      data-initial="<%= (s.unit_type || 'unit') %>">
                 <% ['unit','tub','case','bucket','box','pint','bag'].forEach(u => { %>
-                  <option value="<%= u %>" <%= (s.unit_type === u) ? 'selected' : '' %>><%= u %></option>
+                  <option value="<%= u %>" <%= ((s.unit_type || 'unit') === u) ? 'selected' : '' %>><%= u %></option>
                 <% }) %>
               </select>
             </td>
 
             <td>
-              <input type="number" step="0.01" min="0.10" max="1.00"
+              <input class="trackField" type="number" step="0.01" min="0.10" max="1.00"
                      name="pallet_pick_threshold_<%= s.id %>"
                      placeholder="blank = default"
-                     value="<%= (s.pallet_pick_threshold === null || typeof s.pallet_pick_threshold === 'undefined') ? '' : s.pallet_pick_threshold %>"/>
+                     value="<%= (s.pallet_pick_threshold === null || typeof s.pallet_pick_threshold === 'undefined') ? '' : s.pallet_pick_threshold %>"
+                     data-initial="<%= (s.pallet_pick_threshold === null || typeof s.pallet_pick_threshold === 'undefined') ? '' : s.pallet_pick_threshold %>"/>
               <div class="muted">0.80 = 80%</div>
             </td>
-
-            <td class="muted">Use bulk save</td>
           </tr>
         <% }) %>
       </tbody>
     </table>
   </form>
 </div>
+
+<script>
+  function selectAll(on) {
+    document.querySelectorAll('.selectBox').forEach(cb => cb.checked = on);
+    updateChangedCount();
+  }
+
+  function rowIsDirty(row) {
+    const fields = row.querySelectorAll('.trackField');
+    for (const el of fields) {
+      const initial = el.dataset.initial ?? '';
+      let current = '';
+      if (el.type === 'checkbox') current = el.checked ? '1' : '0';
+      else current = (el.value ?? '').toString();
+      if (current !== initial) return true;
+    }
+    return false;
+  }
+
+  function markRow(row) {
+    const dirty = rowIsDirty(row);
+    const cb = row.querySelector('.selectBox');
+    if (dirty) {
+      row.classList.add('dirty');
+      cb.checked = true;
+    } else {
+      row.classList.remove('dirty');
+      // do not auto-uncheck if user manually checked it
+      // only uncheck if it was auto-checked and now clean:
+      // simplest: leave as-is
+    }
+  }
+
+  function updateChangedCount() {
+    const rows = document.querySelectorAll('tr[data-sku-id]');
+    let dirtyCount = 0;
+    rows.forEach(r => {
+      if (r.classList.contains('dirty')) dirtyCount++;
+    });
+    const el = document.getElementById('changedCount');
+    if (el) el.textContent = `${dirtyCount} changed`;
+  }
+
+  // Attach listeners
+  document.querySelectorAll('tr[data-sku-id]').forEach(row => {
+    row.querySelectorAll('.trackField').forEach(el => {
+      el.addEventListener('change', () => {
+        markRow(row);
+        updateChangedCount();
+      });
+      el.addEventListener('input', () => {
+        markRow(row);
+        updateChangedCount();
+      });
+    });
+  });
+
+  // initial count
+  updateChangedCount();
+
+  // On submit, warn if nothing selected
+  document.getElementById('bulkSaveForm').addEventListener('submit', (e) => {
+    const any = Array.from(document.querySelectorAll('.selectBox')).some(cb => cb.checked);
+    if (!any) {
+      e.preventDefault();
+      alert('No rows selected/changed. Make changes first, or click Select all.');
+    }
+  });
+</script>
 
 </body>
 </html>
