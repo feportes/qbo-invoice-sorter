@@ -263,6 +263,54 @@ app.post('/inventory/settings/containers', requireConnected, (req, res) => {
   }
 });
 
+// ==========================================================
+// Inventory: Add Pallet (manual receive)
+// ==========================================================
+app.get('/inventory/add-pallet', requireConnected, (req, res) => {
+  const containerNo = Number(req.query.c || 1);
+  const containers = db.listContainers();
+  const slotOptions = db.listValidSlotCodes(containerNo);
+  const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+  res.render('inventory_add_pallet', { msg: null, containers, containerNo, slotOptions, skus });
+});
+
+app.post('/inventory/add-pallet', requireConnected, (req, res) => {
+  try {
+    const containerNo = Number(req.body.container_no || 1);
+    const skuId = Number(req.body.sku_id);
+    const locationCode = String(req.body.location_code || '').trim();
+    const qtyUnits = Number(req.body.qty_units);
+
+    if (!skuId) throw new Error('SKU is required');
+    if (!locationCode) throw new Error('Location is required');
+    if (!Number.isFinite(qtyUnits) || qtyUnits <= 0) throw new Error('Qty must be > 0');
+
+    // optional fields
+    const lotId = req.body.lot_id ? Number(req.body.lot_id) : null;
+    const palletConfigId = req.body.pallet_config_id ? Number(req.body.pallet_config_id) : null;
+    const notes = req.body.notes ? String(req.body.notes) : null;
+
+    db.createPallet({
+      skuId,
+      lotId,
+      palletConfigId,
+      locationCode,
+      qtyUnits,
+      notes
+    });
+
+    // go back to the container map automatically
+    res.redirect(`/inventory/map?c=${containerNo}`);
+  } catch (e) {
+    const containerNo = Number(req.body.container_no || 1);
+    const containers = db.listContainers();
+    const slotOptions = db.listValidSlotCodes(containerNo);
+    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+    res.status(400).render('inventory_add_pallet', { msg: e?.message || String(e), containers, containerNo, slotOptions, skus });
+  }
+});
+
+
 // Map
 app.get('/inventory/map', requireConnected, (req, res) => {
   const containerNo = Number(req.query.c || 1);

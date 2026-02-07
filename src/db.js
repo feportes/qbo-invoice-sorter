@@ -129,7 +129,7 @@ export const db = {
     `).all(String(invoiceId));
   },
 
-  replaceInvoiceTotals(invoiceId, totals /* array {sku_id, qty_units} */) {
+  replaceInvoiceTotals(invoiceId, totals) {
     const tx = sqlite.transaction(() => {
       sqlite.prepare(`DELETE FROM invoice_line_totals WHERE qbo_invoice_id=?`).run(String(invoiceId));
       const ins = sqlite.prepare(`
@@ -192,7 +192,6 @@ export const db = {
         }
       }
 
-      // remove allocations
       this.deleteAllocationsForInvoice(invoiceId);
     });
 
@@ -224,9 +223,8 @@ export const db = {
 
   addPalletConfig({ sku_id, name, ti, hi, units_per_pallet, is_default, notes }) {
     const tx = sqlite.transaction(() => {
-      if (is_default) {
-        sqlite.prepare(`UPDATE pallet_configs SET is_default=0 WHERE sku_id=?`).run(sku_id);
-      }
+      if (is_default) sqlite.prepare(`UPDATE pallet_configs SET is_default=0 WHERE sku_id=?`).run(sku_id);
+
       sqlite.prepare(`
         INSERT INTO pallet_configs
           (sku_id, name, ti, hi, units_per_pallet, is_default, notes)
@@ -247,9 +245,8 @@ export const db = {
 
   updatePalletConfig({ id, sku_id, name, ti, hi, units_per_pallet, is_default, notes }) {
     const tx = sqlite.transaction(() => {
-      if (is_default) {
-        sqlite.prepare(`UPDATE pallet_configs SET is_default=0 WHERE sku_id=?`).run(sku_id);
-      }
+      if (is_default) sqlite.prepare(`UPDATE pallet_configs SET is_default=0 WHERE sku_id=?`).run(sku_id);
+
       sqlite.prepare(`
         UPDATE pallet_configs
         SET name=?,
@@ -283,6 +280,61 @@ export const db = {
       WHERE sku_id=? AND is_default=1
       LIMIT 1
     `).get(skuId);
+  },
+
+  // ==========================================================
+  // ✅ ADD PALLET (manual receive)  <-- THIS IS WHAT YOU NEEDED
+  // ==========================================================
+  createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes, userName = 'user' }) {
+    const tx = sqlite.transaction(() => {
+      const loc = sqlite.prepare(`SELECT * FROM locations WHERE code=? LIMIT 1`).get(String(locationCode));
+      if (!loc) throw new Error(`Location not found: ${locationCode}`);
+
+      const sku = sqlite.prepare(`SELECT * FROM skus WHERE id=? LIMIT 1`).get(Number(skuId));
+      if (!sku) throw new Error(`SKU not found: ${skuId}`);
+
+      const qty = Number(qtyUnits);
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('qtyUnits must be > 0');
+
+      const ins = sqlite.prepare(`
+        INSERT INTO pallets
+          (sku_id, lot_id, pallet_config_id, location_id, qty_units, status, notes)
+        VALUES
+          (?, ?, ?, ?, ?, 'SEALED', ?)
+      `);
+
+      const result = ins.run(
+        Number(skuId),
+        lotId ? Number(lotId) : null,
+        palletConfigId ? Number(palletConfigId) : null,
+        Number(loc.id),
+        qty,
+        notes ? String(notes) : null
+      );
+
+      const palletId = Number(result.lastInsertRowid);
+
+      // Movement log
+      sqlite.prepare(`
+        INSERT INTO inventory_movements
+          (user_name, sku_id, lot_id, qty_units, unit_type, to_location_id, to_pallet_id, type, reference_type, reference_id, note)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, 'RECEIVE', 'MANUAL', NULL, ?)
+      `).run(
+        String(userName || 'user'),
+        Number(skuId),
+        lotId ? Number(lotId) : null,
+        qty,
+        String(sku.unit_type || 'unit'),
+        Number(loc.id),
+        palletId,
+        `Manual receive pallet into ${loc.code}`
+      );
+
+      return palletId;
+    });
+
+    return tx();
   },
 
   // ==========================================================
@@ -519,3 +571,4 @@ export const db = {
     );
   },
 };
+
