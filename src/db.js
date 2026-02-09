@@ -11,14 +11,16 @@ sqlite.pragma('journal_mode = WAL');
 
 export const db = {
   sqlite,
-listSkusActiveOnly() {
-  return sqlite.prepare(`
-    SELECT *
-    FROM skus
-    WHERE active=1
-    ORDER BY name COLLATE NOCASE
-  `).all();
-}
+
+  // Active SKUs only (for dropdowns like Add Pallet)
+  listSkusActiveOnly() {
+    return sqlite.prepare(`
+      SELECT *
+      FROM skus
+      WHERE active=1
+      ORDER BY name COLLATE NOCASE
+    `).all();
+  },
 
   // ==========================================================
   // Allocation helpers (walk-in + pallets)
@@ -26,6 +28,7 @@ listSkusActiveOnly() {
   getSkuByQboItemId(qboItemId) {
     return sqlite.prepare(`SELECT * FROM skus WHERE qbo_item_id=? LIMIT 1`).get(String(qboItemId));
   },
+
 
   getDefaultUnitsPerPalletForSku(skuId) {
     const row = sqlite.prepare(`
