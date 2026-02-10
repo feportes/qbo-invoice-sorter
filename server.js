@@ -878,6 +878,22 @@ app.post('/inventory/move-json', requireConnected, (req, res) => {
   }
 });
 
+app.post('/inventory/break-to-walkin', requireConnected, (req, res) => {
+  try {
+    const palletId = Number(req.body.pallet_id);
+    const qty = Number(req.body.qty);
+    const containerNo = Number(req.body.container_no || 1);
+
+    if (!palletId) throw new Error('Missing pallet_id');
+    if (!Number.isFinite(qty) || qty <= 0) throw new Error('Qty must be > 0');
+
+    db.breakPalletToWalkin({ palletId, qty, userName: 'user' });
+    res.redirect(`/inventory/map?c=${containerNo}`);
+  } catch (e) {
+    res.status(500).send(`Break failed: ${e?.message || e}`);
+  }
+});
+
 
 // ==========================================================
 // Inventory: Yard view (if you want it back)
