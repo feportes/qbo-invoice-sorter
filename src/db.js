@@ -29,7 +29,6 @@ export const db = {
     return sqlite.prepare(`SELECT * FROM skus WHERE qbo_item_id=? LIMIT 1`).get(String(qboItemId));
   },
 
-
   getDefaultUnitsPerPalletForSku(skuId) {
     const row = sqlite.prepare(`
       SELECT units_per_pallet
@@ -104,21 +103,49 @@ export const db = {
     );
   },
 
-listWalkinLoose() {
-  return sqlite.prepare(`
-    SELECT li.*,
-           s.name AS sku_name,
-           s.unit_type AS unit_type,
-           lo.lot_number AS lot_number
-    FROM loose_inventory li
-    JOIN skus s ON s.id = li.sku_id
-    LEFT JOIN lots lo ON lo.id = li.lot_id
-    JOIN locations l ON l.id = li.location_id
-    WHERE l.code='WALKIN'
-    ORDER BY sku_name COLLATE NOCASE, lot_number COLLATE NOCASE
-  `).all();
-},
+  listWalkinLoose() {
+    return sqlite.prepare(`
+      SELECT li.*,
+             s.name AS sku_name,
+             s.unit_type AS unit_type,
+             lo.lot_number AS lot_number
+      FROM loose_inventory li
+      JOIN skus s ON s.id = li.sku_id
+      LEFT JOIN lots lo ON lo.id = li.lot_id
+      JOIN locations l ON l.id = li.location_id
+      WHERE l.code='WALKIN'
+      ORDER BY sku_name COLLATE NOCASE, lot_number COLLATE NOCASE
+    `).all();
+  },
 
+  // ==========================================================
+  // ✅ Pallets listing helpers for WALKIN/RETURNS/etc
+  // ==========================================================
+  listPalletsInLocationId(locationId) {
+    return sqlite.prepare(`
+      SELECT p.*,
+             l.code AS location_code,
+             s.name AS sku_name,
+             s.unit_type AS unit_type,
+             lo.lot_number AS lot_number
+      FROM pallets p
+      JOIN locations l ON l.id = p.location_id
+      JOIN skus s ON s.id = p.sku_id
+      LEFT JOIN lots lo ON lo.id = p.lot_id
+      WHERE p.location_id = ?
+      ORDER BY s.name COLLATE NOCASE, lo.lot_number COLLATE NOCASE, p.id DESC
+    `).all(Number(locationId));
+  },
+
+  listPalletsByLocationCode(code) {
+    const loc = this.getLocationByCode(String(code));
+    if (!loc) return [];
+    return this.listPalletsInLocationId(loc.id);
+  },
+
+  listPalletsInWalkin() {
+    return this.listPalletsByLocationCode('WALKIN');
+  },
 
   // ==========================================================
   // Inventory Engine: toggle + invoice state/totals + reversals
@@ -310,7 +337,7 @@ listWalkinLoose() {
   },
 
   // ==========================================================
-  // ✅ ADD PALLET (manual receive)  <-- THIS IS WHAT YOU NEEDED
+  // ✅ ADD PALLET (manual receive)
   // ==========================================================
   createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes, userName = 'user' }) {
     const tx = sqlite.transaction(() => {
@@ -341,7 +368,6 @@ listWalkinLoose() {
 
       const palletId = Number(result.lastInsertRowid);
 
-      // Movement log
       sqlite.prepare(`
         INSERT INTO inventory_movements
           (user_name, sku_id, lot_id, qty_units, unit_type, to_location_id, to_pallet_id, type, reference_type, reference_id, note)
@@ -366,6 +392,7 @@ listWalkinLoose() {
 
   // ==========================================================
   // Move pallet between locations (including WALKIN/RETURNS)
+  // ✅ NOW prevents moving into an occupied CONTAINER slot
   // ==========================================================
   movePallet(palletId, toLocationId, userName = 'user') {
     const tx = sqlite.transaction(() => {
@@ -375,6 +402,22 @@ listWalkinLoose() {
       const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
       const toLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(Number(toLocationId));
       if (!toLoc) throw new Error('Destination location not found');
+
+      // Enforce 1 pallet per container slot
+      if (String(toLoc.type) === 'CONTAINER') {
+        const existing = sqlite.prepare(`
+          SELECT p.id, s.name AS sku_name, p.qty_units, l.code AS location_code
+          FROM pallets p
+          JOIN skus s ON s.id = p.sku_id
+          JOIN locations l ON l.id = p.location_id
+          WHERE p.location_id=? AND p.id <> ?
+          LIMIT 1
+        `).get(Number(toLoc.id), Number(palletId));
+
+        if (existing) {
+          throw new Error(`Destination ${toLoc.code} is occupied by pallet #${existing.id} (${existing.sku_name}, ${existing.qty_units}).`);
+        }
+      }
 
       sqlite.prepare('UPDATE pallets SET location_id=? WHERE id=?')
         .run(Number(toLocationId), Number(palletId));
@@ -423,14 +466,12 @@ listWalkinLoose() {
       const walkin = sqlite.prepare(`SELECT * FROM locations WHERE code='WALKIN' LIMIT 1`).get();
       if (!walkin) throw new Error('WALKIN location missing');
 
-      // Decrease pallet qty
       const newQty = Number(pallet.qty_units) - q;
       const newStatus = newQty <= 0 ? 'DEPLETED' : 'OPEN';
 
       sqlite.prepare('UPDATE pallets SET qty_units=?, status=? WHERE id=?')
         .run(newQty, newStatus, Number(palletId));
 
-      // Add to loose_inventory in WALKIN (by sku + lot)
       const row = sqlite.prepare(`
         SELECT * FROM loose_inventory
         WHERE sku_id=? AND COALESCE(lot_id,0)=COALESCE(?,0) AND location_id=?
@@ -457,7 +498,6 @@ listWalkinLoose() {
       const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
       const sku = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(pallet.sku_id);
 
-      // Movement log
       sqlite.prepare(`
         INSERT INTO inventory_movements
           (user_name, sku_id, lot_id, qty_units, unit_type,
@@ -484,7 +524,6 @@ listWalkinLoose() {
 
     tx();
   },
-
 
   // ==========================================================
   // Invoice processing lock / idempotency (needed by sorter)
@@ -720,4 +759,5 @@ listWalkinLoose() {
     );
   },
 };
+
 

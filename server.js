@@ -13,7 +13,6 @@ import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
 import { runAutoAllocateForInvoice } from './src/inventory_engine.js';
 
-// ✅ Inventory allocation engine (you created this file)
 import { buildPlanFromInvoice, applyPlan } from './src/inventory_allocate.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,7 +50,6 @@ async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source
 
       if (!isNotFound) throw e;
 
-      // backoff: 1s, 2s, 3s, 5s, 8s...
       const delays = [1000, 2000, 3000, 5000, 8000, 12000];
       const delay = delays[Math.min(i, delays.length - 1)];
       await new Promise(r => setTimeout(r, delay));
@@ -76,7 +74,7 @@ app.get('/auth/start', authStart);
 app.get('/auth/callback', authCallback);
 
 // ==========================================================
-// ADMIN (invoice sorter UI) — RESTORED
+// ADMIN
 // ==========================================================
 app.get('/admin', requireConnected, (req, res) => res.redirect('/admin/categories'));
 
@@ -87,7 +85,6 @@ app.get('/admin/sync', requireConnected, async (req, res) => {
     const customerCount = await syncCustomers(oauthClient, conn.realm_id);
     const categoryCount = await syncCategories(oauthClient, conn.realm_id);
 
-    // Ensure surcharge item id cached
     const surchargeItemName = db.getSetting('surcharge_item_name');
     const surcharge = await qboReadItemByName(oauthClient, conn.realm_id, surchargeItemName);
     if (surcharge?.Id) db.setSetting('surcharge_item_id', surcharge.Id);
@@ -162,7 +159,6 @@ app.post('/admin/process-invoice', requireConnected, async (req, res) => {
   }
 });
 
-// Debug endpoint (optional)
 app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
   const conn = db.getConnectionOrThrow();
   const oauthClient = getOAuthClient(conn);
@@ -197,10 +193,8 @@ app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
 });
 
 // ==========================================================
-// INVENTORY — container settings, SKU settings, yard/map
+// INVENTORY: Container Settings
 // ==========================================================
-
-// Container Settings (mode + flip)
 app.get('/inventory/settings/containers', requireConnected, (req, res) => {
   const current = {};
   for (let c = 1; c <= 7; c++) {
@@ -263,36 +257,53 @@ app.post('/inventory/settings/containers', requireConnected, (req, res) => {
   }
 });
 
-app.get('/inventory/add-pallet', requireConnected, (req, res) => {
-  const containerNo = Number(req.query.c || 1);
-  const containers = db.listContainers();
-
-  const depths = db.getContainerDepths(containerNo);
-  const left = [];
-  const right = [];
-
-  for (let d = 1; d <= depths.leftMax; d++) left.push({ code: `C${containerNo}-L${String(d).padStart(2,'0')}` });
-  for (let d = 1; d <= depths.rightMax; d++) right.push({ code: `C${containerNo}-R${String(d).padStart(2,'0')}` });
-
-  const skus = db.listSkusActiveOnly();
-  res.render('inventory_add_pallet', { msg: null, containers, containerNo, left, right, skus });
-});
-
 // ==========================================================
-// Inventory: Walk-in (loose inventory list)
+// Inventory: Walk-in (pallets + loose + exact slot occupancy)
 // ==========================================================
 app.get('/inventory/walkin', requireConnected, (req, res) => {
   try {
     const rows = db.listWalkinLoose();
-    res.render('inventory_walkin', { rows });
+    const pallets = db.listPalletsInWalkin();
+
+    // Build exact slot groups (based on current container settings)
+    const slotGroups = [];
+    for (let c = 1; c <= 7; c++) {
+      const depths = db.getContainerDepths(c);
+      const validSlots = db.listValidSlotCodes(c);
+
+      const palletsInC = db.listPalletsInContainer(c);
+      const occMap = new Map();
+      for (const p of palletsInC) {
+        occMap.set(p.location_code, p);
+      }
+
+      const slots = validSlots.map(code => {
+        const occ = occMap.get(code);
+        return {
+          code,
+          occupied: !!occ,
+          pallet: occ || null
+        };
+      });
+
+      const occupiedCount = slots.reduce((n, s) => n + (s.occupied ? 1 : 0), 0);
+
+      slotGroups.push({
+        containerNo: c,
+        label: depths.label,
+        occupiedCount,
+        slots
+      });
+    }
+
+    res.render('inventory_walkin', { rows, pallets, slotGroups });
   } catch (e) {
     res.status(500).send(`Walk-in failed: ${e?.message || e}`);
   }
 });
 
-
 // ==========================================================
-// Inventory: Add Pallet (manual receive)
+// Inventory: Add Pallet (manual receive)  ✅ SINGLE ROUTE
 // ==========================================================
 app.get('/inventory/add-pallet', requireConnected, (req, res) => {
   const containerNo = Number(req.query.c || 1);
@@ -313,21 +324,12 @@ app.post('/inventory/add-pallet', requireConnected, (req, res) => {
     if (!locationCode) throw new Error('Location is required');
     if (!Number.isFinite(qtyUnits) || qtyUnits <= 0) throw new Error('Qty must be > 0');
 
-    // optional fields
     const lotId = req.body.lot_id ? Number(req.body.lot_id) : null;
     const palletConfigId = req.body.pallet_config_id ? Number(req.body.pallet_config_id) : null;
     const notes = req.body.notes ? String(req.body.notes) : null;
 
-    db.createPallet({
-      skuId,
-      lotId,
-      palletConfigId,
-      locationCode,
-      qtyUnits,
-      notes
-    });
+    db.createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes });
 
-    // go back to the container map automatically
     res.redirect(`/inventory/map?c=${containerNo}`);
   } catch (e) {
     const containerNo = Number(req.body.container_no || 1);
@@ -338,8 +340,9 @@ app.post('/inventory/add-pallet', requireConnected, (req, res) => {
   }
 });
 
-
-// Map
+// ==========================================================
+// Inventory: Map
+// ==========================================================
 app.get('/inventory/map', requireConnected, (req, res) => {
   const containerNo = Number(req.query.c || 1);
   const containers = db.listContainers();
@@ -364,8 +367,6 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
   const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
 
-
-
   res.render('inventory_map', {
     containerNo,
     containers,
@@ -378,7 +379,65 @@ app.get('/inventory/map', requireConnected, (req, res) => {
 });
 
 // ==========================================================
-// Inventory Allocation (Preview + Apply)  <-- NO LOGIN for now
+// Inventory: Move pallet (form + JSON)
+// ==========================================================
+app.post('/inventory/move', requireConnected, (req, res) => {
+  try {
+    const palletId = Number(req.body.pallet_id);
+    const toSlot = String(req.body.to_slot || '').trim();
+    const containerNo = Number(req.body.container_no || 1);
+
+    if (!palletId) throw new Error('Missing pallet_id');
+    if (!toSlot) throw new Error('Missing destination');
+
+    const loc = db.getLocationByCode(toSlot);
+    if (!loc) throw new Error(`Destination slot not found: ${toSlot}`);
+
+    db.movePallet(palletId, loc.id, 'user');
+    res.redirect(`/inventory/map?c=${containerNo}`);
+  } catch (e) {
+    res.status(500).send(`Move failed: ${e?.message || e}`);
+  }
+});
+
+// JSON move endpoint (used by drag/drop)
+app.post('/inventory/move-json', requireConnected, (req, res) => {
+  try {
+    const palletId = Number(req.body.pallet_id);
+    const toSlot = String(req.body.to_slot || '').trim();
+
+    if (!palletId) return res.status(400).json({ ok: false, error: 'Missing pallet_id' });
+    if (!toSlot) return res.status(400).json({ ok: false, error: 'Missing destination' });
+
+    const loc = db.getLocationByCode(toSlot);
+    if (!loc) return res.status(400).json({ ok: false, error: `Destination slot not found: ${toSlot}` });
+
+    db.movePallet(palletId, loc.id, 'user');
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+// Break pallet -> loose in walkin
+app.post('/inventory/break-to-walkin', requireConnected, (req, res) => {
+  try {
+    const palletId = Number(req.body.pallet_id);
+    const qty = Number(req.body.qty);
+    const containerNo = Number(req.body.container_no || 1);
+
+    if (!palletId) throw new Error('Missing pallet_id');
+    if (!Number.isFinite(qty) || qty <= 0) throw new Error('Qty must be > 0');
+
+    db.breakPalletToWalkin({ palletId, qty, userName: 'user' });
+    res.redirect(`/inventory/map?c=${containerNo}`);
+  } catch (e) {
+    res.status(500).send(`Break failed: ${e?.message || e}`);
+  }
+});
+
+// ==========================================================
+// Inventory Allocation (Preview + Apply)
 // ==========================================================
 app.get('/inventory/allocate', async (req, res) => {
   const conn = db.getConnection();
@@ -480,461 +539,6 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
     console.log('[webhook] fatal error', e?.message || e);
   }
 });
-
-// ==========================================================
-// Inventory Engine Settings (toggle)
-// ==========================================================
-app.get('/inventory/settings/engine', (req, res) => {
-  const enabled = db.getAutoAllocateEnabled();
-  const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
-  res.render('inventory_engine_settings', { enabled, timezone, msg: null });
-});
-
-app.post('/inventory/settings/engine', (req, res) => {
-  const enabled = req.body.enabled === 'on';
-  db.setAutoAllocateEnabled(enabled);
-  const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
-  res.render('inventory_engine_settings', { enabled, timezone, msg: 'Saved.' });
-});
-
-// ==========================================================
-// Inventory: SKU Settings (category filter)
-// ==========================================================
-app.get('/inventory/settings/skus', requireConnected, (req, res) => {
-  const selectedCat = (req.query.cat || 'all').toString();
-  const categories = db.listCategoriesOrdered();
-  const skus = db.listSkusActiveOnly();
-  res.render('inventory_sku_settings', { skus, msg: null, categories, selectedCat });
-});
-
-// Bulk save selected SKU rows (Active / Lot / Organic / Unit / Threshold)
-app.post('/inventory/settings/skus/bulk-save', requireConnected, (req, res) => {
-  try {
-    const selected = req.body.selected_sku_ids;
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const ids = Array.isArray(selected) ? selected.map(Number) : (selected ? [Number(selected)] : []);
-
-    if (ids.length === 0) throw new Error('No SKUs selected.');
-
-    for (const skuId of ids) {
-      const active = req.body[`active_${skuId}`] === 'on' ? 1 : 0;
-      const is_lot_tracked = req.body[`is_lot_tracked_${skuId}`] === 'on' ? 1 : 0;
-      const is_organic = req.body[`is_organic_${skuId}`] === 'on' ? 1 : 0;
-      const unit_type = (req.body[`unit_type_${skuId}`] || 'unit').toString();
-
-      let threshold = req.body[`pallet_pick_threshold_${skuId}`];
-      threshold = (threshold === undefined || threshold === null || String(threshold).trim() === '')
-        ? null
-        : Number(threshold);
-
-      if (threshold !== null && (threshold < 0.1 || threshold > 1.0)) {
-        throw new Error(`Pallet threshold must be between 0.10 and 1.00 (or blank). SKU ${skuId}`);
-      }
-
-      db.updateSkuSettings({
-        sku_id: skuId,
-        active,
-        is_organic,
-        is_lot_tracked,
-        unit_type,
-        pallet_pick_threshold: threshold
-      });
-    }
-
-    const categories = db.listCategoriesOrdered();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-
-    res.render('inventory_sku_settings', {
-      skus,
-      msg: `Saved ${ids.length} selected SKU(s).`,
-      categories,
-      selectedCat
-    });
-  } catch (e) {
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const categories = db.listCategoriesOrdered();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-
-    res.status(400).render('inventory_sku_settings', {
-      skus,
-      msg: e?.message || String(e),
-      categories,
-      selectedCat
-    });
-  }
-});
-
-
-// Bulk update SKUs (Active / Lot / Organic) for current filter
-app.post('/inventory/settings/skus/bulk', requireConnected, (req, res) => {
-  try {
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const action = (req.body.action || '').toString();
-
-    // action format:
-    // active:on | active:off
-    // lot:on | lot:off
-    // organic:on | organic:off
-    // active:off_all  (ignores selectedCat, applies to all)
-    const [field, value] = action.split(':');
-
-    if (!field || !value) throw new Error('Invalid bulk action');
-
-    const applyAll = value === 'off_all';
-    const cat = applyAll ? 'all' : selectedCat;
-
-    const rows = db.listSkusAllFiltered({ categoryId: cat });
-
-    let updates = 0;
-    for (const sku of rows) {
-      const patch = {
-        sku_id: sku.id,
-        active: sku.active,
-        is_organic: sku.is_organic,
-        is_lot_tracked: sku.is_lot_tracked,
-        unit_type: sku.unit_type || 'unit',
-        pallet_pick_threshold: sku.pallet_pick_threshold
-      };
-
-      if (field === 'active') patch.active = (value === 'on') ? 1 : 0;
-      else if (field === 'lot') patch.is_lot_tracked = (value === 'on') ? 1 : 0;
-      else if (field === 'organic') patch.is_organic = (value === 'on') ? 1 : 0;
-      else throw new Error('Unknown bulk field');
-
-      db.updateSkuSettings(patch);
-      updates++;
-    }
-
-    const categories = db.listCategoriesOrdered();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-
-    res.render('inventory_sku_settings', {
-      skus,
-      msg: `Bulk update applied to ${updates} SKUs (${applyAll ? 'ALL categories' : selectedCat}).`,
-      categories,
-      selectedCat
-    });
-  } catch (e) {
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const categories = db.listCategoriesOrdered();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-
-    res.status(400).render('inventory_sku_settings', {
-      skus,
-      msg: e?.message || String(e),
-      categories,
-      selectedCat
-    });
-  }
-});
-
-
-app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => {
-  const conn = db.getConnectionOrThrow();
-  const oauthClient = getOAuthClient(conn);
-
-  try {
-    let start = 1;
-    const pageSize = 1000;
-
-    while (true) {
-      const q = `select Id, Name, Type, Active, ParentRef from Item startposition ${start} maxresults ${pageSize}`;
-      const r = await qboQuery(oauthClient, conn.realm_id, q);
-      const items = r?.QueryResponse?.Item || [];
-
-      for (const it of items) {
-        if (!it?.Id || !it?.Name) continue;
-        if (String(it.Type || '').toLowerCase() === 'category') continue;
-
-        const parentCatId = it?.ParentRef?.value ? String(it.ParentRef.value) : null;
-        db.upsertSkuFromQbo({
-          qbo_item_id: String(it.Id),
-          name: String(it.Name),
-          qbo_category_id: parentCatId
-        });
-      }
-
-      if (items.length < pageSize) break;
-      start += pageSize;
-    }
-
-    const categories = db.listCategoriesOrdered();
-    const selectedCat = 'all';
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.render('inventory_sku_settings', { skus, msg: 'Synced items from QuickBooks.', categories, selectedCat });
-  } catch (e) {
-    const categories = db.listCategoriesOrdered();
-    const selectedCat = 'all';
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.status(500).render('inventory_sku_settings', { skus, msg: `Sync failed: ${e?.message || e}`, categories, selectedCat });
-  }
-});
-
-app.post('/inventory/settings/skus/update', requireConnected, (req, res) => {
-  try {
-    const sku_id = Number(req.body.sku_id);
-
-    const active = req.body.active === 'on' ? 1 : 0;
-    const is_lot_tracked = req.body.is_lot_tracked === 'on' ? 1 : 0;
-    const is_organic = req.body.is_organic === 'on' ? 1 : 0;
-    const unit_type = (req.body.unit_type || 'unit').toString();
-
-    let threshold = req.body.pallet_pick_threshold;
-    threshold = (threshold === undefined || threshold === null || String(threshold).trim() === '')
-      ? null
-      : Number(threshold);
-
-    if (threshold !== null && (threshold < 0.1 || threshold > 1.0)) {
-      throw new Error('Pallet threshold must be between 0.10 and 1.00 (or blank).');
-    }
-
-    db.updateSkuSettings({
-      sku_id,
-      active,
-      is_organic,
-      is_lot_tracked,
-      unit_type,
-      pallet_pick_threshold: threshold
-    });
-
-    const categories = db.listCategoriesOrdered();
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.render('inventory_sku_settings', { skus, msg: 'Saved SKU settings.', categories, selectedCat });
-  } catch (e) {
-    const categories = db.listCategoriesOrdered();
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.status(400).render('inventory_sku_settings', { skus, msg: e?.message || String(e), categories, selectedCat });
-  }
-});
-
-// ==========================================================
-// Inventory: Pallet Configs UI
-// ==========================================================
-app.get('/inventory/settings/pallet-configs', requireConnected, (req, res) => {
-  const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-  const configs = db.listPalletConfigsAll();
-  res.render('inventory_pallet_configs', { skus, configs, msg: null });
-});
-
-app.post('/inventory/settings/pallet-configs/add', requireConnected, (req, res) => {
-  try {
-    const sku_id = Number(req.body.sku_id);
-    const name = String(req.body.name || '').trim();
-    const units_per_pallet = Number(req.body.units_per_pallet);
-
-    if (!sku_id) throw new Error('SKU is required');
-    if (!name) throw new Error('Name is required');
-    if (!Number.isFinite(units_per_pallet) || units_per_pallet <= 0) throw new Error('Units per pallet must be > 0');
-
-    const ti = req.body.ti ? Number(req.body.ti) : null;
-    const hi = req.body.hi ? Number(req.body.hi) : null;
-    const is_default = req.body.is_default === 'on';
-    const notes = req.body.notes ? String(req.body.notes) : null;
-
-    db.addPalletConfig({ sku_id, name, ti, hi, units_per_pallet, is_default, notes });
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Added pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-app.post('/inventory/settings/pallet-configs/update', requireConnected, (req, res) => {
-  try {
-    const id = Number(req.body.id);
-    const sku_id = Number(req.body.sku_id);
-    const name = String(req.body.name || '').trim();
-    const units_per_pallet = Number(req.body.units_per_pallet);
-
-    if (!id) throw new Error('Missing config id');
-    if (!sku_id) throw new Error('SKU is required');
-    if (!name) throw new Error('Name is required');
-    if (!Number.isFinite(units_per_pallet) || units_per_pallet <= 0) throw new Error('Units per pallet must be > 0');
-
-    const ti = req.body.ti ? Number(req.body.ti) : null;
-    const hi = req.body.hi ? Number(req.body.hi) : null;
-    const is_default = req.body.is_default === 'on';
-    const notes = req.body.notes ? String(req.body.notes) : null;
-
-    db.updatePalletConfig({ id, sku_id, name, ti, hi, units_per_pallet, is_default, notes });
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Updated pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-app.post('/inventory/settings/pallet-configs/delete', requireConnected, (req, res) => {
-  try {
-    const id = Number(req.body.id);
-    if (!id) throw new Error('Missing config id');
-    db.deletePalletConfig(id);
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Deleted pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-// ==========================================================
-// Inventory: Add Pallet (fast visual receive)
-// ==========================================================
-app.get('/inventory/add-pallet', requireConnected, (req, res) => {
-  const containerNo = Number(req.query.c || 1);
-  const containers = db.listContainers();
-
-  const depths = db.getContainerDepths(containerNo);
-  const left = [];
-  const right = [];
-
-  for (let d = 1; d <= depths.leftMax; d++) left.push({ code: `C${containerNo}-L${String(d).padStart(2,'0')}` });
-  for (let d = 1; d <= depths.rightMax; d++) right.push({ code: `C${containerNo}-R${String(d).padStart(2,'0')}` });
-
-  const skus = db.listSkusActiveOnly();
-
-  res.render('inventory_add_pallet', { msg: null, containers, containerNo, left, right, skus });
-});
-
-app.post('/inventory/add-pallet', requireConnected, (req, res) => {
-  try {
-    const containerNo = Number(req.body.container_no || 1);
-    const skuId = Number(req.body.sku_id);
-    const locationCode = String(req.body.location_code || '').trim();
-    const qtyUnits = Number(req.body.qty_units);
-
-    if (!skuId) throw new Error('SKU is required');
-    if (!locationCode) throw new Error('Please click a slot first');
-    if (!Number.isFinite(qtyUnits) || qtyUnits <= 0) throw new Error('Qty must be > 0');
-
-    const notes = req.body.notes ? String(req.body.notes) : null;
-
-    db.createPallet({
-      skuId,
-      lotId: null,
-      palletConfigId: null,
-      locationCode,
-      qtyUnits,
-      notes
-    });
-
-    res.redirect(`/inventory/map?c=${containerNo}`);
-  } catch (e) {
-    const containerNo = Number(req.body.container_no || 1);
-    const containers = db.listContainers();
-
-    const depths = db.getContainerDepths(containerNo);
-    const left = [];
-    const right = [];
-    for (let d = 1; d <= depths.leftMax; d++) left.push({ code: `C${containerNo}-L${String(d).padStart(2,'0')}` });
-    for (let d = 1; d <= depths.rightMax; d++) right.push({ code: `C${containerNo}-R${String(d).padStart(2,'0')}` });
-
-    const skus = db.listSkusActiveOnly();
-
-    res.status(400).render('inventory_add_pallet', { msg: e?.message || String(e), containers, containerNo, left, right, skus });
-  }
-});
-
-// ==========================================================
-// Inventory: Move pallet (form + JSON)
-// ==========================================================
-app.post('/inventory/move', requireConnected, (req, res) => {
-  try {
-    const palletId = Number(req.body.pallet_id);
-    const toSlot = String(req.body.to_slot || '').trim();
-    const containerNo = Number(req.body.container_no || 1);
-
-    if (!palletId) throw new Error('Missing pallet_id');
-    if (!toSlot) throw new Error('Missing destination');
-
-    const loc = db.getLocationByCode(toSlot);
-    if (!loc) throw new Error(`Destination slot not found: ${toSlot}`);
-
-    db.movePallet(palletId, loc.id, 'user');
-    res.redirect(`/inventory/map?c=${containerNo}`);
-  } catch (e) {
-    res.status(500).send(`Move failed: ${e?.message || e}`);
-  }
-});
-
-// JSON move endpoint (used by drag/drop)
-app.post('/inventory/move-json', requireConnected, (req, res) => {
-  try {
-    const palletId = Number(req.body.pallet_id);
-    const toSlot = String(req.body.to_slot || '').trim();
-
-    if (!palletId) return res.status(400).json({ ok: false, error: 'Missing pallet_id' });
-    if (!toSlot) return res.status(400).json({ ok: false, error: 'Missing destination' });
-
-    const loc = db.getLocationByCode(toSlot);
-    if (!loc) return res.status(400).json({ ok: false, error: `Destination slot not found: ${toSlot}` });
-
-    db.movePallet(palletId, loc.id, 'user');
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: e?.message || String(e) });
-  }
-});
-
-app.post('/inventory/break-to-walkin', requireConnected, (req, res) => {
-  try {
-    const palletId = Number(req.body.pallet_id);
-    const qty = Number(req.body.qty);
-    const containerNo = Number(req.body.container_no || 1);
-
-    if (!palletId) throw new Error('Missing pallet_id');
-    if (!Number.isFinite(qty) || qty <= 0) throw new Error('Qty must be > 0');
-
-    db.breakPalletToWalkin({ palletId, qty, userName: 'user' });
-    res.redirect(`/inventory/map?c=${containerNo}`);
-  } catch (e) {
-    res.status(500).send(`Break failed: ${e?.message || e}`);
-  }
-});
-
-
-// ==========================================================
-// Inventory: Yard view (if you want it back)
-// ==========================================================
-app.get('/inventory/yard', requireConnected, (req, res) => {
-  const containers = db.listContainers();
-  const yard = containers.map(containerNo => {
-    const pallets = db.listPalletsInContainer(containerNo);
-    const palletByLoc = new Map();
-    for (const p of pallets) palletByLoc.set(p.location_code, p);
-
-    const depths = db.getContainerDepths(containerNo);
-    const left = [];
-    const right = [];
-
-    for (let d = 1; d <= depths.leftMax; d++) {
-      const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
-      left.push({ code, pallet: palletByLoc.get(code) || null });
-    }
-    for (let d = 1; d <= depths.rightMax; d++) {
-      const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
-      right.push({ code, pallet: palletByLoc.get(code) || null });
-    }
-
-    return { containerNo, label: depths.label, left, right };
-  });
-
-  res.render('inventory_yard', { yard });
-});
-
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));

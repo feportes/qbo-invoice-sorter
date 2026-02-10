@@ -4,20 +4,46 @@
   <meta charset="utf-8"/>
   <title>Walk-in Inventory</title>
   <style>
-    body { font-family: system-ui; margin: 24px; max-width: 1000px; }
+    body { font-family: system-ui; margin: 24px; max-width: 1200px; }
     .muted { color:#666; font-size:13px; }
     a { color:#111; text-decoration:none; }
+    .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
+
+    hr { border:none; border-top:1px solid #eee; margin:18px 0; }
+
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; }
+    .card h2 { margin:0 0 8px 0; font-size:16px; }
+    .small { font-size:12px; color:#555; }
+
+    .pallet-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:12px; margin-top: 10px; }
+    .pallet { border:1px solid #eee; border-radius:12px; padding:12px; background:#fafafa; }
+    .pallet b { font-size:14px; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#fff; border:1px solid #eee; font-size:12px; color:#444; }
+    .kv { margin-top: 6px; font-size: 13px; color:#222; }
+    .kv div { margin-top: 2px; }
+
+    .actions { margin-top: 10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    select, button, input { padding:8px 10px; border-radius:10px; border:1px solid #ddd; font-size:13px; }
+    button { background:#111; color:#fff; cursor:pointer; }
+    button:hover { opacity:0.9; }
+
     table { border-collapse: collapse; width: 100%; margin-top: 12px; }
     th, td { border-bottom: 1px solid #eee; padding: 10px; text-align:left; }
     th { background:#fafafa; position: sticky; top: 0; }
-    .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
+
+    .slot-card { margin-top:10px; }
+    .slot-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap:10px; margin-top:10px; }
+    .slot { border:1px solid #eee; border-radius:12px; padding:10px; background:#fff; }
+    .slot .code { font-weight:700; }
+    .slot .occ { margin-top:6px; font-size:13px; }
   </style>
 </head>
 <body>
 
 <h1 style="margin:0;">Walk-in Inventory</h1>
+
 <div class="muted" style="margin-top:8px;">
-  Loose inventory totals in WALKIN (from “Break → WALKIN” or moving pallets into WALKIN if you choose to track them as loose later).
+  Shows <b>pallets located in WALKIN</b> + <b>loose inventory</b> totals (from “Break → WALKIN”).
 </div>
 
 <div class="muted" style="margin-top:10px;">
@@ -27,30 +53,159 @@
   <a href="/">Home</a>
 </div>
 
-<table>
-  <thead>
-    <tr>
-      <th>SKU</th>
-      <th>Lot</th>
-      <th>Qty</th>
-      <th>Unit</th>
-    </tr>
-  </thead>
-  <tbody>
-    <% if (!rows || rows.length === 0) { %>
-      <tr><td colspan="4" class="muted">No walk-in inventory yet.</td></tr>
-    <% } else { %>
-      <% rows.forEach(r => { %>
-        <tr>
-          <td><b><%= r.sku_name %></b></td>
-          <td class="q"><%= r.lot_number || '' %></td>
-          <td><%= r.qty_units %></td>
-          <td><%= r.unit_type %></td>
-        </tr>
+<hr/>
+
+<!-- =========================
+     PALLETS IN WALKIN
+========================= -->
+<div class="card">
+  <h2>Pallets in WALKIN</h2>
+  <div class="muted small">
+    These are pallets whose <span class="q">location_code</span> is <span class="q">WALKIN</span>.
+    Use “Move” to send them to an empty container slot or RETURNS.
+  </div>
+
+  <% if (!pallets || pallets.length === 0) { %>
+    <div class="muted" style="margin-top:10px;">No pallets currently in WALKIN.</div>
+  <% } else { %>
+
+    <div class="pallet-grid">
+      <% pallets.forEach(p => { %>
+        <div class="pallet">
+          <div style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
+            <b><%= p.sku_name || ('SKU #' + p.sku_id) %></b>
+            <span class="pill">Pallet #<%= p.id %></span>
+          </div>
+
+          <div class="kv">
+            <div><span class="muted">Qty:</span> <b><%= p.qty_units %></b> <span class="muted"><%= p.unit_type || '' %></span></div>
+            <div><span class="muted">Lot:</span> <span class="q"><%= p.lot_number || '' %></span></div>
+            <div><span class="muted">Status:</span> <span class="q"><%= p.status || '' %></span></div>
+            <div><span class="muted">Location:</span> <span class="q"><%= p.location_code || 'WALKIN' %></span></div>
+          </div>
+
+          <form class="actions" method="POST" action="/inventory/move">
+            <input type="hidden" name="pallet_id" value="<%= p.id %>"/>
+            <!-- /inventory/move redirects to container map; set to 1, then user can navigate -->
+            <input type="hidden" name="container_no" value="1"/>
+
+            <select name="to_slot" required>
+              <option value="" disabled selected>Move to empty slot…</option>
+
+              <% if (slotGroups && slotGroups.length) { %>
+                <% slotGroups.forEach(g => { %>
+                  <optgroup label="C<%= g.containerNo %> — <%= g.label %>">
+                    <% g.slots.forEach(s => { %>
+                      <% if (s.occupied) { %>
+                        <option value="<%= s.code %>" disabled>
+                          <%= s.code %> — OCCUPIED: <%= s.pallet.sku_name %> | <%= s.pallet.qty_units %> <%= s.pallet.unit_type || '' %> | Lot <%= s.pallet.lot_number || '' %>
+                        </option>
+                      <% } else { %>
+                        <option value="<%= s.code %>"><%= s.code %></option>
+                      <% } %>
+                    <% }) %>
+                  </optgroup>
+                <% }) %>
+              <% } %>
+
+              <optgroup label="Other">
+                <option value="RETURNS">RETURNS</option>
+              </optgroup>
+            </select>
+
+            <button type="submit">Move</button>
+          </form>
+
+          <div class="muted small" style="margin-top:8px;">
+            Occupied slots are shown for visibility and disabled.
+          </div>
+        </div>
       <% }) %>
-    <% } %>
-  </tbody>
-</table>
+    </div>
+  <% } %>
+</div>
+
+<hr/>
+
+<!-- =========================
+     OCCUPIED SLOTS OVERVIEW
+========================= -->
+<div class="card slot-card">
+  <h2>Occupied Slots Overview</h2>
+  <div class="muted small">
+    This is a live snapshot of what’s inside each container slot (SKU / qty / lot). Handy for quick decisions when moving pallets out of WALKIN.
+  </div>
+
+  <% if (!slotGroups || slotGroups.length === 0) { %>
+    <div class="muted" style="margin-top:10px;">No slot data available.</div>
+  <% } else { %>
+    <% slotGroups.forEach(g => { %>
+      <div style="margin-top:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div><b>C<%= g.containerNo %></b> <span class="muted">— <%= g.label %></span></div>
+          <div class="muted small"><%= g.occupiedCount %> occupied / <%= g.slots.length %> total</div>
+        </div>
+
+        <div class="slot-grid">
+          <% g.slots.forEach(s => { %>
+            <div class="slot">
+              <div class="code"><%= s.code %></div>
+              <% if (!s.occupied) { %>
+                <div class="muted small" style="margin-top:6px;">Empty</div>
+              <% } else { %>
+                <div class="occ">
+                  <div><b><%= s.pallet.sku_name %></b></div>
+                  <div class="muted small">
+                    Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type || '' %>
+                    <% if (s.pallet.lot_number) { %> | Lot: <span class="q"><%= s.pallet.lot_number %></span><% } %>
+                    | Pallet #<%= s.pallet.id %>
+                  </div>
+                </div>
+              <% } %>
+            </div>
+          <% }) %>
+        </div>
+      </div>
+    <% }) %>
+  <% } %>
+</div>
+
+<hr/>
+
+<!-- =========================
+     LOOSE INVENTORY IN WALKIN
+========================= -->
+<div class="card">
+  <h2>Loose Inventory in WALKIN</h2>
+  <div class="muted small">
+    These are totals from <span class="q">loose_inventory</span> at the WALKIN location (created by “Break → WALKIN”).
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>SKU</th>
+        <th>Lot</th>
+        <th>Qty</th>
+        <th>Unit</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% if (!rows || rows.length === 0) { %>
+        <tr><td colspan="4" class="muted">No walk-in loose inventory yet.</td></tr>
+      <% } else { %>
+        <% rows.forEach(r => { %>
+          <tr>
+            <td><b><%= r.sku_name %></b></td>
+            <td class="q"><%= r.lot_number || '' %></td>
+            <td><%= r.qty_units %></td>
+            <td><%= r.unit_type %></td>
+          </tr>
+        <% }) %>
+      <% } %>
+    </tbody>
+  </table>
+</div>
 
 </body>
 </html>
