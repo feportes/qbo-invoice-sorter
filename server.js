@@ -303,42 +303,42 @@ app.get('/inventory/walkin', requireConnected, (req, res) => {
 });
 
 // ==========================================================
-// Inventory: Add Pallet (manual receive)  ✅ SINGLE ROUTE
+// Inventory: Add Pallet (manual receive) — compatible with BOTH add-pallet EJS versions
 // ==========================================================
 app.get('/inventory/add-pallet', requireConnected, (req, res) => {
-  const containerNo = Number(req.query.c || 1);
-  const containers = db.listContainers();
-  const slotOptions = db.listValidSlotCodes(containerNo);
-  const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-  res.render('inventory_add_pallet', { msg: null, containers, containerNo, slotOptions, skus });
-});
-
-app.post('/inventory/add-pallet', requireConnected, (req, res) => {
   try {
-    const containerNo = Number(req.body.container_no || 1);
-    const skuId = Number(req.body.sku_id);
-    const locationCode = String(req.body.location_code || '').trim();
-    const qtyUnits = Number(req.body.qty_units);
-
-    if (!skuId) throw new Error('SKU is required');
-    if (!locationCode) throw new Error('Location is required');
-    if (!Number.isFinite(qtyUnits) || qtyUnits <= 0) throw new Error('Qty must be > 0');
-
-    const lotId = req.body.lot_id ? Number(req.body.lot_id) : null;
-    const palletConfigId = req.body.pallet_config_id ? Number(req.body.pallet_config_id) : null;
-    const notes = req.body.notes ? String(req.body.notes) : null;
-
-    db.createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes });
-
-    res.redirect(`/inventory/map?c=${containerNo}`);
-  } catch (e) {
-    const containerNo = Number(req.body.container_no || 1);
+    const containerNo = Number(req.query.c || 1);
     const containers = db.listContainers();
+
+    // Visual slot arrays (for the older UI)
+    const depths = db.getContainerDepths(containerNo);
+    const left = [];
+    const right = [];
+    for (let d = 1; d <= depths.leftMax; d++) left.push({ code: `C${containerNo}-L${String(d).padStart(2,'0')}` });
+    for (let d = 1; d <= depths.rightMax; d++) right.push({ code: `C${containerNo}-R${String(d).padStart(2,'0')}` });
+
+    // Dropdown options (for the newer UI)
     const slotOptions = db.listValidSlotCodes(containerNo);
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    res.status(400).render('inventory_add_pallet', { msg: e?.message || String(e), containers, containerNo, slotOptions, skus });
+
+    // SKUs (support both templates)
+    const skus = (typeof db.listSkusAllFiltered === 'function')
+      ? db.listSkusAllFiltered({ categoryId: 'all' })
+      : db.listSkusActiveOnly();
+
+    res.render('inventory_add_pallet', {
+      msg: null,
+      containers,
+      containerNo,
+      left,
+      right,
+      slotOptions,
+      skus
+    });
+  } catch (e) {
+    res.status(500).send(`Add pallet page failed: ${e?.message || e}`);
   }
 });
+
 
 // ==========================================================
 // Inventory: Map
@@ -377,6 +377,41 @@ app.get('/inventory/map', requireConnected, (req, res) => {
     c1Mode
   });
 });
+
+// ==========================================================
+// Inventory: Yard view (all containers)
+// ==========================================================
+app.get('/inventory/yard', requireConnected, (req, res) => {
+  try {
+    const containers = db.listContainers();
+
+    const yard = containers.map(containerNo => {
+      const pallets = db.listPalletsInContainer(containerNo);
+      const palletByLoc = new Map();
+      for (const p of pallets) palletByLoc.set(p.location_code, p);
+
+      const depths = db.getContainerDepths(containerNo);
+      const left = [];
+      const right = [];
+
+      for (let d = 1; d <= depths.leftMax; d++) {
+        const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
+        left.push({ code, pallet: palletByLoc.get(code) || null });
+      }
+      for (let d = 1; d <= depths.rightMax; d++) {
+        const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
+        right.push({ code, pallet: palletByLoc.get(code) || null });
+      }
+
+      return { containerNo, label: depths.label, left, right };
+    });
+
+    res.render('inventory_yard', { yard });
+  } catch (e) {
+    res.status(500).send(`Yard failed: ${e?.message || e}`);
+  }
+});
+
 
 // ==========================================================
 // Inventory: Move pallet (form + JSON)
