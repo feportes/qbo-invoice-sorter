@@ -4,22 +4,28 @@
   <meta charset="utf-8"/>
   <title>Walk-in Inventory</title>
   <style>
-    body { font-family: system-ui; margin: 24px; }
-    table { border-collapse: collapse; width: 100%; max-width: 900px; }
-    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align: left; }
-    th { background: #fafafa; }
-    .muted { color: #666; font-size: 13px; }
+    body { font-family: system-ui; margin: 24px; max-width: 1000px; }
+    .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align:left; }
+    th { background:#fafafa; position: sticky; top: 0; }
+    .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
   </style>
 </head>
 <body>
 
-<h1>Walk-in Inventory</h1>
-<p class="muted">Loose / picking inventory stored in the walk-in freezer.</p>
+<h1 style="margin:0;">Walk-in Inventory</h1>
+<div class="muted" style="margin-top:8px;">
+  Loose inventory totals in WALKIN (from “Break → WALKIN” or moving pallets into WALKIN if you choose to track them as loose later).
+</div>
 
-<p>
-  <a href="/inventory/map?c=1">Back to Container Map</a> |
+<div class="muted" style="margin-top:10px;">
+  <a href="/inventory/map?c=1">Container Map</a> |
+  <a href="/inventory/yard">Yard</a> |
+  <a href="/inventory/add-pallet?c=1">+ Add Pallet</a> |
   <a href="/">Home</a>
-</p>
+</div>
 
 <table>
   <thead>
@@ -31,16 +37,21 @@
     </tr>
   </thead>
   <tbody>
-    <% rows.forEach(r => { %>
-      <tr>
-        <td><%= r.sku_name %></td>
-        <td><%= r.lot_number || '' %></td>
-        <td><%= r.qty_units %></td>
-        <td><%= r.unit_type %></td>
-      </tr>
-    <% }) %>
+    <% if (!rows || rows.length === 0) { %>
+      <tr><td colspan="4" class="muted">No walk-in inventory yet.</td></tr>
+    <% } else { %>
+      <% rows.forEach(r => { %>
+        <tr>
+          <td><b><%= r.sku_name %></b></td>
+          <td class="q"><%= r.lot_number || '' %></td>
+          <td><%= r.qty_units %></td>
+          <td><%= r.unit_type %></td>
+        </tr>
+      <% }) %>
+    <% } %>
   </tbody>
 </table>
 
 </body>
 </html>
+

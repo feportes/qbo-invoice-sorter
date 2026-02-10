@@ -278,6 +278,18 @@ app.get('/inventory/add-pallet', requireConnected, (req, res) => {
   res.render('inventory_add_pallet', { msg: null, containers, containerNo, left, right, skus });
 });
 
+// ==========================================================
+// Inventory: Walk-in (loose inventory list)
+// ==========================================================
+app.get('/inventory/walkin', requireConnected, (req, res) => {
+  try {
+    const rows = db.listWalkinLoose();
+    res.render('inventory_walkin', { rows });
+  } catch (e) {
+    res.status(500).send(`Walk-in failed: ${e?.message || e}`);
+  }
+});
+
 
 // ==========================================================
 // Inventory: Add Pallet (manual receive)

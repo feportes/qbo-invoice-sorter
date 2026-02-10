@@ -104,6 +104,22 @@ export const db = {
     );
   },
 
+listWalkinLoose() {
+  return sqlite.prepare(`
+    SELECT li.*,
+           s.name AS sku_name,
+           s.unit_type AS unit_type,
+           lo.lot_number AS lot_number
+    FROM loose_inventory li
+    JOIN skus s ON s.id = li.sku_id
+    LEFT JOIN lots lo ON lo.id = li.lot_id
+    JOIN locations l ON l.id = li.location_id
+    WHERE l.code='WALKIN'
+    ORDER BY sku_name COLLATE NOCASE, lot_number COLLATE NOCASE
+  `).all();
+},
+
+
   // ==========================================================
   // Inventory Engine: toggle + invoice state/totals + reversals
   // ==========================================================
