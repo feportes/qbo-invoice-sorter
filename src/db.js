@@ -349,6 +349,128 @@ export const db = {
   },
 
   // ==========================================================
+  // Move pallet between locations (including WALKIN/RETURNS)
+  // ==========================================================
+  movePallet(palletId, toLocationId, userName = 'user') {
+    const tx = sqlite.transaction(() => {
+      const pallet = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(Number(palletId));
+      if (!pallet) throw new Error('Pallet not found');
+
+      const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
+      const toLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(Number(toLocationId));
+      if (!toLoc) throw new Error('Destination location not found');
+
+      sqlite.prepare('UPDATE pallets SET location_id=? WHERE id=?')
+        .run(Number(toLocationId), Number(palletId));
+
+      const sku = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(pallet.sku_id);
+
+      sqlite.prepare(`
+        INSERT INTO inventory_movements
+          (user_name, sku_id, lot_id, qty_units, unit_type,
+           from_location_id, to_location_id,
+           from_pallet_id, to_pallet_id,
+           type, reference_type, reference_id, note)
+        VALUES
+          (?, ?, ?, 0, ?,
+           ?, ?,
+           ?, ?,
+           'MOVE_PALLET', 'MANUAL', NULL, ?)
+      `).run(
+        String(userName),
+        Number(pallet.sku_id),
+        pallet.lot_id ?? null,
+        String(sku?.unit_type || 'unit'),
+        fromLoc?.id ?? null,
+        Number(toLoc.id),
+        Number(palletId),
+        Number(palletId),
+        `Moved pallet ${palletId} from ${fromLoc?.code || 'UNKNOWN'} to ${toLoc.code}`
+      );
+    });
+
+    tx();
+  },
+
+  // ==========================================================
+  // Break pallet qty into WALKIN loose inventory
+  // ==========================================================
+  breakPalletToWalkin({ palletId, qty, userName = 'user' }) {
+    const tx = sqlite.transaction(() => {
+      const pallet = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(Number(palletId));
+      if (!pallet) throw new Error('Pallet not found');
+
+      const q = Number(qty);
+      if (!Number.isFinite(q) || q <= 0) throw new Error('Qty must be > 0');
+      if (Number(pallet.qty_units) < q) throw new Error(`Not enough qty on pallet. On pallet: ${pallet.qty_units}`);
+
+      const walkin = sqlite.prepare(`SELECT * FROM locations WHERE code='WALKIN' LIMIT 1`).get();
+      if (!walkin) throw new Error('WALKIN location missing');
+
+      // Decrease pallet qty
+      const newQty = Number(pallet.qty_units) - q;
+      const newStatus = newQty <= 0 ? 'DEPLETED' : 'OPEN';
+
+      sqlite.prepare('UPDATE pallets SET qty_units=?, status=? WHERE id=?')
+        .run(newQty, newStatus, Number(palletId));
+
+      // Add to loose_inventory in WALKIN (by sku + lot)
+      const row = sqlite.prepare(`
+        SELECT * FROM loose_inventory
+        WHERE sku_id=? AND COALESCE(lot_id,0)=COALESCE(?,0) AND location_id=?
+      `).get(pallet.sku_id, pallet.lot_id ?? null, walkin.id);
+
+      if (!row) {
+        sqlite.prepare(`
+          INSERT INTO loose_inventory (sku_id, lot_id, location_id, qty_units)
+          VALUES (?, ?, ?, ?)
+        `).run(
+          pallet.sku_id,
+          pallet.lot_id ?? null,
+          walkin.id,
+          q
+        );
+      } else {
+        sqlite.prepare(`
+          UPDATE loose_inventory
+          SET qty_units = qty_units + ?, updated_at=CURRENT_TIMESTAMP
+          WHERE id=?
+        `).run(q, row.id);
+      }
+
+      const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
+      const sku = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(pallet.sku_id);
+
+      // Movement log
+      sqlite.prepare(`
+        INSERT INTO inventory_movements
+          (user_name, sku_id, lot_id, qty_units, unit_type,
+           from_location_id, to_location_id,
+           from_pallet_id,
+           type, reference_type, reference_id, note)
+        VALUES
+          (?, ?, ?, ?, ?,
+           ?, ?,
+           ?,
+           'BREAK_TO_LOOSE', 'MANUAL', NULL, ?)
+      `).run(
+        String(userName),
+        Number(pallet.sku_id),
+        pallet.lot_id ?? null,
+        q,
+        String(sku?.unit_type || 'unit'),
+        fromLoc?.id ?? null,
+        walkin.id,
+        Number(palletId),
+        `Broke ${q} from pallet ${palletId} into WALKIN`
+      );
+    });
+
+    tx();
+  },
+
+
+  // ==========================================================
   // Invoice processing lock / idempotency (needed by sorter)
   // ==========================================================
   hasProcessed(invoiceId, syncToken) {

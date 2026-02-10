@@ -68,96 +68,106 @@
       <div class="slot" data-slot="<%= s.code %>">
         <div class="code"><%= s.code %></div>
 
-        <% if (!s.pallet) { %>
-          <div class="muted">Empty</div>
-        <% } else { %>
-          <div class="pallet draggable" draggable="true" data-pallet-id="<%= s.pallet.id %>">
-            <div>
-              <b>Pallet #<%= s.pallet.id %></b>
-              <span class="pill"><%= s.pallet.status %></span>
-            </div>
-            <div class="muted">
-              <%= s.pallet.sku_name %>
-              <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
-              • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
-            </div>
+       <% if (!s.pallet) { %>
+  <div class="muted">Empty</div>
+<% } else { %>
+  <div class="pallet draggable" draggable="true" data-pallet-id="<%= s.pallet.id %>">
+    <div>
+      <b>Pallet #<%= s.pallet.id %></b>
+      <span class="pill"><%= s.pallet.status %></span>
+    </div>
+    <div class="muted">
+      <%= s.pallet.sku_name %>
+      <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
+      • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
+    </div>
 
-            <div class="actions">
-              <form method="post" action="/inventory/move">
-                <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
-                <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+    <div class="actions">
+      <!-- Move whole pallet -->
+      <form method="post" action="/inventory/move">
+        <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
+        <input type="hidden" name="container_no" value="<%= containerNo %>"/>
 
-                <select name="to_slot" required>
-                  <% slotOptions.forEach(code => { %>
-                    <option value="<%= code %>"><%= code %></option>
-                  <% }) %>
-                </select>
+        <select name="to_slot" required>
+          <% slotOptions.forEach(code => { %>
+            <option value="<%= code %>"><%= code %></option>
+          <% }) %>
+        </select>
 
-                <button>Move</button>
-              </form>
+        <button>Move</button>
+      </form>
 
-              <form method="post" action="/inventory/break-to-walkin">
-                <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
-                <input type="hidden" name="container_no" value="<%= containerNo %>"/>
-                <input name="qty" type="number" step="0.01" placeholder="Qty"/>
-                <button>Break</button>
-              </form>
-            </div>
-          </div>
-        <% } %>
-      </div>
-    <% }) %>
+      <!-- Break qty into WALKIN -->
+      <form method="post" action="/inventory/break-to-walkin">
+        <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
+        <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+        <input name="qty" type="number" step="0.01" min="0.01" placeholder="Qty"/>
+        <button>Break → WALKIN</button>
+      </form>
+    </div>
   </div>
+<% } %>
+</div>
+<% }) %>
+</div>
 
-  <!-- RIGHT -->
-  <div class="col">
-    <h3>RIGHT (R) <span class="muted">01 = closest to door</span></h3>
+<!-- RIGHT -->
+<div class="col">
+<h3>RIGHT (R) <span class="muted">01 = closest to door</span></h3>
 
-    <% right.forEach(s => { %>
-      <div class="slot" data-slot="<%= s.code %>">
-        <div class="code"><%= s.code %></div>
+<% right.forEach(s => { %>
+<div class="slot" data-slot="<%= s.code %>">
+  <div class="code"><%= s.code %></div>
 
-        <% if (!s.pallet) { %>
-          <div class="muted">Empty</div>
-        <% } else { %>
-          <div class="pallet draggable" draggable="true" data-pallet-id="<%= s.pallet.id %>">
-            <div>
-              <b>Pallet #<%= s.pallet.id %></b>
-              <span class="pill"><%= s.pallet.status %></span>
-            </div>
-            <div class="muted">
-              <%= s.pallet.sku_name %>
-              <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
-              • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
-            </div>
-
-            <div class="actions">
-              <form method="post" action="/inventory/move">
-                <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
-                <input type="hidden" name="container_no" value="<%= containerNo %>"/>
-
-                <select name="to_slot" required>
-                  <% slotOptions.forEach(code => { %>
-                    <option value="<%= code %>"><%= code %></option>
-                  <% }) %>
-                </select>
-
-                <button>Move</button>
-              </form>
-
-              <form method="post" action="/inventory/break-to-walkin">
-                <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
-                <input type="hidden" name="container_no" value="<%= containerNo %>"/>
-                <input name="qty" type="number" step="0.01" placeholder="Qty"/>
-                <button>Break</button>
-              </form>
-            </div>
-          </div>
-        <% } %>
+  <% if (!s.pallet) { %>
+    <div class="muted">Empty</div>
+  <% } else { %>
+    <div class="pallet draggable" draggable="true" data-pallet-id="<%= s.pallet.id %>">
+      <div>
+        <b>Pallet #<%= s.pallet.id %></b>
+        <span class="pill"><%= s.pallet.status %></span>
       </div>
-    <% }) %>
-  </div>
+      <div class="muted">
+        <%= s.pallet.sku_name %>
+        <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
+        • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
+      </div>
 
+      <div class="actions">
+        <!-- Move whole pallet -->
+        <form method="post" action="/inventory/move">
+          <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
+          <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+
+          <select name="to_slot" required>
+            <% slotOptions.forEach(code => { %>
+              <option value="<%= code %>"><%= code %></option>
+            <% }) %>
+          </select>
+
+          <button>Move</button>
+        </form>
+
+        <!-- Break qty into WALKIN -->
+        <form method="post" action="/inventory/break-to-walkin">
+          <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
+          <input type="hidden" name="container_no" value="<%= containerNo %>"/>
+          <input name="qty" type="number" step="0.01" min="0.01" placeholder="Qty"/>
+          <button>Break → WALKIN</button>
+        </form>
+      </div>
+    </div>
+  <% } %>
+</div>
+<% }) %>
+</div>
+
+</div>
+
+<!-- Drag-drop to WALKIN dropzone (optional) -->
+<div id="walkinDrop" class="slot" data-slot="WALKIN" style="margin-top:16px; max-width:420px;">
+  <div class="code">WALKIN (drop pallet here)</div>
+  <div class="muted">Drag any pallet and drop here to move the whole pallet into WALKIN.</div>
 </div>
 
 <script>
@@ -180,6 +190,8 @@
   });
 
   function makeDroppable(node) {
+    if (!node) return;
+
     node.addEventListener('dragover', (e) => {
       e.preventDefault();
       node.classList.add('drop-hover');
@@ -206,7 +218,6 @@
         alert('Move failed: ' + (json?.error || resp.statusText));
         return;
       }
-      // reload to show new positions
       window.location.reload();
     });
   }
@@ -217,3 +228,4 @@
 
 </body>
 </html>
+

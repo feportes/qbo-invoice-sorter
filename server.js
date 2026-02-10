@@ -352,6 +352,9 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
   const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
 
+const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
+
+
   res.render('inventory_map', {
     containerNo,
     containers,
@@ -831,6 +834,47 @@ app.post('/inventory/add-pallet', requireConnected, (req, res) => {
     const skus = db.listSkusActiveOnly();
 
     res.status(400).render('inventory_add_pallet', { msg: e?.message || String(e), containers, containerNo, left, right, skus });
+  }
+});
+
+// ==========================================================
+// Inventory: Move pallet (form + JSON)
+// ==========================================================
+app.post('/inventory/move', requireConnected, (req, res) => {
+  try {
+    const palletId = Number(req.body.pallet_id);
+    const toSlot = String(req.body.to_slot || '').trim();
+    const containerNo = Number(req.body.container_no || 1);
+
+    if (!palletId) throw new Error('Missing pallet_id');
+    if (!toSlot) throw new Error('Missing destination');
+
+    const loc = db.getLocationByCode(toSlot);
+    if (!loc) throw new Error(`Destination slot not found: ${toSlot}`);
+
+    db.movePallet(palletId, loc.id, 'user');
+    res.redirect(`/inventory/map?c=${containerNo}`);
+  } catch (e) {
+    res.status(500).send(`Move failed: ${e?.message || e}`);
+  }
+});
+
+// JSON move endpoint (used by drag/drop)
+app.post('/inventory/move-json', requireConnected, (req, res) => {
+  try {
+    const palletId = Number(req.body.pallet_id);
+    const toSlot = String(req.body.to_slot || '').trim();
+
+    if (!palletId) return res.status(400).json({ ok: false, error: 'Missing pallet_id' });
+    if (!toSlot) return res.status(400).json({ ok: false, error: 'Missing destination' });
+
+    const loc = db.getLocationByCode(toSlot);
+    if (!loc) return res.status(400).json({ ok: false, error: `Destination slot not found: ${toSlot}` });
+
+    db.movePallet(palletId, loc.id, 'user');
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
