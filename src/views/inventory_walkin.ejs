@@ -71,7 +71,10 @@
 
     <div class="pallet-grid">
       <% pallets.forEach(p => { %>
-        <div class="pallet">
+        <div class="pallet"
+     draggable="true"
+     data-pallet-id="<%= p.id %>">
+
           <div style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
             <b><%= p.sku_name || ('SKU #' + p.sku_id) %></b>
             <span class="pill">Pallet #<%= p.id %></span>
@@ -206,6 +209,20 @@
     </tbody>
   </table>
 </div>
+
+<script>
+(function() {
+
+  // Make pallet cards draggable
+  document.querySelectorAll('[data-pallet-id]').forEach(el => {
+    el.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('pallet_id', el.getAttribute('data-pallet-id'));
+    });
+  });
+
+})();
+</script>
+
 
 </body>
 </html>
