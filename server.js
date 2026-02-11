@@ -258,6 +258,93 @@ app.post('/inventory/settings/containers', requireConnected, (req, res) => {
 });
 
 // ==========================================================
+// Inventory: Pallet Configs UI
+// ==========================================================
+app.get('/inventory/settings/pallet-configs', requireConnected, (req, res) => {
+  try {
+    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+    const configs = db.listPalletConfigsAll();
+    res.render('inventory_pallet_configs', { skus, configs, msg: null });
+  } catch (e) {
+    res.status(500).send(`Pallet configs failed: ${e?.message || e}`);
+  }
+});
+
+app.post('/inventory/settings/pallet-configs/add', requireConnected, (req, res) => {
+  try {
+    const sku_id = Number(req.body.sku_id);
+    const name = String(req.body.name || '').trim();
+    const units_per_pallet = Number(req.body.units_per_pallet);
+
+    if (!sku_id) throw new Error('SKU is required');
+    if (!name) throw new Error('Name is required');
+    if (!Number.isFinite(units_per_pallet) || units_per_pallet <= 0) throw new Error('Units per pallet must be > 0');
+
+    const ti = req.body.ti ? Number(req.body.ti) : null;
+    const hi = req.body.hi ? Number(req.body.hi) : null;
+    const is_default = req.body.is_default === 'on';
+    const notes = req.body.notes ? String(req.body.notes) : null;
+
+    db.addPalletConfig({ sku_id, name, ti, hi, units_per_pallet, is_default, notes });
+
+    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+    const configs = db.listPalletConfigsAll();
+    res.render('inventory_pallet_configs', { skus, configs, msg: 'Added pallet config.' });
+  } catch (e) {
+    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+    const configs = db.listPalletConfigsAll();
+    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
+  }
+});
+
+app.post('/inventory/settings/pallet-configs/update', requireConnected, (req, res) => {
+  try {
+    const id = Number(req.body.id);
+    const sku_id = Number(req.body.sku_id);
+    const name = String(req.body.name || '').trim();
+    const units_per_pallet = Number(req.body.units_per_pallet);
+
+    if (!id) throw new Error('Missing config id');
+    if (!sku_id) throw new Error('SKU is required');
+    if (!name) throw new Error('Name is required');
+    if (!Number.isFinite(units_per_pallet) || units_per_pallet <= 0) throw new Error('Units per pallet must be > 0');
+
+    const ti = req.body.ti ? Number(req.body.ti) : null;
+    const hi = req.body.hi ? Number(req.body.hi) : null;
+    const is_default = req.body.is_default === 'on';
+    const notes = req.body.notes ? String(req.body.notes) : null;
+
+    db.updatePalletConfig({ id, sku_id, name, ti, hi, units_per_pallet, is_default, notes });
+
+    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+    const configs = db.listPalletConfigsAll();
+    res.render('inventory_pallet_configs', { skus, configs, msg: 'Updated pallet config.' });
+  } catch (e) {
+    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+    const configs = db.listPalletConfigsAll();
+    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
+  }
+});
+
+app.post('/inventory/settings/pallet-configs/delete', requireConnected, (req, res) => {
+  try {
+    const id = Number(req.body.id);
+    if (!id) throw new Error('Missing config id');
+
+    db.deletePalletConfig(id);
+
+    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+    const configs = db.listPalletConfigsAll();
+    res.render('inventory_pallet_configs', { skus, configs, msg: 'Deleted pallet config.' });
+  } catch (e) {
+    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
+    const configs = db.listPalletConfigsAll();
+    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
+  }
+});
+
+
+// ==========================================================
 // Inventory: Walk-in (pallets + loose + exact slot occupancy)
 // ==========================================================
 app.get('/inventory/walkin', requireConnected, (req, res) => {
