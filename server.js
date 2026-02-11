@@ -339,9 +339,8 @@ app.get('/inventory/add-pallet', requireConnected, (req, res) => {
   }
 });
 
-
 // ==========================================================
-// Inventory: Map
+// Inventory: Map  (✅ merged WALKIN/RETURNS panel data added)
 // ==========================================================
 app.get('/inventory/map', requireConnected, (req, res) => {
   const containerNo = Number(req.query.c || 1);
@@ -367,6 +366,10 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
   const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
 
+  // ✅ NEW: for merged WALKIN/RETURNS panel inside the map page
+  const walkinPallets = db.listPalletsInWalkin();
+  const walkinLoose = db.listWalkinLoose();
+
   res.render('inventory_map', {
     containerNo,
     containers,
@@ -374,7 +377,11 @@ app.get('/inventory/map', requireConnected, (req, res) => {
     right,
     containerLabel: depths.label,
     slotOptions,
-    c1Mode
+    c1Mode,
+
+    // ✅ pass to EJS
+    walkinPallets,
+    walkinLoose
   });
 });
 
@@ -411,7 +418,6 @@ app.get('/inventory/yard', requireConnected, (req, res) => {
     res.status(500).send(`Yard failed: ${e?.message || e}`);
   }
 });
-
 
 // ==========================================================
 // Inventory: Move pallet (form + JSON)
@@ -450,7 +456,8 @@ app.post('/inventory/move-json', requireConnected, (req, res) => {
     db.movePallet(palletId, loc.id, 'user');
     return res.json({ ok: true });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+    // Prefer 400 so UI shows the message cleanly (occupied slot, etc.)
+    return res.status(400).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
@@ -577,4 +584,3 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
-
