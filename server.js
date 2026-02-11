@@ -343,7 +343,6 @@ app.post('/inventory/settings/pallet-configs/delete', requireConnected, (req, re
   }
 });
 
-
 // ==========================================================
 // Inventory: Walk-in (pallets + loose + exact slot occupancy)
 // ==========================================================
@@ -453,9 +452,10 @@ app.get('/inventory/map', requireConnected, (req, res) => {
   const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
   const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
 
-  // ✅ NEW: for merged WALKIN/RETURNS panel inside the map page
+  // For merged panels inside map
   const walkinPallets = db.listPalletsInWalkin();
   const walkinLoose = db.listWalkinLoose();
+  const returnsPallets = db.listPalletsInReturns();
 
   res.render('inventory_map', {
     containerNo,
@@ -465,10 +465,9 @@ app.get('/inventory/map', requireConnected, (req, res) => {
     containerLabel: depths.label,
     slotOptions,
     c1Mode,
-
-    // ✅ pass to EJS
     walkinPallets,
-    walkinLoose
+    walkinLoose,
+    returnsPallets
   });
 });
 
@@ -681,6 +680,6 @@ app.get('/inventory/returns', requireConnected, (req, res) => {
   }
 });
 
-
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
+

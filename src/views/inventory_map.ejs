@@ -11,8 +11,9 @@
     a { color:#111; text-decoration:none; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:18px; max-width:1000px; }
     .col { border:1px solid #ddd; border-radius:12px; padding:12px; }
-    .slot { border:1px solid #eee; border-radius:12px; padding:10px; margin-bottom:10px; }
+    .slot { border:1px solid #eee; border-radius:12px; padding:10px; margin-bottom:10px; background:#fff; }
     .slot.drop-hover { outline: 2px dashed #111; }
+    .slot.occupied { background:#fafafa; }
     .code { font-weight:700; }
     .muted { color:#666; font-size:13px; }
     .pallet { margin-top:6px; }
@@ -34,6 +35,11 @@
     th, td { padding:8px; border-bottom:1px solid #f2f2f2; text-align:left; }
     th { background:#fafafa; position: sticky; top: 0; }
     .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
+
+    /* Returns list inside panel */
+    .returnsCards { margin-top:10px; display:grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap:10px; }
+    .returnsCard { border:1px solid #eee; border-radius:12px; padding:10px; background:#fff; }
+    .returnsCard .hdr { display:flex; justify-content:space-between; gap:10px; align-items:center; }
   </style>
 </head>
 <body>
@@ -58,6 +64,8 @@
   <span class="muted">|</span>
   <a href="/inventory/walkin">Walk-in</a>
   <span class="muted">|</span>
+  <a href="/inventory/returns">Returns</a>
+  <span class="muted">|</span>
   <a href="/inventory/yard">Yard</a>
   <span class="muted">|</span>
   <a href="/">Home</a>
@@ -65,7 +73,7 @@
 
 <p class="muted">
   Tip: Drag a pallet and drop it onto another slot, WALKIN, or RETURNS (below).
-  Because WALKIN is on the same page now, you can drag pallets both directions.
+  Occupied container slots are blocked in the UI (and also protected server-side).
 </p>
 
 <!-- =======================================================
@@ -140,14 +148,36 @@
     </div>
   </div>
 
-  <!-- RETURNS drop zone -->
+  <!-- RETURNS drop zone + pallets -->
   <div class="panel dropzone" id="returnsDropZone" data-slot="RETURNS">
-    <b>RETURNS</b>
-    <div class="muted" style="margin-top:4px;">Drop pallets here to move into RETURNS.</div>
+    <div class="panelTitle">
+      <div>
+        <b>RETURNS</b>
+        <div class="muted" style="margin-top:4px;">Drop pallets here to move into RETURNS.</div>
+      </div>
+      <a class="muted" href="/inventory/returns" style="font-size:13px;">Full returns page →</a>
+    </div>
+
+    <div class="returnsCards">
+      <% if (!returnsPallets || returnsPallets.length === 0) { %>
+        <div class="muted" style="padding:8px;">No pallets in RETURNS.</div>
+      <% } else { %>
+        <% returnsPallets.forEach(p => { %>
+          <div class="returnsCard draggable" draggable="true" data-pallet-id="<%= p.id %>">
+            <div class="hdr">
+              <b><%= p.sku_name %></b>
+              <span class="muted" style="font-size:12px;">Pallet #<%= p.id %></span>
+            </div>
+            <div class="muted" style="margin-top:6px; font-size:12px;">
+              Qty: <b><%= p.qty_units %></b> <%= p.unit_type || '' %>
+              <% if (p.lot_number) { %> • Lot <span class="q"><%= p.lot_number %></span><% } %>
+            </div>
+          </div>
+        <% }) %>
+      <% } %>
+    </div>
   </div>
 </div>
-
-<!-- Existing single dropzone removed (now merged above) -->
 
 <div class="grid">
 
@@ -156,7 +186,7 @@
     <h3>LEFT (L) <span class="muted">01 = closest to door</span></h3>
 
     <% left.forEach(s => { %>
-      <div class="slot" data-slot="<%= s.code %>">
+      <div class="slot <%= s.pallet ? 'occupied' : '' %>" data-slot="<%= s.code %>" data-occupied="<%= s.pallet ? '1' : '0' %>">
         <div class="code"><%= s.code %></div>
 
         <% if (!s.pallet) { %>
@@ -207,7 +237,7 @@
     <h3>RIGHT (R) <span class="muted">01 = closest to door</span></h3>
 
     <% right.forEach(s => { %>
-      <div class="slot" data-slot="<%= s.code %>">
+      <div class="slot <%= s.pallet ? 'occupied' : '' %>" data-slot="<%= s.code %>" data-occupied="<%= s.pallet ? '1' : '0' %>">
         <div class="code"><%= s.code %></div>
 
         <% if (!s.pallet) { %>
@@ -274,10 +304,17 @@
     });
   });
 
+  function isOccupiedContainerSlot(node) {
+    return node?.dataset?.occupied === '1';
+  }
+
   function makeDroppable(node) {
     if (!node) return;
 
     node.addEventListener('dragover', (e) => {
+      // Block hover/drop for occupied container slots
+      if (isOccupiedContainerSlot(node)) return;
+
       e.preventDefault();
       node.classList.add('drop-hover');
       e.dataTransfer.dropEffect = 'move';
@@ -288,6 +325,9 @@
     });
 
     node.addEventListener('drop', async (e) => {
+      // Block drop for occupied container slots
+      if (isOccupiedContainerSlot(node)) return;
+
       e.preventDefault();
       node.classList.remove('drop-hover');
 
@@ -307,7 +347,7 @@
     });
   }
 
-  // Make container slots + WALKIN + RETURNS droppable
+  // Container slots + WALKIN + RETURNS droppable
   document.querySelectorAll('.slot').forEach(makeDroppable);
   makeDroppable(document.getElementById('walkinDropZone'));
   makeDroppable(document.getElementById('returnsDropZone'));
@@ -315,5 +355,4 @@
 
 </body>
 </html>
-
 
