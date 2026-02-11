@@ -2,10 +2,11 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>QBO Invoice Sorter</title>
+  <title>QuickBooks Invoice Automation + Inventory Manager</title>
   <style>
     body { font-family: system-ui; margin: 24px; max-width: 1100px; }
-    h1 { margin: 0 0 12px 0; }
+    h1 { margin: 0 0 6px 0; }
+    .subtitle { font-size:15px; color:#555; margin-bottom:18px; }
     .card { border:1px solid #eaeaea; border-radius:14px; padding:16px; margin-top:14px; background:#fff; }
     .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
     .muted { color:#666; font-size:13px; }
@@ -31,11 +32,15 @@
     @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
     input { padding:10px 12px; border:1px solid #ddd; border-radius:12px; font-size:14px; }
     button { padding:10px 14px; border-radius:12px; border:1px solid #222; background:#111; color:#fff; font-size:14px; cursor:pointer; }
+    hr { border:none; border-top:1px solid #eee; margin:14px 0; }
   </style>
 </head>
 <body>
 
-  <h1>QBO Invoice Sorter + Operating Cost Surcharge</h1>
+  <h1>QuickBooks Invoice Automation + Inventory Manager</h1>
+  <div class="subtitle">
+    Connected invoice processing, pallet tracking, container mapping, organic lot tracking, and warehouse inventory — all in one system.
+  </div>
 
   <div class="card">
     <div class="row" style="justify-content:space-between;">
@@ -74,7 +79,7 @@
       <div class="card">
         <h2 style="margin:0 0 10px 0;">Admin</h2>
         <div class="muted" style="margin-bottom:10px;">
-          Invoice sorter, categories, rules, and sync.
+          Invoice automation rules, categories, surcharge logic, and sync tools.
         </div>
 
         <div class="row">
@@ -83,11 +88,11 @@
           <a class="btn" href="/admin/rules">Surcharge Rules</a>
         </div>
 
-        <hr style="border:none; border-top:1px solid #eee; margin:14px 0;">
+        <hr>
 
-        <div style="font-weight:600;">Manual test (process one invoice)</div>
+        <div style="font-weight:600;">Manual invoice processing</div>
         <div class="muted" style="margin-top:6px;">
-          Use this to test on one invoice.
+          Process and test a single invoice.
         </div>
 
         <form method="post" action="/admin/process-invoice" class="row" style="margin-top:10px;">
@@ -104,13 +109,14 @@
       <div class="card">
         <h2 style="margin:0 0 10px 0;">Inventory</h2>
         <div class="muted" style="margin-bottom:10px;">
-          Containers C1–C7, WALKIN, yard view, receive pallets, and settings.
+          Containers C1–C7, WALKIN, RETURNS, pallet receiving, and allocation engine.
         </div>
 
         <div class="row">
           <a class="btn" href="/inventory/map?c=1">Open Container Map (C1)</a>
           <a class="btn" href="/inventory/yard">Yard (All Containers)</a>
-          <a class="btn" href="/inventory/walkin">Walk-in Page</a>
+          <a class="btn" href="/inventory/walkin">Walk-in</a>
+          <a class="btn" href="/inventory/returns">Returns</a>
         </div>
 
         <div class="row" style="margin-top:10px;">
@@ -118,9 +124,9 @@
           <a class="btn secondary" href="/inventory/allocate">Allocation (Preview / Apply)</a>
         </div>
 
-        <hr style="border:none; border-top:1px solid #eee; margin:14px 0;">
+        <hr>
 
-        <div style="font-weight:600;">Settings</div>
+        <div style="font-weight:600;">Inventory Settings</div>
         <div class="row" style="margin-top:10px;">
           <a class="btn secondary" href="/inventory/settings/containers">Container Settings</a>
           <a class="btn secondary" href="/inventory/settings/pallet-configs">Pallet Configs</a>
@@ -135,4 +141,3 @@
 
 </body>
 </html>
-
