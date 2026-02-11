@@ -1,45 +1,138 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <title>QBO Invoice Sorter + Surcharge</title>
+  <meta charset="utf-8"/>
+  <title>QBO Invoice Sorter</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 820px; }
-    a.button, button { display:inline-block; padding:10px 14px; border-radius:10px; border:1px solid #333; text-decoration:none; background:#111; color:#fff; }
-    .muted { color:#666; }
-    input { padding:10px; border-radius:10px; border:1px solid #ddd; width: 260px; }
+    body { font-family: system-ui; margin: 24px; max-width: 1100px; }
+    h1 { margin: 0 0 12px 0; }
+    .card { border:1px solid #eaeaea; border-radius:14px; padding:16px; margin-top:14px; background:#fff; }
+    .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    .btn {
+      display:inline-block;
+      padding:10px 14px;
+      border-radius:12px;
+      border:1px solid #222;
+      background:#111;
+      color:#fff;
+      font-size:14px;
+    }
+    .btn.secondary {
+      background:#fff;
+      color:#111;
+      border:1px solid #ddd;
+    }
+    .btn:visited { color:#fff; }
+    .btn.secondary:visited { color:#111; }
+    .pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; border:1px solid #ddd; background:#fafafa; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    input { padding:10px 12px; border:1px solid #ddd; border-radius:12px; font-size:14px; }
+    button { padding:10px 14px; border-radius:12px; border:1px solid #222; background:#111; color:#fff; font-size:14px; cursor:pointer; }
   </style>
 </head>
 <body>
+
   <h1>QBO Invoice Sorter + Operating Cost Surcharge</h1>
 
   <div class="card">
-    <% if (!connected) { %>
-      <p>Status: <b>Not connected</b></p>
-      <p class="muted">First step: connect to QuickBooks Online.</p>
-      <a class="button" href="/auth/start">Connect QBO</a>
-    <% } else { %>
-      <p>Status: <b>Connected</b></p>
-      <p class="muted">Realm ID: <%= realmId %> <% if (companyName) { %> • Company: <%= companyName %> <% } %></p>
-      <p>
-        <a class="button" href="/admin/sync">Sync Customers & Categories</a>
-        <a class="button" href="/admin/categories">Category Order</a>
-        <a class="button" href="/admin/rules">Surcharge Rules</a>
-      </p>
-
-      <hr/>
-      <h3>Manual test (process one invoice)</h3>
-      <form method="post" action="/admin/process-invoice">
-        <input name="invoice_id" placeholder="Invoice ID (number)" />
-        <button type="submit">Process</button>
-      </form>
-      <p class="muted">Use this to test on one invoice before turning on webhooks.</p>
-    <% } %>
+    <div class="row" style="justify-content:space-between;">
+      <div>
+        <div>Status: <b><%= connected ? 'Connected' : 'Not Connected' %></b></div>
+        <div class="muted" style="margin-top:6px;">
+          Realm ID: <%= realmId || '—' %>
+          <% if (companyName) { %> • Company: <%= companyName %><% } %>
+        </div>
+      </div>
+      <div class="row">
+        <% if (!connected) { %>
+          <a class="btn" href="/auth/start">Connect to QuickBooks</a>
+        <% } else { %>
+          <span class="pill">Webhook: /webhooks/qbo</span>
+        <% } %>
+      </div>
+    </div>
   </div>
 
-  <p class="muted" style="margin-top:16px;">
-    Webhook endpoint: <code>/webhooks/qbo</code>
-  </p>
+  <% if (!connected) { %>
+    <div class="card">
+      <b>Next step</b>
+      <div class="muted" style="margin-top:6px;">
+        Connect QuickBooks to enable Admin + Inventory tools.
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <a class="btn" href="/auth/start">Start OAuth Connection</a>
+      </div>
+    </div>
+  <% } else { %>
+
+    <div class="grid">
+
+      <!-- ===================== ADMIN ===================== -->
+      <div class="card">
+        <h2 style="margin:0 0 10px 0;">Admin</h2>
+        <div class="muted" style="margin-bottom:10px;">
+          Invoice sorter, categories, rules, and sync.
+        </div>
+
+        <div class="row">
+          <a class="btn" href="/admin/sync">Sync Customers & Categories</a>
+          <a class="btn" href="/admin/categories">Category Order</a>
+          <a class="btn" href="/admin/rules">Surcharge Rules</a>
+        </div>
+
+        <hr style="border:none; border-top:1px solid #eee; margin:14px 0;">
+
+        <div style="font-weight:600;">Manual test (process one invoice)</div>
+        <div class="muted" style="margin-top:6px;">
+          Use this to test on one invoice.
+        </div>
+
+        <form method="post" action="/admin/process-invoice" class="row" style="margin-top:10px;">
+          <input name="invoice_id" placeholder="Invoice ID (number)" style="min-width:220px;" />
+          <button type="submit">Process</button>
+        </form>
+
+        <div class="row" style="margin-top:10px;">
+          <a class="btn secondary" href="/admin/qbo-items-check">QBO Items Check (debug)</a>
+        </div>
+      </div>
+
+      <!-- ===================== INVENTORY ===================== -->
+      <div class="card">
+        <h2 style="margin:0 0 10px 0;">Inventory</h2>
+        <div class="muted" style="margin-bottom:10px;">
+          Containers C1–C7, WALKIN, yard view, receive pallets, and settings.
+        </div>
+
+        <div class="row">
+          <a class="btn" href="/inventory/map?c=1">Open Container Map (C1)</a>
+          <a class="btn" href="/inventory/yard">Yard (All Containers)</a>
+          <a class="btn" href="/inventory/walkin">Walk-in Page</a>
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <a class="btn secondary" href="/inventory/add-pallet?c=1">+ Add Pallet</a>
+          <a class="btn secondary" href="/inventory/allocate">Allocation (Preview / Apply)</a>
+        </div>
+
+        <hr style="border:none; border-top:1px solid #eee; margin:14px 0;">
+
+        <div style="font-weight:600;">Settings</div>
+        <div class="row" style="margin-top:10px;">
+          <a class="btn secondary" href="/inventory/settings/containers">Container Settings</a>
+          <a class="btn secondary" href="/inventory/settings/pallet-configs">Pallet Configs</a>
+          <a class="btn secondary" href="/inventory/settings/skus">SKU Settings</a>
+          <a class="btn secondary" href="/inventory/settings/engine">Auto-Allocate Engine</a>
+        </div>
+      </div>
+
+    </div>
+
+  <% } %>
+
 </body>
 </html>
+
