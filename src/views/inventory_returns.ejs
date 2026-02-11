@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>RETURNS</title>
+  <style>
+    body { font-family: system-ui; margin: 24px; max-width: 1100px; }
+    .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:12px; margin-top:12px; }
+    .pallet { border:1px solid #eee; border-radius:12px; padding:12px; background:#fafafa; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#fff; border:1px solid #eee; font-size:12px; color:#444; }
+    .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
+  </style>
+</head>
+<body>
+
+<h1 style="margin:0;">RETURNS</h1>
+<div class="muted" style="margin-top:8px;">
+  Pallets currently located in <span class="q">RETURNS</span>.
+</div>
+
+<div class="muted" style="margin-top:10px;">
+  <a href="/inventory/map?c=1">Container Map</a> |
+  <a href="/inventory/yard">Yard</a> |
+  <a href="/inventory/walkin">Walk-in</a> |
+  <a href="/">Home</a>
+</div>
+
+<div class="card">
+  <% if (!pallets || pallets.length === 0) { %>
+    <div class="muted">No pallets in RETURNS.</div>
+  <% } else { %>
+    <div class="grid">
+      <% pallets.forEach(p => { %>
+        <div class="pallet">
+          <div style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
+            <b><%= p.sku_name || ('SKU #' + p.sku_id) %></b>
+            <span class="pill">Pallet #<%= p.id %></span>
+          </div>
+
+          <div class="muted" style="margin-top:8px; font-size:13px;">
+            Qty: <b><%= p.qty_units %></b> <%= p.unit_type || '' %>
+            <% if (p.lot_number) { %> • Lot <span class="q"><%= p.lot_number %></span><% } %>
+          </div>
+
+          <div class="muted" style="margin-top:6px; font-size:12px;">
+            Status: <span class="q"><%= p.status || '' %></span>
+            • Location: <span class="q"><%= p.location_code || 'RETURNS' %></span>
+          </div>
+
+          <div class="muted" style="margin-top:10px; font-size:12px;">
+            Tip: Move pallets out of RETURNS from the container map via dropdown or drag/drop.
+          </div>
+        </div>
+      <% }) %>
+    </div>
+  <% } %>
+</div>
+
+</body>
+</html>

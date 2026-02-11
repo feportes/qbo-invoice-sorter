@@ -148,6 +148,14 @@ export const db = {
   },
 
   // ==========================================================
+  // RETURNS helpers
+  // ==========================================================
+  listPalletsInReturns() {
+    return this.listPalletsByLocationCode('RETURNS');
+  },
+
+
+  // ==========================================================
   // Inventory Engine: toggle + invoice state/totals + reversals
   // ==========================================================
   getAutoAllocateEnabled() {

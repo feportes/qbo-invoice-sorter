@@ -669,5 +669,18 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
   }
 });
 
+// ==========================================================
+// Inventory: RETURNS page (pallets in RETURNS)
+// ==========================================================
+app.get('/inventory/returns', requireConnected, (req, res) => {
+  try {
+    const pallets = db.listPalletsInReturns();
+    res.render('inventory_returns', { pallets });
+  } catch (e) {
+    res.status(500).send(`RETURNS failed: ${e?.message || e}`);
+  }
+});
+
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
