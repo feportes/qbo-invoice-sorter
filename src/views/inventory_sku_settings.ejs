@@ -48,10 +48,13 @@
 </div>
 
 <div class="nav muted">
-  <a href="/inventory/yard">Yard</a> |
   <a href="/inventory/map?c=1">Container Map</a> |
-  <a href="/inventory/settings/containers">Container Settings</a> |
+  <a href="/inventory/yard">Yard</a> |
   <a href="/inventory/walkin">Walk-in</a> |
+  <a href="/inventory/returns">Returns</a> |
+  <a href="/inventory/settings/containers">Container Settings</a> |
+  <a href="/inventory/settings/pallet-configs">Pallet Configs</a> |
+  <a href="/inventory/settings/engine">Engine</a> |
   <a href="/">Home</a>
 </div>
 
@@ -226,9 +229,7 @@
       cb.checked = true;
     } else {
       row.classList.remove('dirty');
-      // do not auto-uncheck if user manually checked it
-      // only uncheck if it was auto-checked and now clean:
-      // simplest: leave as-is
+      // leave checkbox as-is (user may have checked manually)
     }
   }
 
