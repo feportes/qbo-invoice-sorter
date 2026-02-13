@@ -192,6 +192,33 @@ app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
   }
 });
 
+// Force reprocess: clears processed lock for current SyncToken and runs again
+app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
+  const { invoice_id } = req.body;
+  const conn = db.getConnectionOrThrow();
+  const oauthClient = getOAuthClient(conn);
+
+  try {
+    if (!invoice_id) throw new Error('Missing invoice id');
+
+    // ✅ key fix
+    db.clearProcessed(String(invoice_id));
+
+    const result = await processInvoiceWithRetry({
+      oauthClient,
+      realmId: conn.realm_id,
+      invoiceId: String(invoice_id),
+      source: 'manual_force',
+      retries: 6
+    });
+
+    res.render('process_result', { result });
+  } catch (e) {
+    res.status(500).send(`Force process failed: ${e?.message || e}`);
+  }
+});
+
+
 // ==========================================================
 // INVENTORY: Container Settings
 // ==========================================================

@@ -22,6 +22,11 @@ export const db = {
     `).all();
   },
 
+  clearProcessed(invoiceId) {
+    sqlite.prepare(`DELETE FROM processed WHERE invoice_id=?`).run(String(invoiceId));
+  },
+
+
   // ==========================================================
   // Allocation helpers (walk-in + pallets)
   // ==========================================================
