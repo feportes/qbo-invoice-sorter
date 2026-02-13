@@ -100,6 +100,12 @@
           <button type="submit">Process</button>
         </form>
 
+<form method="post" action="/admin/process-invoice-force" class="row" style="margin-top:10px;">
+  <input name="invoice_id" placeholder="Invoice ID (number)" style="min-width:220px;" />
+  <button type="submit" style="background:#b00020; border-color:#b00020;">Force Process</button>
+</form>
+
+
         <div class="row" style="margin-top:10px;">
           <a class="btn secondary" href="/admin/qbo-items-check">QBO Items Check (debug)</a>
         </div>
