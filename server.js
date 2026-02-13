@@ -680,6 +680,213 @@ app.get('/inventory/returns', requireConnected, (req, res) => {
   }
 });
 
+// ==========================================================
+// Inventory: Engine Settings (toggle + timezone)
+// ==========================================================
+app.get('/inventory/settings/engine', requireConnected, (req, res) => {
+  try {
+    const enabled = db.getAutoAllocateEnabled();
+    const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
+    res.render('inventory_engine_settings', { enabled, timezone, msg: null });
+  } catch (e) {
+    res.status(500).send(`Engine settings failed: ${e?.message || e}`);
+  }
+});
+
+app.post('/inventory/settings/engine', requireConnected, (req, res) => {
+  try {
+    const enabled = req.body.enabled === 'on';
+    db.setAutoAllocateEnabled(enabled);
+
+    const tz = String(req.body.timezone || '').trim() || 'America/Los_Angeles';
+    db.setSetting('inventory_timezone', tz);
+
+    const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
+    res.render('inventory_engine_settings', { enabled, timezone, msg: 'Saved.' });
+  } catch (e) {
+    const enabled = db.getAutoAllocateEnabled();
+    const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
+    res.status(400).render('inventory_engine_settings', { enabled, timezone, msg: e?.message || String(e) });
+  }
+});
+
+// ==========================================================
+// Inventory: SKU Settings (category filter + bulk actions)
+// ==========================================================
+app.get('/inventory/settings/skus', requireConnected, (req, res) => {
+  try {
+    const selectedCat = (req.query.cat || 'all').toString();
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+    res.render('inventory_sku_settings', { skus, msg: null, categories, selectedCat });
+  } catch (e) {
+    res.status(500).send(`SKU settings failed: ${e?.message || e}`);
+  }
+});
+
+// Save selected SKU rows (Active / Lot / Organic / Unit / Threshold)
+app.post('/inventory/settings/skus/bulk-save', requireConnected, (req, res) => {
+  try {
+    const selected = req.body.selected_sku_ids;
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const ids = Array.isArray(selected) ? selected.map(Number) : (selected ? [Number(selected)] : []);
+
+    if (ids.length === 0) throw new Error('No SKUs selected.');
+
+    for (const skuId of ids) {
+      const active = req.body[`active_${skuId}`] === 'on' ? 1 : 0;
+      const is_lot_tracked = req.body[`is_lot_tracked_${skuId}`] === 'on' ? 1 : 0;
+      const is_organic = req.body[`is_organic_${skuId}`] === 'on' ? 1 : 0;
+      const unit_type = (req.body[`unit_type_${skuId}`] || 'unit').toString();
+
+      let threshold = req.body[`pallet_pick_threshold_${skuId}`];
+      threshold = (threshold === undefined || threshold === null || String(threshold).trim() === '')
+        ? null
+        : Number(threshold);
+
+      if (threshold !== null && (threshold < 0.1 || threshold > 1.0)) {
+        throw new Error(`Pallet threshold must be between 0.10 and 1.00 (or blank). SKU ${skuId}`);
+      }
+
+      db.updateSkuSettings({
+        sku_id: skuId,
+        active,
+        is_organic,
+        is_lot_tracked,
+        unit_type,
+        pallet_pick_threshold: threshold
+      });
+    }
+
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.render('inventory_sku_settings', {
+      skus,
+      msg: `Saved ${ids.length} selected SKU(s).`,
+      categories,
+      selectedCat
+    });
+  } catch (e) {
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.status(400).render('inventory_sku_settings', {
+      skus,
+      msg: e?.message || String(e),
+      categories,
+      selectedCat
+    });
+  }
+});
+
+// Bulk update current filter (Active / Lot / Organic)
+app.post('/inventory/settings/skus/bulk', requireConnected, (req, res) => {
+  try {
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const action = (req.body.action || '').toString();
+
+    // action format:
+    // active:on | active:off
+    // lot:on | lot:off
+    // organic:on | organic:off
+    // active:off_all  (ignores selectedCat, applies to all)
+    const [field, value] = action.split(':');
+    if (!field || !value) throw new Error('Invalid bulk action');
+
+    const applyAll = value === 'off_all';
+    const cat = applyAll ? 'all' : selectedCat;
+
+    const rows = db.listSkusAllFiltered({ categoryId: cat });
+
+    let updates = 0;
+    for (const sku of rows) {
+      const patch = {
+        sku_id: sku.id,
+        active: sku.active,
+        is_organic: sku.is_organic,
+        is_lot_tracked: sku.is_lot_tracked,
+        unit_type: sku.unit_type || 'unit',
+        pallet_pick_threshold: sku.pallet_pick_threshold
+      };
+
+      if (field === 'active') patch.active = (value === 'on') ? 1 : 0;
+      else if (field === 'lot') patch.is_lot_tracked = (value === 'on') ? 1 : 0;
+      else if (field === 'organic') patch.is_organic = (value === 'on') ? 1 : 0;
+      else throw new Error('Unknown bulk field');
+
+      db.updateSkuSettings(patch);
+      updates++;
+    }
+
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.render('inventory_sku_settings', {
+      skus,
+      msg: `Bulk update applied to ${updates} SKUs (${applyAll ? 'ALL categories' : selectedCat}).`,
+      categories,
+      selectedCat
+    });
+  } catch (e) {
+    const selectedCat = (req.body.selectedCat || 'all').toString();
+    const categories = db.listCategoriesOrdered();
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+
+    res.status(400).render('inventory_sku_settings', {
+      skus,
+      msg: e?.message || String(e),
+      categories,
+      selectedCat
+    });
+  }
+});
+
+// Sync SKUs from QBO (Items)
+app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => {
+  const conn = db.getConnectionOrThrow();
+  const oauthClient = getOAuthClient(conn);
+
+  try {
+    let start = 1;
+    const pageSize = 1000;
+
+    while (true) {
+      const q = `select Id, Name, Type, Active, ParentRef from Item startposition ${start} maxresults ${pageSize}`;
+      const r = await qboQuery(oauthClient, conn.realm_id, q);
+      const items = r?.QueryResponse?.Item || [];
+
+      for (const it of items) {
+        if (!it?.Id || !it?.Name) continue;
+        if (String(it.Type || '').toLowerCase() === 'category') continue;
+
+        const parentCatId = it?.ParentRef?.value ? String(it.ParentRef.value) : null;
+
+        db.upsertSkuFromQbo({
+          qbo_item_id: String(it.Id),
+          name: String(it.Name),
+          qbo_category_id: parentCatId
+        });
+      }
+
+      if (items.length < pageSize) break;
+      start += pageSize;
+    }
+
+    const categories = db.listCategoriesOrdered();
+    const selectedCat = 'all';
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+    res.render('inventory_sku_settings', { skus, msg: 'Synced items from QuickBooks.', categories, selectedCat });
+  } catch (e) {
+    const categories = db.listCategoriesOrdered();
+    const selectedCat = 'all';
+    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
+    res.status(500).render('inventory_sku_settings', { skus, msg: `Sync failed: ${e?.message || e}`, categories, selectedCat });
+  }
+});
+
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
 
