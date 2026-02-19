@@ -61,6 +61,30 @@ export function ensureSchema() {
       PRIMARY KEY (invoice_id, sync_token)
     );
 
+// ==========================================================
+// Invoice SKU Line Index (for audit search/reporting)
+// Stores invoice lines mapped to internal SKUs (organic filtering happens in server)
+// ==========================================================
+try { s.exec(`
+  CREATE TABLE IF NOT EXISTS invoice_sku_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qbo_invoice_id TEXT NOT NULL,
+    txn_date TEXT,
+    doc_number TEXT,
+    customer_name TEXT,
+    sku_id INTEGER NOT NULL,
+    qbo_item_id TEXT,
+    qty_units REAL NOT NULL,
+    amount REAL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(qbo_invoice_id, sku_id, qbo_item_id, qty_units, amount)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_invoice_sku_lines_sku_date ON invoice_sku_lines(sku_id, txn_date);
+  CREATE INDEX IF NOT EXISTS idx_invoice_sku_lines_invoice ON invoice_sku_lines(qbo_invoice_id);
+`); } catch {}
+
+
     -- =========================
     -- Inventory / Lot Tracking
     -- =========================

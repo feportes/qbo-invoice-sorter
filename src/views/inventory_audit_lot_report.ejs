@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Lot Report</title>
+  <style>
+    body { font-family: system-ui; margin:24px; max-width:1100px; }
+    .muted { color:#666; font-size:13px; }
+    .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; }
+    th { background:#fafafa; }
+    .right { text-align:right; }
+    @media print {
+      .no-print { display:none; }
+      body { margin: 0; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="no-print" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+  <a href="/inventory/audit/search" style="text-decoration:none;">← Back</a>
+  <button onclick="window.print()" style="padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; cursor:pointer;">
+    Print / Save PDF
+  </button>
+</div>
+
+<h1 style="margin:12px 0 6px 0;">Organic Lot Report</h1>
+<div class="muted">
+  SKU: <b><%= sku?.name %></b> (SKU #<%= sku?.id %>) • Unit: <span class="q"><%= sku?.unit_type %></span><br/>
+  Lot: <b><%= lot ? lot.lot_number : 'UNKNOWN LOT' %></b><br/>
+  Date range: <span class="q"><%= startDate %></span> to <span class="q"><%= endDate || '(open)' %></span>
+</div>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Invoice ID</th>
+        <th>Customer</th>
+        <th class="right">Allocated Qty</th>
+        <th>Method</th>
+        <th>Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% if (!rows || rows.length === 0) { %>
+        <tr><td colspan="6" class="muted">No saved audit allocations found for this lot.</td></tr>
+      <% } else { %>
+        <% rows.forEach(r => { %>
+          <tr>
+            <td class="q"><%= r.txn_date || '' %></td>
+            <td class="q"><%= r.qbo_invoice_id %></td>
+            <td><%= r.customer_name || '' %></td>
+            <td class="right"><b><%= Number(r.allocated_qty || 0).toFixed(2).replace(/\.00$/,'') %></b></td>
+            <td class="q"><%= r.method || '' %></td>
+            <td><%= r.note || '' %></td>
+          </tr>
+        <% }) %>
+      <% } %>
+    </tbody>
+    <tfoot>
+      <tr>
+        <th colspan="3" class="right">Total</th>
+        <th class="right"><%= Number(total || 0).toFixed(2).replace(/\.00$/,'') %></th>
+        <th colspan="2"></th>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="muted" style="margin-top:12px;">
+    This report is based on saved audit allocations (does not change inventory).
+  </div>
+</div>
+
+</body>
+</html>

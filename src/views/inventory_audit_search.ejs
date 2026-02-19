@@ -1,0 +1,133 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Organic Audit Search</title>
+  <style>
+    body { font-family: system-ui; margin:24px; max-width:1200px; }
+    .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+    select,input { padding:10px 12px; border:1px solid #ddd; border-radius:10px; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; cursor:pointer; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; }
+    th { background:#fafafa; position: sticky; top: 0; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
+  </style>
+</head>
+<body>
+
+<h1 style="margin:0;">Organic Audit Search</h1>
+<div class="muted" style="margin-top:8px;">
+  Find invoices that contain a specific <b>organic</b> SKU, then assign a lot for audit reporting (no inventory changes).
+</div>
+
+<div class="muted" style="margin-top:10px;">
+  <a href="/">Home</a> | <a href="/inventory/totals">Totals</a> | <a href="/inventory/settings/skus">SKU Settings</a>
+</div>
+
+<div class="card">
+  <% if (msg) { %><div class="muted"><b><%= msg %></b></div><% } %>
+
+  <form method="get" action="/inventory/audit/search" class="row" style="margin-top:10px;">
+    <label class="muted"><b>Organic SKU</b></label>
+    <select name="sku" required>
+      <option value="">Select…</option>
+      <% organicSkus.forEach(s => { %>
+        <option value="<%= s.id %>" <%= String(selectedSkuId)===String(s.id) ? 'selected' : '' %>><%= s.name %></option>
+      <% }) %>
+    </select>
+
+    <label class="muted"><b>From</b></label>
+    <input name="start" value="<%= startDate %>" placeholder="2025-01-01">
+
+    <label class="muted"><b>To</b></label>
+    <input name="end" value="<%= endDate %>" placeholder="(optional)">
+
+    <button type="submit">Search (local)</button>
+  </form>
+
+  <form method="post" action="/inventory/audit/scan" class="row" style="margin-top:10px;">
+    <input type="hidden" name="sku_id" value="<%= selectedSkuId %>">
+    <input type="hidden" name="start_date" value="<%= startDate %>">
+    <input type="hidden" name="end_date" value="<%= endDate %>">
+    <button type="submit">Scan QBO + Index Lines (date range)</button>
+    <span class="muted">Run this once per date range to populate search results.</span>
+  </form>
+</div>
+
+<% if (selectedSkuId) { %>
+  <div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <div>
+        <b>Invoices containing SKU</b>
+        <div class="muted">Results come from local index (fast). Select invoices to assign a lot.</div>
+      </div>
+
+      <form method="get" action="/inventory/audit/lot-report" class="row">
+        <input type="hidden" name="sku" value="<%= selectedSkuId %>">
+        <input type="hidden" name="start" value="<%= startDate %>">
+        <input type="hidden" name="end" value="<%= endDate %>">
+        <select name="lot">
+          <option value="">(UNKNOWN LOT)</option>
+          <% (lots || []).forEach(l => { %>
+            <option value="<%= l.id %>"><%= l.lot_number %></option>
+          <% }) %>
+        </select>
+        <button type="submit">Open Lot Report</button>
+      </form>
+    </div>
+
+    <form method="post" action="/inventory/audit/assign-lot">
+      <input type="hidden" name="sku_id" value="<%= selectedSkuId %>">
+      <input type="hidden" name="start_date" value="<%= startDate %>">
+      <input type="hidden" name="end_date" value="<%= endDate %>">
+
+      <div class="row" style="margin-top:10px;">
+        <label class="muted"><b>Assign Lot</b></label>
+        <select name="lot_id">
+          <option value="">(UNKNOWN LOT)</option>
+          <% (lots || []).forEach(l => { %>
+            <option value="<%= l.id %>"><%= l.lot_number %></option>
+          <% }) %>
+        </select>
+        <button type="submit">Assign to Selected Invoices</button>
+        <span class="muted">This writes audit allocations (does not change inventory).</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width:34px;"></th>
+            <th>Date</th>
+            <th>Invoice</th>
+            <th>Customer</th>
+            <th class="right">Qty</th>
+            <th class="right">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!invoices || invoices.length === 0) { %>
+            <tr><td colspan="6" class="muted">No results yet. Run “Scan QBO + Index Lines” first.</td></tr>
+          <% } else { %>
+            <% invoices.forEach(inv => { %>
+              <tr>
+                <td><input type="checkbox" name="invoice_ids" value="<%= inv.qbo_invoice_id %>"></td>
+                <td class="q"><%= inv.txn_date || '' %></td>
+                <td class="q"><%= inv.doc_number || inv.qbo_invoice_id %></td>
+                <td><%= inv.customer_name || '' %></td>
+                <td class="right"><%= Number(inv.qty_units || 0).toFixed(2).replace(/\.00$/,'') %></td>
+                <td class="right"><%= Number(inv.amount || 0).toFixed(2).replace(/\.00$/,'') %></td>
+              </tr>
+            <% }) %>
+          <% } %>
+        </tbody>
+      </table>
+    </form>
+  </div>
+<% } %>
+
+</body>
+</html>

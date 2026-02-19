@@ -1043,6 +1043,223 @@ app.post('/inventory/audit/save', requireConnected, (req, res) => {
   }
 });
 
+// ==========================================================
+// Audit: Search invoices by Organic SKU (fast via local index)
+// ==========================================================
+app.get('/inventory/audit/search', requireConnected, (req, res) => {
+  const organicSkus = db.sqlite.prepare(`
+    SELECT id, name, unit_type
+    FROM skus
+    WHERE is_organic=1 AND active=1
+    ORDER BY name COLLATE NOCASE
+  `).all();
+
+  res.render('inventory_audit_search', {
+    msg: null,
+    organicSkus,
+    selectedSkuId: '',
+    startDate: '2025-01-01',
+    endDate: '',
+    invoices: [],
+    lots: []
+  });
+});
+
+// ==========================================================
+// Audit: Scan QBO invoices in date range and index organic SKU lines
+// ==========================================================
+app.post('/inventory/audit/scan', requireConnected, async (req, res) => {
+  const conn = db.getConnectionOrThrow();
+  const oauthClient = getOAuthClient(conn);
+
+  try {
+    const skuId = Number(req.body.sku_id);
+    const startDate = String(req.body.start_date || '').trim() || '2025-01-01';
+    const endDate = String(req.body.end_date || '').trim() || null;
+
+    if (!skuId) throw new Error('Missing sku_id');
+
+    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
+    if (!sku || !sku.is_organic) throw new Error('Selected SKU is not marked organic.');
+
+    // 1) Query invoice list from QBO in date range
+    // QBO Query API supports Invoice query w/ TxnDate filters.
+    // We page through results.
+    let start = 1;
+    const pageSize = 100;
+    const invoicesToRead = [];
+
+    while (true) {
+      const where = endDate
+        ? `TxnDate >= '${startDate}' AND TxnDate <= '${endDate}'`
+        : `TxnDate >= '${startDate}'`;
+
+      const q = `select Id, DocNumber, TxnDate, CustomerRef from Invoice where ${where} startposition ${start} maxresults ${pageSize}`;
+      const r = await qboQuery(oauthClient, conn.realm_id, q);
+      const invs = r?.QueryResponse?.Invoice || [];
+
+      for (const inv of invs) {
+        if (inv?.Id) invoicesToRead.push({
+          id: String(inv.Id),
+          txnDate: inv.TxnDate ? String(inv.TxnDate) : null,
+          docNumber: inv.DocNumber ? String(inv.DocNumber) : null,
+          customerName: inv?.CustomerRef?.name ? String(inv.CustomerRef.name) : null
+        });
+      }
+
+      if (invs.length < pageSize) break;
+      start += pageSize;
+    }
+
+    // 2) Read each invoice detail and index only lines matching this SKU’s qbo_item_id
+    // (We do invoice detail read because QBO query won’t return Line items.)
+    const targetQboItemId = String(sku.qbo_item_id || '');
+    if (!targetQboItemId) throw new Error('SKU has no qbo_item_id mapped. Sync SKUs first.');
+
+    for (const meta of invoicesToRead) {
+      const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, meta.id);
+      const invoice = invResp?.Invoice;
+      if (!invoice?.Id) continue;
+
+      const lines = invoice.Line || [];
+      for (const line of lines) {
+        if (line?.DetailType !== 'SalesItemLineDetail') continue;
+        const det = line.SalesItemLineDetail;
+        const itemId = det?.ItemRef?.value ? String(det.ItemRef.value) : null;
+        if (!itemId || itemId !== targetQboItemId) continue;
+
+        const qty = Number(det?.Qty || 0);
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        db.upsertInvoiceSkuLine({
+          qbo_invoice_id: String(invoice.Id),
+          txn_date: invoice.TxnDate ? String(invoice.TxnDate) : meta.txnDate,
+          doc_number: invoice.DocNumber ? String(invoice.DocNumber) : meta.docNumber,
+          customer_name: invoice?.CustomerRef?.name ? String(invoice.CustomerRef.name) : meta.customerName,
+          sku_id: skuId,
+          qbo_item_id: itemId,
+          qty_units: qty,
+          amount: Number(line.Amount || 0)
+        });
+      }
+    }
+
+    res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}`);
+  } catch (e) {
+    const organicSkus = db.sqlite.prepare(`SELECT id, name, unit_type FROM skus WHERE is_organic=1 AND active=1 ORDER BY name COLLATE NOCASE`).all();
+    res.status(400).render('inventory_audit_search', {
+      msg: e?.message || String(e),
+      organicSkus,
+      selectedSkuId: String(req.body.sku_id || ''),
+      startDate: String(req.body.start_date || '2025-01-01'),
+      endDate: String(req.body.end_date || ''),
+      invoices: [],
+      lots: []
+    });
+  }
+});
+
+// ==========================================================
+// Audit search results (uses local index)
+// ==========================================================
+app.get('/inventory/audit/search', requireConnected, (req, res) => {
+  const organicSkus = db.sqlite.prepare(`
+    SELECT id, name, unit_type
+    FROM skus
+    WHERE is_organic=1 AND active=1
+    ORDER BY name COLLATE NOCASE
+  `).all();
+
+  const selectedSkuId = String(req.query.sku || '').trim();
+  const startDate = String(req.query.start || '2025-01-01').trim();
+  const endDate = String(req.query.end || '').trim() || null;
+
+  let invoices = [];
+  let lots = [];
+  if (selectedSkuId) {
+    invoices = db.listInvoicesContainingSku({ skuId: Number(selectedSkuId), startDate, endDate });
+    lots = db.listLotsForSku(Number(selectedSkuId));
+  }
+
+  res.render('inventory_audit_search', {
+    msg: null,
+    organicSkus,
+    selectedSkuId,
+    startDate,
+    endDate: endDate || '',
+    invoices,
+    lots
+  });
+});
+
+// ==========================================================
+// Bulk assign a LOT to selected invoices (audit-only)
+// ==========================================================
+app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
+  try {
+    const skuId = Number(req.body.sku_id);
+    const lotId = req.body.lot_id ? Number(req.body.lot_id) : null;
+    const startDate = String(req.body.start_date || '2025-01-01').trim();
+    const endDate = String(req.body.end_date || '').trim() || null;
+
+    const ids = Array.isArray(req.body.invoice_ids) ? req.body.invoice_ids : (req.body.invoice_ids ? [req.body.invoice_ids] : []);
+    if (!skuId) throw new Error('Missing sku_id');
+    if (ids.length === 0) throw new Error('No invoices selected.');
+
+    // Save one audit allocation row per selected invoice, qty = invoice total qty for that SKU
+    for (const invoiceId of ids) {
+      const inv = db.sqlite.prepare(`
+        SELECT qbo_invoice_id, MAX(txn_date) AS txn_date, MAX(customer_name) AS customer_name, SUM(qty_units) AS qty_units
+        FROM invoice_sku_lines
+        WHERE qbo_invoice_id=? AND sku_id=?
+      `).get(String(invoiceId), Number(skuId));
+
+      if (!inv) continue;
+
+      db.replaceAuditAllocations({
+        invoiceId: String(invoiceId),
+        txnDate: inv.txn_date || null,
+        customerName: inv.customer_name || null,
+        rows: [{
+          sku_id: skuId,
+          lot_id: lotId,
+          qty_units: Number(inv.qty_units || 0),
+          method: 'MANUAL',
+          note: null
+        }]
+      });
+    }
+
+    // Return to results
+    res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}`);
+  } catch (e) {
+    res.status(500).send(`Assign lot failed: ${e?.message || e}`);
+  }
+});
+
+// ==========================================================
+// Printable lot report (Lot -> invoice list)
+// ==========================================================
+app.get('/inventory/audit/lot-report', requireConnected, (req, res) => {
+  try {
+    const skuId = Number(req.query.sku);
+    const lotId = req.query.lot ? Number(req.query.lot) : null;
+    const startDate = String(req.query.start || '2025-01-01').trim();
+    const endDate = String(req.query.end || '').trim() || null;
+
+    if (!skuId) throw new Error('Missing sku');
+
+    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
+    const lot = lotId ? db.sqlite.prepare(`SELECT * FROM lots WHERE id=?`).get(lotId) : null;
+
+    const rows = db.listAuditLotReport({ skuId, lotId, startDate, endDate });
+    const total = rows.reduce((s, r) => s + Number(r.allocated_qty || 0), 0);
+
+    res.render('inventory_audit_lot_report', { sku, lot, rows, total, startDate, endDate: endDate || '' });
+  } catch (e) {
+    res.status(500).send(`Lot report failed: ${e?.message || e}`);
+  }
+});
 
 
 const port = process.env.PORT || 3000;

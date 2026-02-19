@@ -12,6 +12,75 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+// ==========================================================
+// Invoice SKU line index (audit search)
+// ==========================================================
+upsertInvoiceSkuLine(row) {
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO invoice_sku_lines
+      (qbo_invoice_id, txn_date, doc_number, customer_name, sku_id, qbo_item_id, qty_units, amount)
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(row.qbo_invoice_id),
+    row.txn_date ? String(row.txn_date) : null,
+    row.doc_number ? String(row.doc_number) : null,
+    row.customer_name ? String(row.customer_name) : null,
+    Number(row.sku_id),
+    row.qbo_item_id ? String(row.qbo_item_id) : null,
+    Number(row.qty_units),
+    row.amount === null || row.amount === undefined ? null : Number(row.amount)
+  );
+},
+
+listInvoicesContainingSku({ skuId, startDate, endDate }) {
+  return sqlite.prepare(`
+    SELECT
+      l.qbo_invoice_id,
+      MAX(l.txn_date) AS txn_date,
+      MAX(l.doc_number) AS doc_number,
+      MAX(l.customer_name) AS customer_name,
+      SUM(l.qty_units) AS qty_units,
+      SUM(COALESCE(l.amount, 0)) AS amount
+    FROM invoice_sku_lines l
+    WHERE l.sku_id = ?
+      AND (? IS NULL OR l.txn_date >= ?)
+      AND (? IS NULL OR l.txn_date <= ?)
+    GROUP BY l.qbo_invoice_id
+    ORDER BY txn_date ASC
+  `).all(Number(skuId),
+    startDate || null, startDate || null,
+    endDate || null, endDate || null
+  );
+},
+
+// Report: Lot -> invoices (based on saved audit allocations)
+listAuditLotReport({ skuId, lotId, startDate, endDate }) {
+  return sqlite.prepare(`
+    SELECT
+      a.qbo_invoice_id,
+      a.txn_date,
+      a.customer_name,
+      a.qty_units AS allocated_qty,
+      a.method,
+      a.note,
+      lo.lot_number
+    FROM invoice_lot_audit_allocations a
+    LEFT JOIN lots lo ON lo.id = a.lot_id
+    WHERE a.sku_id = ?
+      AND COALESCE(a.lot_id, 0) = COALESCE(?, 0)
+      AND (? IS NULL OR a.txn_date >= ?)
+      AND (? IS NULL OR a.txn_date <= ?)
+    ORDER BY a.txn_date ASC, a.qbo_invoice_id ASC
+  `).all(
+    Number(skuId),
+    lotId ? Number(lotId) : null,
+    startDate || null, startDate || null,
+    endDate || null, endDate || null
+  );
+},
+
+
   // ==========================================================
   // Lots helpers (for audit dropdowns)
   // ==========================================================
