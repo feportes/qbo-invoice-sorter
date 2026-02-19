@@ -54,6 +54,202 @@ listInvoicesContainingSku({ skuId, startDate, endDate }) {
   );
 },
 
+listLotsForSku(skuId) {
+  return sqlite.prepare(`
+    SELECT l.*
+    FROM lots l
+    WHERE l.sku_id=?
+    ORDER BY
+      CASE WHEN l.expiration_date IS NULL THEN 1 ELSE 0 END,
+      l.expiration_date ASC,
+      CASE WHEN l.production_date IS NULL THEN 1 ELSE 0 END,
+      l.production_date ASC,
+      l.lot_number COLLATE NOCASE ASC
+  `).all(Number(skuId));
+},
+
+// ==========================================================
+// Audit allocations (do NOT change inventory)
+// ==========================================================
+listAuditAllocations(invoiceId) {
+  return sqlite.prepare(`
+    SELECT a.*,
+           s.name AS sku_name,
+           s.unit_type AS unit_type,
+           lo.lot_number AS lot_number
+    FROM invoice_lot_audit_allocations a
+    JOIN skus s ON s.id = a.sku_id
+    LEFT JOIN lots lo ON lo.id = a.lot_id
+    WHERE a.qbo_invoice_id=?
+    ORDER BY a.id ASC
+  `).all(String(invoiceId));
+},
+
+hasAuditAllocationForInvoiceSku(invoiceId, skuId) {
+  const row = sqlite.prepare(`
+    SELECT 1 FROM invoice_lot_audit_allocations
+    WHERE qbo_invoice_id=? AND sku_id=?
+    LIMIT 1
+  `).get(String(invoiceId), Number(skuId));
+  return !!row;
+},
+
+replaceAuditAllocations({ invoiceId, txnDate, customerName, rows }) {
+  const tx = sqlite.transaction(() => {
+    sqlite.prepare(`DELETE FROM invoice_lot_audit_allocations WHERE qbo_invoice_id=?`)
+      .run(String(invoiceId));
+
+    const ins = sqlite.prepare(`
+      INSERT INTO invoice_lot_audit_allocations
+        (qbo_invoice_id, txn_date, customer_name, sku_id, lot_id, qty_units, method, note)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const r of rows) {
+      ins.run(
+        String(invoiceId),
+        txnDate ? String(txnDate) : null,
+        customerName ? String(customerName) : null,
+        Number(r.sku_id),
+        r.lot_id ? Number(r.lot_id) : null,
+        Number(r.qty_units),
+        String(r.method || 'MANUAL'),
+        r.note ? String(r.note) : null
+      );
+    }
+  });
+  tx();
+},
+
+// ==========================================================
+// Auto-suggest lot by txn_date
+// ==========================================================
+getSuggestedLotForSkuOnDate(skuId, txnDate) {
+  const d = String(txnDate || '').trim();
+  if (!d) return null;
+
+  const r1 = sqlite.prepare(`
+    SELECT id
+    FROM lots
+    WHERE sku_id=?
+      AND (production_date IS NULL OR production_date <= ?)
+      AND (expiration_date IS NULL OR ? <= expiration_date)
+    ORDER BY
+      CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END,
+      expiration_date ASC,
+      CASE WHEN production_date IS NULL THEN 1 ELSE 0 END,
+      production_date DESC,
+      lot_number COLLATE NOCASE ASC
+    LIMIT 1
+  `).get(Number(skuId), d, d);
+  if (r1?.id) return Number(r1.id);
+
+  const r2 = sqlite.prepare(`
+    SELECT id
+    FROM lots
+    WHERE sku_id=? AND production_date IS NOT NULL AND production_date <= ?
+    ORDER BY production_date DESC, lot_number COLLATE NOCASE ASC
+    LIMIT 1
+  `).get(Number(skuId), d);
+  if (r2?.id) return Number(r2.id);
+
+  const r3 = sqlite.prepare(`
+    SELECT id
+    FROM lots
+    WHERE sku_id=? AND expiration_date IS NOT NULL AND expiration_date >= ?
+    ORDER BY expiration_date ASC, lot_number COLLATE NOCASE ASC
+    LIMIT 1
+  `).get(Number(skuId), d);
+  if (r3?.id) return Number(r3.id);
+
+  const r4 = sqlite.prepare(`
+    SELECT id
+    FROM lots
+    WHERE sku_id=?
+    ORDER BY created_at DESC, lot_number COLLATE NOCASE DESC
+    LIMIT 1
+  `).get(Number(skuId));
+  return r4?.id ? Number(r4.id) : null;
+},
+
+listAuditMasterReport({ startDate, endDate }) {
+  return sqlite.prepare(`
+    SELECT
+      s.id AS sku_id,
+      s.name AS sku_name,
+      s.unit_type,
+      lo.id AS lot_id,
+      lo.lot_number,
+      a.qbo_invoice_id,
+      a.txn_date,
+      a.customer_name,
+      SUM(a.qty_units) AS qty_units
+    FROM invoice_lot_audit_allocations a
+    JOIN skus s ON s.id = a.sku_id
+    LEFT JOIN lots lo ON lo.id = a.lot_id
+    WHERE s.is_organic=1
+      AND (? IS NULL OR a.txn_date >= ?)
+      AND (? IS NULL OR a.txn_date <= ?)
+    GROUP BY
+      s.id, s.name, s.unit_type,
+      lo.id, lo.lot_number,
+      a.qbo_invoice_id, a.txn_date, a.customer_name
+    ORDER BY
+      s.name COLLATE NOCASE ASC,
+      (lo.lot_number IS NULL) ASC,
+      lo.lot_number COLLATE NOCASE ASC,
+      a.txn_date ASC,
+      a.qbo_invoice_id ASC
+  `).all(
+    startDate || null, startDate || null,
+    endDate || null, endDate || null
+  );
+},
+
+
+// ==========================================================
+// Invoice SKU line index (audit search)
+// ==========================================================
+upsertInvoiceSkuLine(row) {
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO invoice_sku_lines
+      (qbo_invoice_id, txn_date, doc_number, customer_name, sku_id, qbo_item_id, qty_units, amount)
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(row.qbo_invoice_id),
+    row.txn_date ? String(row.txn_date) : null,
+    row.doc_number ? String(row.doc_number) : null,
+    row.customer_name ? String(row.customer_name) : null,
+    Number(row.sku_id),
+    row.qbo_item_id ? String(row.qbo_item_id) : null,
+    Number(row.qty_units),
+    row.amount === null || row.amount === undefined ? null : Number(row.amount)
+  );
+},
+
+listInvoicesContainingSku({ skuId, startDate, endDate }) {
+  return sqlite.prepare(`
+    SELECT
+      l.qbo_invoice_id,
+      MAX(l.txn_date) AS txn_date,
+      MAX(l.doc_number) AS doc_number,
+      MAX(l.customer_name) AS customer_name,
+      SUM(l.qty_units) AS qty_units,
+      SUM(COALESCE(l.amount, 0)) AS amount
+    FROM invoice_sku_lines l
+    WHERE l.sku_id = ?
+      AND (? IS NULL OR l.txn_date >= ?)
+      AND (? IS NULL OR l.txn_date <= ?)
+    GROUP BY l.qbo_invoice_id
+    ORDER BY txn_date ASC
+  `).all(Number(skuId),
+    startDate || null, startDate || null,
+    endDate || null, endDate || null
+  );
+},
+
 // Report: Lot -> invoices (based on saved audit allocations)
 listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   return sqlite.prepare(`

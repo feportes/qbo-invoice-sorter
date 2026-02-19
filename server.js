@@ -1261,6 +1261,294 @@ app.get('/inventory/audit/lot-report', requireConnected, (req, res) => {
   }
 });
 
+// ==========================================================
+// Organic Audit Search (SKU -> invoices -> lot assignment)
+// ==========================================================
+app.get('/inventory/audit/search', requireConnected, (req, res) => {
+  const organicSkus = db.sqlite.prepare(`
+    SELECT id, name, unit_type, qbo_item_id
+    FROM skus
+    WHERE is_organic=1 AND active=1
+    ORDER BY name COLLATE NOCASE
+  `).all();
+
+  const selectedSkuId = String(req.query.sku || '').trim();
+  const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
+  const endDate = String(req.query.end || '').trim() || null;
+  const msg = String(req.query.msg || '') || null;
+
+  let invoices = [];
+  let lots = [];
+  if (selectedSkuId) {
+    invoices = db.listInvoicesContainingSku({ skuId: Number(selectedSkuId), startDate, endDate });
+    lots = db.listLotsForSku(Number(selectedSkuId));
+  }
+
+  res.render('inventory_audit_search', {
+    msg,
+    organicSkus,
+    selectedSkuId,
+    startDate,
+    endDate: endDate || '',
+    invoices,
+    lots
+  });
+});
+
+// ==========================================================
+// Scan QBO invoices in date range and index lines for selected organic SKU
+// ==========================================================
+app.post('/inventory/audit/scan', requireConnected, async (req, res) => {
+  const conn = db.getConnectionOrThrow();
+  const oauthClient = getOAuthClient(conn);
+
+  try {
+    const skuId = Number(req.body.sku_id);
+    const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
+    const endDate = String(req.body.end_date || '').trim() || null;
+
+    if (!skuId) throw new Error('Missing sku_id');
+
+    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
+    if (!sku || !sku.is_organic) throw new Error('Selected SKU is not marked organic.');
+    if (!sku.qbo_item_id) throw new Error('SKU has no qbo_item_id. Sync SKUs from QBO first.');
+
+    // Pull invoice headers (paged)
+    let start = 1;
+    const pageSize = 100;
+    const metas = [];
+
+    while (true) {
+      const where = endDate
+        ? `TxnDate >= '${startDate}' AND TxnDate <= '${endDate}'`
+        : `TxnDate >= '${startDate}'`;
+
+      const q = `select Id, DocNumber, TxnDate, CustomerRef from Invoice where ${where} startposition ${start} maxresults ${pageSize}`;
+      const r = await qboQuery(oauthClient, conn.realm_id, q);
+      const invs = r?.QueryResponse?.Invoice || [];
+
+      for (const inv of invs) {
+        if (inv?.Id) metas.push({
+          id: String(inv.Id),
+          txnDate: inv.TxnDate ? String(inv.TxnDate) : null,
+          docNumber: inv.DocNumber ? String(inv.DocNumber) : null,
+          customerName: inv?.CustomerRef?.name ? String(inv.CustomerRef.name) : null
+        });
+      }
+
+      if (invs.length < pageSize) break;
+      start += pageSize;
+    }
+
+    const targetItemId = String(sku.qbo_item_id);
+    let indexed = 0;
+
+    for (const meta of metas) {
+      const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, meta.id);
+      const invoice = invResp?.Invoice;
+      if (!invoice?.Id) continue;
+
+      const lines = invoice.Line || [];
+      for (const line of lines) {
+        if (line?.DetailType !== 'SalesItemLineDetail') continue;
+        const det = line.SalesItemLineDetail;
+        const itemId = det?.ItemRef?.value ? String(det.ItemRef.value) : null;
+        if (!itemId || itemId !== targetItemId) continue;
+
+        const qty = Number(det?.Qty || 0);
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        db.upsertInvoiceSkuLine({
+          qbo_invoice_id: String(invoice.Id),
+          txn_date: invoice.TxnDate ? String(invoice.TxnDate) : meta.txnDate,
+          doc_number: invoice.DocNumber ? String(invoice.DocNumber) : meta.docNumber,
+          customer_name: invoice?.CustomerRef?.name ? String(invoice.CustomerRef.name) : meta.customerName,
+          sku_id: skuId,
+          qbo_item_id: itemId,
+          qty_units: qty,
+          amount: Number(line.Amount || 0)
+        });
+        indexed++;
+      }
+    }
+
+    res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Scan complete. Indexed lines: ${indexed}`)}`);
+  } catch (e) {
+    res.status(500).send(`Audit scan failed: ${e?.message || e}`);
+  }
+});
+
+// ==========================================================
+// Assign a LOT to selected invoices (audit-only)
+// ==========================================================
+app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
+  try {
+    const skuId = Number(req.body.sku_id);
+    const lotId = req.body.lot_id ? Number(req.body.lot_id) : null;
+    const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
+    const endDate = String(req.body.end_date || '').trim() || null;
+
+    const ids = Array.isArray(req.body.invoice_ids) ? req.body.invoice_ids : (req.body.invoice_ids ? [req.body.invoice_ids] : []);
+    if (!skuId) throw new Error('Missing sku_id');
+    if (ids.length === 0) throw new Error('No invoices selected.');
+
+    // safety: only organic
+    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
+    if (!sku || !sku.is_organic) throw new Error('Selected SKU is not organic.');
+
+    for (const invoiceId of ids) {
+      const inv = db.sqlite.prepare(`
+        SELECT qbo_invoice_id, MAX(txn_date) AS txn_date, MAX(customer_name) AS customer_name, SUM(qty_units) AS qty_units
+        FROM invoice_sku_lines
+        WHERE qbo_invoice_id=? AND sku_id=?
+      `).get(String(invoiceId), Number(skuId));
+      if (!inv) continue;
+
+      db.replaceAuditAllocations({
+        invoiceId: String(invoiceId),
+        txnDate: inv.txn_date || null,
+        customerName: inv.customer_name || null,
+        rows: [{
+          sku_id: skuId,
+          lot_id: lotId,
+          qty_units: Number(inv.qty_units || 0),
+          method: 'MANUAL',
+          note: lotId ? null : 'UNKNOWN LOT'
+        }]
+      });
+    }
+
+    res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent('Assigned lot to selected invoices.')}`);
+  } catch (e) {
+    res.status(500).send(`Assign lot failed: ${e?.message || e}`);
+  }
+});
+
+// ==========================================================
+// Auto-assign lots (unassigned only) using date-based suggestion
+// ==========================================================
+app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
+  try {
+    const skuId = Number(req.body.sku_id);
+    const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
+    const endDate = String(req.body.end_date || '').trim() || null;
+
+    if (!skuId) throw new Error('Missing sku_id');
+
+    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
+    if (!sku || !sku.is_organic) throw new Error('Selected SKU is not organic.');
+
+    const invs = db.sqlite.prepare(`
+      SELECT
+        qbo_invoice_id,
+        MAX(txn_date) AS txn_date,
+        MAX(customer_name) AS customer_name,
+        SUM(qty_units) AS qty_units
+      FROM invoice_sku_lines
+      WHERE sku_id=?
+        AND (? IS NULL OR txn_date >= ?)
+        AND (? IS NULL OR txn_date <= ?)
+      GROUP BY qbo_invoice_id
+      ORDER BY txn_date ASC
+    `).all(
+      Number(skuId),
+      startDate || null, startDate || null,
+      endDate || null, endDate || null
+    );
+
+    let assigned = 0;
+    let unknown = 0;
+    let skipped = 0;
+
+    for (const inv of invs) {
+      const invoiceId = String(inv.qbo_invoice_id);
+      const txnDate = inv.txn_date ? String(inv.txn_date) : null;
+
+      if (db.hasAuditAllocationForInvoiceSku(invoiceId, skuId)) {
+        skipped++;
+        continue;
+      }
+
+      const lotId = txnDate ? db.getSuggestedLotForSkuOnDate(skuId, txnDate) : null;
+      if (!lotId) unknown++;
+
+      db.replaceAuditAllocations({
+        invoiceId,
+        txnDate,
+        customerName: inv.customer_name || null,
+        rows: [{
+          sku_id: skuId,
+          lot_id: lotId,
+          qty_units: Number(inv.qty_units || 0),
+          method: 'AUTO_SUGGEST',
+          note: lotId ? 'Auto-suggested by date' : 'Auto-suggest failed: UNKNOWN LOT'
+        }]
+      });
+
+      assigned++;
+    }
+
+    res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Auto-assign complete: assigned=${assigned}, unknown=${unknown}, skipped(existing)=${skipped}`)}`);
+  } catch (e) {
+    res.status(500).send(`Auto-assign failed: ${e?.message || e}`);
+  }
+});
+
+// ==========================================================
+// Master printable report (ALL organic SKUs + lots)
+// ==========================================================
+app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
+  try {
+    const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
+    const endDate = String(req.query.end || '').trim() || null;
+
+    const rows = db.listAuditMasterReport({ startDate, endDate });
+
+    const bySku = new Map();
+    let grandTotal = 0;
+
+    for (const r of rows) {
+      grandTotal += Number(r.qty_units || 0);
+
+      if (!bySku.has(r.sku_id)) {
+        bySku.set(r.sku_id, {
+          sku_id: r.sku_id,
+          sku_name: r.sku_name,
+          unit_type: r.unit_type,
+          skuTotal: 0,
+          lots: new Map()
+        });
+      }
+      const sg = bySku.get(r.sku_id);
+      sg.skuTotal += Number(r.qty_units || 0);
+
+      const lotKey = r.lot_number ? `LOT:${r.lot_number}` : 'LOT:UNKNOWN';
+      if (!sg.lots.has(lotKey)) {
+        sg.lots.set(lotKey, { lot_number: r.lot_number || 'UNKNOWN LOT', lotTotal: 0, invoices: [] });
+      }
+      const lg = sg.lots.get(lotKey);
+      lg.lotTotal += Number(r.qty_units || 0);
+      lg.invoices.push({
+        txn_date: r.txn_date || '',
+        qbo_invoice_id: r.qbo_invoice_id,
+        customer_name: r.customer_name || '',
+        qty_units: Number(r.qty_units || 0)
+      });
+    }
+
+    const skuGroups = [...bySku.values()].map(g => ({ ...g, lotsArr: [...g.lots.values()] }));
+
+    res.render('inventory_audit_master_report', {
+      startDate,
+      endDate: endDate || '',
+      skuGroups,
+      grandTotal
+    });
+  } catch (e) {
+    res.status(500).send(`Master report failed: ${e?.message || e}`);
+  }
+});
+
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
