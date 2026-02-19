@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Inbound Review</title>
+  <style>
+    body { font-family: system-ui; margin:24px; max-width:1100px; }
+    .muted { color:#666; font-size:13px; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; }
+    th { background:#fafafa; }
+    .q { font-family: ui-monospace, monospace; font-size:12px; }
+    .right { text-align:right; }
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+  </style>
+</head>
+<body>
+  <a href="/inventory/inbound">← Back</a>
+
+  <% if (!doc) { %>
+    <h1>Inbound Doc not found</h1>
+    <div class="muted">This inbound doc ID does not exist in the database.</div>
+    </body></html>
+    <% return; %>
+  <% } %>
+
+  <h1>Inbound Doc #<%= doc.id %></h1>
+
+  <% if (msg) { %><div class="card"><%= msg %></div><% } %>
+
+  <div class="muted">
+    Date: <span class="q"><%= doc.doc_date || '' %></span><br/>
+    Container: <span class="q"><%= doc.container_no || '' %></span><br/>
+    File: <span class="q"><%= doc.source_filename || '' %></span>
+  </div>
+
+  <form method="POST" action="/inventory/inbound/<%= doc.id %>/apply">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Raw product name</th>
+          <th>Lot (Batch)</th>
+          <th class="right">Packages</th>
+          <th class="right">Net kg</th>
+          <th class="right">Gross kg</th>
+          <th>Map to SKU</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (!lines || lines.length === 0) { %>
+          <tr><td colspan="7" class="muted">No parsed lines were found for this PDF. (Parsing regex may need adjustment.)</td></tr>
+        <% } else { %>
+          <% lines.forEach(ln => { %>
+            <tr>
+              <td class="q"><%= ln.line_no ?? '' %></td>
+              <td><%= ln.raw_product_name || '' %></td>
+              <td class="q"><%= ln.lot_number || '' %></td>
+              <td class="right"><%= (ln.qty_packages ?? '') %></td>
+              <td class="right"><%= (ln.net_kg ?? '') %></td>
+              <td class="right"><%= (ln.gross_kg ?? '') %></td>
+              <td>
+                <input type="hidden" name="line_id" value="<%= ln.id %>"/>
+                <select name="sku_id">
+                  <option value="">-- not mapped --</option>
+                  <% skus.forEach(s => { %>
+                    <option value="<%= s.id %>" <%= (ln.sku_id == s.id ? 'selected' : '') %>><%= s.name %></option>
+                  <% }) %>
+                </select>
+              </td>
+            </tr>
+          <% }) %>
+        <% } %>
+      </tbody>
+    </table>
+
+    <div class="card">
+      <button type="submit">Save mappings + create lots (and learn aliases)</button>
+      <div class="muted" style="margin-top:8px;">
+        This will: (1) save mappings, (2) store aliases automatically, (3) upsert lots into your lots table.
+      </div>
+    </div>
+  </form>
+</body>
+</html>
