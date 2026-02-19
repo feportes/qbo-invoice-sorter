@@ -2,9 +2,21 @@ import multer from 'multer';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
-// ✅ pdf-parse can export either a function or { default: fn }
+// ✅ Robust loader for pdf-parse across versions/ESM/CJS shapes
 const pdfParseMod = require('pdf-parse');
-const pdfParse = pdfParseMod?.default || pdfParseMod;
+
+let pdfParse =
+  (typeof pdfParseMod === 'function') ? pdfParseMod :
+  (typeof pdfParseMod?.default === 'function') ? pdfParseMod.default :
+  (typeof pdfParseMod?.pdf === 'function') ? pdfParseMod.pdf :
+  (typeof pdfParseMod?.parse === 'function') ? pdfParseMod.parse :
+  null;
+
+if (!pdfParse) {
+  const keys = pdfParseMod && typeof pdfParseMod === 'object' ? Object.keys(pdfParseMod) : [];
+  throw new Error(`pdf-parse export not callable. typeof=${typeof pdfParseMod} keys=${keys.join(',')}`);
+}
+
 
 import 'dotenv/config';
 import express from 'express';
