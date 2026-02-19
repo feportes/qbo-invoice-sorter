@@ -323,7 +323,17 @@ app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), as
     if (!req.file) throw new Error('Missing PDF file');
 
     const parsed = await pdfParse(req.file.buffer);
+console.log('========== INBOUND PDF DEBUG ==========');
+console.log('[inbound] filename:', req.file?.originalname);
+console.log('[inbound] extracted_text_len:', (parsed?.text || '').length);
+console.log('[inbound] extracted_text_first_800:\n', (parsed?.text || '').slice(0, 800));
+console.log('[inbound] extracted_text_last_800:\n', (parsed?.text || '').slice(-800));
+console.log('======================================');
+
     const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
+console.log('[inbound] parsed header:', { doc_date, container_no, rows_len: rows?.length || 0 });
+if (rows?.length) console.log('[inbound] first_row:', rows[0]);
+
 
 const inboundDocId = db.createInboundDoc({
   doc_date,
