@@ -1,7 +1,10 @@
 import multer from 'multer';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse');
+
+// ✅ pdf-parse can export either a function or { default: fn }
+const pdfParseMod = require('pdf-parse');
+const pdfParse = pdfParseMod?.default || pdfParseMod;
 
 import 'dotenv/config';
 import express from 'express';
