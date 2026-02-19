@@ -1508,7 +1508,8 @@ app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
     let grandTotal = 0;
 
     for (const r of rows) {
-      grandTotal += Number(r.qty_units || 0);
+      const qty = Number(r.qty_units || 0);
+      grandTotal += qty;
 
       if (!bySku.has(r.sku_id)) {
         bySku.set(r.sku_id, {
@@ -1519,24 +1520,35 @@ app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
           lots: new Map()
         });
       }
-      const sg = bySku.get(r.sku_id);
-      sg.skuTotal += Number(r.qty_units || 0);
+
+      const skuGroup = bySku.get(r.sku_id);
+      skuGroup.skuTotal += qty;
 
       const lotKey = r.lot_number ? `LOT:${r.lot_number}` : 'LOT:UNKNOWN';
-      if (!sg.lots.has(lotKey)) {
-        sg.lots.set(lotKey, { lot_number: r.lot_number || 'UNKNOWN LOT', lotTotal: 0, invoices: [] });
+
+      if (!skuGroup.lots.has(lotKey)) {
+        skuGroup.lots.set(lotKey, {
+          lot_number: r.lot_number || 'UNKNOWN LOT',
+          lotTotal: 0,
+          invoices: []
+        });
       }
-      const lg = sg.lots.get(lotKey);
-      lg.lotTotal += Number(r.qty_units || 0);
-      lg.invoices.push({
+
+      const lotGroup = skuGroup.lots.get(lotKey);
+      lotGroup.lotTotal += qty;
+
+      lotGroup.invoices.push({
         txn_date: r.txn_date || '',
         qbo_invoice_id: r.qbo_invoice_id,
         customer_name: r.customer_name || '',
-        qty_units: Number(r.qty_units || 0)
+        qty_units: qty
       });
     }
 
-    const skuGroups = [...bySku.values()].map(g => ({ ...g, lotsArr: [...g.lots.values()] }));
+    const skuGroups = [...bySku.values()].map(g => ({
+      ...g,
+      lotsArr: [...g.lots.values()]
+    }));
 
     res.render('inventory_audit_master_report', {
       startDate,
@@ -1544,6 +1556,7 @@ app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
       skuGroups,
       grandTotal
     });
+
   } catch (e) {
     res.status(500).send(`Master report failed: ${e?.message || e}`);
   }
