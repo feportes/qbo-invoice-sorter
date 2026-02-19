@@ -2,6 +2,7 @@ import { db } from './db.js';
 
 export function ensureSchema() {
   const s = db.sqlite;
+
   s.exec(`
     CREATE TABLE IF NOT EXISTS connections (
       id INTEGER PRIMARY KEY CHECK (id=1),
@@ -60,30 +61,6 @@ export function ensureSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (invoice_id, sync_token)
     );
-
-// ==========================================================
-// Invoice SKU Line Index (for audit search/reporting)
-// Stores invoice lines mapped to internal SKUs (organic filtering happens in server)
-// ==========================================================
-try { s.exec(`
-  CREATE TABLE IF NOT EXISTS invoice_sku_lines (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    qbo_invoice_id TEXT NOT NULL,
-    txn_date TEXT,
-    doc_number TEXT,
-    customer_name TEXT,
-    sku_id INTEGER NOT NULL,
-    qbo_item_id TEXT,
-    qty_units REAL NOT NULL,
-    amount REAL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(qbo_invoice_id, sku_id, qbo_item_id, qty_units, amount)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_invoice_sku_lines_sku_date ON invoice_sku_lines(sku_id, txn_date);
-  CREATE INDEX IF NOT EXISTS idx_invoice_sku_lines_invoice ON invoice_sku_lines(qbo_invoice_id);
-`); } catch {}
-
 
     -- =========================
     -- Inventory / Lot Tracking
@@ -203,65 +180,92 @@ try { s.exec(`
     CREATE INDEX IF NOT EXISTS idx_movements_time ON inventory_movements(created_at);
   `);
 
-  // ✅ Safe migrations (won’t crash if already applied)
+  // ✅ Safe migrations
   try { s.exec(`ALTER TABLE skus ADD COLUMN qbo_category_id TEXT;`); } catch {}
   try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_qbo_category_id ON skus(qbo_category_id);`); } catch {}
 
-  // ✅ Allocation tracking (already in your file)
-  try { s.exec(`
-    CREATE TABLE IF NOT EXISTS invoice_allocations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      qbo_invoice_id TEXT NOT NULL,
-      sku_id INTEGER NOT NULL,
-      lot_id INTEGER,
-      source_type TEXT NOT NULL,         -- WALKIN | PALLET
-      source_location_code TEXT NOT NULL,
-      source_pallet_id INTEGER,
-      qty_units REAL NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE INDEX IF NOT EXISTS idx_invoice_allocations_invoice ON invoice_allocations(qbo_invoice_id);
-  `); } catch {}
+  // ✅ Allocation tracking
+  try {
+    s.exec(`
+      CREATE TABLE IF NOT EXISTS invoice_allocations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        qbo_invoice_id TEXT NOT NULL,
+        sku_id INTEGER NOT NULL,
+        lot_id INTEGER,
+        source_type TEXT NOT NULL,         -- WALKIN | PALLET
+        source_location_code TEXT NOT NULL,
+        source_pallet_id INTEGER,
+        qty_units REAL NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_invoice_allocations_invoice ON invoice_allocations(qbo_invoice_id);
+    `);
+  } catch {}
 
-  // ✅ Lot Audit Allocations (for organic inspection / historical invoices)
-  try { s.exec(`
-    CREATE TABLE IF NOT EXISTS invoice_lot_audit_allocations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      qbo_invoice_id TEXT NOT NULL,
-      txn_date TEXT,
-      customer_name TEXT,
-      sku_id INTEGER NOT NULL,
-      lot_id INTEGER,
-      qty_units REAL NOT NULL,
-      method TEXT NOT NULL DEFAULT 'MANUAL',  -- MANUAL | AUTO_SUGGEST
-      note TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+  // ✅ Engine state tables
+  try {
+    s.exec(`
+      CREATE TABLE IF NOT EXISTS invoice_state (
+        qbo_invoice_id TEXT PRIMARY KEY,
+        last_hash TEXT NOT NULL,
+        last_txn_date TEXT,
+        last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE INDEX IF NOT EXISTS idx_audit_alloc_invoice ON invoice_lot_audit_allocations(qbo_invoice_id);
-    CREATE INDEX IF NOT EXISTS idx_audit_alloc_sku ON invoice_lot_audit_allocations(sku_id, lot_id);
-  `); } catch {}
+      CREATE TABLE IF NOT EXISTS invoice_line_totals (
+        qbo_invoice_id TEXT NOT NULL,
+        sku_id INTEGER NOT NULL,
+        qty_units REAL NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (qbo_invoice_id, sku_id)
+      );
 
+      CREATE INDEX IF NOT EXISTS idx_invoice_line_totals_invoice ON invoice_line_totals(qbo_invoice_id);
+    `);
+  } catch {}
 
-  // ✅ Engine state tables (NEW)
-  try { s.exec(`
-    CREATE TABLE IF NOT EXISTS invoice_state (
-      qbo_invoice_id TEXT PRIMARY KEY,
-      last_hash TEXT NOT NULL,
-      last_txn_date TEXT,
-      last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+  // ✅ Lot Audit Allocations (does NOT change inventory)
+  try {
+    s.exec(`
+      CREATE TABLE IF NOT EXISTS invoice_lot_audit_allocations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        qbo_invoice_id TEXT NOT NULL,
+        txn_date TEXT,
+        customer_name TEXT,
+        sku_id INTEGER NOT NULL,
+        lot_id INTEGER,
+        qty_units REAL NOT NULL,
+        method TEXT NOT NULL DEFAULT 'MANUAL',  -- MANUAL | AUTO_SUGGEST
+        note TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS invoice_line_totals (
-      qbo_invoice_id TEXT NOT NULL,
-      sku_id INTEGER NOT NULL,
-      qty_units REAL NOT NULL,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (qbo_invoice_id, sku_id)
-    );
+      CREATE INDEX IF NOT EXISTS idx_audit_alloc_invoice ON invoice_lot_audit_allocations(qbo_invoice_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_alloc_sku ON invoice_lot_audit_allocations(sku_id, lot_id);
+    `);
+  } catch {}
 
-    CREATE INDEX IF NOT EXISTS idx_invoice_line_totals_invoice ON invoice_line_totals(qbo_invoice_id);
-  `); } catch {}
+  // ✅ Invoice SKU Line Index (audit search/reporting)
+  try {
+    s.exec(`
+      CREATE TABLE IF NOT EXISTS invoice_sku_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        qbo_invoice_id TEXT NOT NULL,
+        txn_date TEXT,
+        doc_number TEXT,
+        customer_name TEXT,
+        sku_id INTEGER NOT NULL,
+        qbo_item_id TEXT,
+        qty_units REAL NOT NULL,
+        amount REAL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(qbo_invoice_id, sku_id, qbo_item_id, qty_units, amount)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_invoice_sku_lines_sku_date ON invoice_sku_lines(sku_id, txn_date);
+      CREATE INDEX IF NOT EXISTS idx_invoice_sku_lines_invoice ON invoice_sku_lines(qbo_invoice_id);
+    `);
+  } catch {}
 }
 
 export function seedDefaults() {
@@ -273,9 +277,10 @@ export function seedDefaults() {
   if (!db.getSetting('lane_priority')) db.setSetting('lane_priority', 'R_FIRST');
   if (!db.getSetting('walkin_first_default')) db.setSetting('walkin_first_default', '1');
 
-  // ✅ Engine toggle defaults (NEW)
-  if (!db.getSetting('auto_allocate_enabled')) db.setSetting('auto_allocate_enabled', '0'); // OFF by default
+  // Engine defaults
+  if (!db.getSetting('auto_allocate_enabled')) db.setSetting('auto_allocate_enabled', '0');
   if (!db.getSetting('inventory_timezone')) db.setSetting('inventory_timezone', 'America/Los_Angeles');
 
-  // Container defaults you already set elsewhere; leave as-is
+  // Audit defaults
+  if (!db.getSetting('organic_tracking_start')) db.setSetting('organic_tracking_start', '2025-01-01');
 }
