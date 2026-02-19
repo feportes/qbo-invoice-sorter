@@ -1,0 +1,120 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Organic Lot Audit</title>
+  <style>
+    body { font-family: system-ui; margin: 24px; max-width: 1200px; }
+    .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+    input, select { padding:10px 12px; border:1px solid #ddd; border-radius:10px; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; cursor:pointer; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; vertical-align:top; }
+    th { background:#fafafa; position: sticky; top: 0; }
+    .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
+    .pill { display:inline-block; padding:2px 10px; border-radius:999px; border:1px solid #ddd; background:#fafafa; font-size:12px; }
+  </style>
+</head>
+<body>
+
+<h1 style="margin:0;">Organic Lot Audit</h1>
+<div class="muted" style="margin-top:8px;">
+  Assign lot numbers to past sales for <b>organic</b> SKUs only (based on SKU settings). This does <b>not</b> change inventory.
+</div>
+
+<div class="muted" style="margin-top:10px;">
+  <a href="/">Home</a> |
+  <a href="/inventory/totals">Totals</a> |
+  <a href="/inventory/settings/skus">SKU Settings</a>
+</div>
+
+<div class="card">
+  <form method="post" action="/inventory/audit/preview" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+    <input name="invoice_id" placeholder="QBO Invoice ID" value="<%= invoiceId || '' %>" style="min-width:220px;">
+    <button type="submit">Load Invoice</button>
+    <% if (msg) { %><span class="muted"><b><%= msg %></b></span><% } %>
+  </form>
+</div>
+
+<% if (invoice) { %>
+  <div class="card">
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <span class="pill">Invoice #<%= invoice?.DocNumber || invoice?.Id %></span>
+      <span class="pill">TxnDate: <span class="q"><%= invoice?.TxnDate || '' %></span></span>
+      <span class="pill">Customer: <%= invoice?.CustomerRef?.name || '' %></span>
+    </div>
+
+    <div class="muted" style="margin-top:10px;">
+      Existing saved allocations: <b><%= (existing || []).length %></b>
+    </div>
+
+    <form method="post" action="/inventory/audit/save">
+      <input type="hidden" name="invoice_id" value="<%= invoice?.Id %>">
+      <input type="hidden" name="txn_date" value="<%= invoice?.TxnDate || '' %>">
+      <input type="hidden" name="customer_name" value="<%= invoice?.CustomerRef?.name || '' %>">
+
+      <table>
+        <thead>
+          <tr>
+            <th>Organic SKU</th>
+            <th class="right">Invoice Qty</th>
+            <th>Lot</th>
+            <th class="right">Allocated Qty</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!organicLines || organicLines.length === 0) { %>
+            <tr><td colspan="5" class="muted">No organic SKUs detected on this invoice.</td></tr>
+          <% } else { %>
+            <% organicLines.forEach(line => { 
+                 const lots = lotsBySku[String(line.sku_id)] || [];
+                 const existingForSku = (existing || []).filter(x => Number(x.sku_id) === Number(line.sku_id));
+                 const prefill = existingForSku.length ? existingForSku[0] : null;
+            %>
+              <tr>
+                <td>
+                  <b><%= line.sku_name %></b>
+                  <div class="muted">SKU #<%= line.sku_id %> • Unit: <span class="q"><%= line.unit_type %></span></div>
+                  <input type="hidden" name="sku_id" value="<%= line.sku_id %>">
+                </td>
+
+                <td class="right"><b><%= line.qty %></b></td>
+
+                <td>
+                  <select name="lot_id">
+                    <option value="">(UNKNOWN LOT)</option>
+                    <% lots.forEach(l => { %>
+                      <option value="<%= l.id %>" <%= (prefill && Number(prefill.lot_id) === Number(l.id)) ? 'selected' : '' %>>
+                        <%= l.lot_number %><% if (l.expiration_date) { %> • exp <%= l.expiration_date %><% } %>
+                      </option>
+                    <% }) %>
+                  </select>
+                </td>
+
+                <td class="right">
+                  <input name="qty_units" type="number" step="0.01" min="0.01"
+                         value="<%= prefill ? prefill.qty_units : line.qty %>">
+                </td>
+
+                <td>
+                  <input name="note" placeholder="optional note" style="width:100%;" value="<%= prefill ? (prefill.note || '') : '' %>">
+                </td>
+              </tr>
+            <% }) %>
+          <% } %>
+        </tbody>
+      </table>
+
+      <div style="margin-top:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button type="submit">Save Audit Allocations</button>
+        <span class="muted">Only organic SKUs are saved. Use UNKNOWN LOT if you need to flag missing lot history.</span>
+      </div>
+    </form>
+  </div>
+<% } %>
+
+</body>
+</html>

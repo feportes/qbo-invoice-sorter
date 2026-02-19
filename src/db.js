@@ -12,6 +12,72 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+  // ==========================================================
+  // Lots helpers (for audit dropdowns)
+  // ==========================================================
+  listLotsForSku(skuId) {
+    return sqlite.prepare(`
+      SELECT l.*,
+             s.name AS sku_name
+      FROM lots l
+      JOIN skus s ON s.id = l.sku_id
+      WHERE l.sku_id=?
+      ORDER BY
+        CASE WHEN l.expiration_date IS NULL THEN 1 ELSE 0 END,
+        l.expiration_date ASC,
+        CASE WHEN l.production_date IS NULL THEN 1 ELSE 0 END,
+        l.production_date ASC,
+        l.lot_number COLLATE NOCASE ASC
+    `).all(Number(skuId));
+  },
+
+  // ==========================================================
+  // Audit allocations (DO NOT change inventory)
+  // ==========================================================
+  listAuditAllocations(invoiceId) {
+    return sqlite.prepare(`
+      SELECT a.*,
+             s.name AS sku_name,
+             s.unit_type AS unit_type,
+             lo.lot_number AS lot_number
+      FROM invoice_lot_audit_allocations a
+      JOIN skus s ON s.id = a.sku_id
+      LEFT JOIN lots lo ON lo.id = a.lot_id
+      WHERE a.qbo_invoice_id=?
+      ORDER BY a.id ASC
+    `).all(String(invoiceId));
+  },
+
+  replaceAuditAllocations({ invoiceId, txnDate, customerName, rows }) {
+    const tx = sqlite.transaction(() => {
+      sqlite.prepare(`DELETE FROM invoice_lot_audit_allocations WHERE qbo_invoice_id=?`)
+        .run(String(invoiceId));
+
+      const ins = sqlite.prepare(`
+        INSERT INTO invoice_lot_audit_allocations
+          (qbo_invoice_id, txn_date, customer_name, sku_id, lot_id, qty_units, method, note)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const r of rows) {
+        ins.run(
+          String(invoiceId),
+          txnDate ? String(txnDate) : null,
+          customerName ? String(customerName) : null,
+          Number(r.sku_id),
+          r.lot_id ? Number(r.lot_id) : null,
+          Number(r.qty_units),
+          String(r.method || 'MANUAL'),
+          r.note ? String(r.note) : null
+        );
+      }
+    });
+
+    tx();
+  },
+
+
   // Active SKUs only (for dropdowns like Add Pallet)
   listSkusActiveOnly() {
     return sqlite.prepare(`

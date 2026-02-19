@@ -199,6 +199,26 @@ export function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_invoice_allocations_invoice ON invoice_allocations(qbo_invoice_id);
   `); } catch {}
 
+  // ✅ Lot Audit Allocations (for organic inspection / historical invoices)
+  try { s.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_lot_audit_allocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      qbo_invoice_id TEXT NOT NULL,
+      txn_date TEXT,
+      customer_name TEXT,
+      sku_id INTEGER NOT NULL,
+      lot_id INTEGER,
+      qty_units REAL NOT NULL,
+      method TEXT NOT NULL DEFAULT 'MANUAL',  -- MANUAL | AUTO_SUGGEST
+      note TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_alloc_invoice ON invoice_lot_audit_allocations(qbo_invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_alloc_sku ON invoice_lot_audit_allocations(sku_id, lot_id);
+  `); } catch {}
+
+
   // ✅ Engine state tables (NEW)
   try { s.exec(`
     CREATE TABLE IF NOT EXISTS invoice_state (
