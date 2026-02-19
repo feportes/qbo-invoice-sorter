@@ -913,6 +913,137 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
   }
 });
 
+// ==========================================================
+// Inventory Audit: Assign lot numbers to previous sales (Organic only)
+// ==========================================================
+app.get('/inventory/audit', requireConnected, (req, res) => {
+  res.render('inventory_audit', {
+    msg: null,
+    invoiceId: '',
+    invoice: null,
+    organicLines: [],
+    lotsBySku: {},
+    existing: []
+  });
+});
+
+app.post('/inventory/audit/preview', requireConnected, async (req, res) => {
+  try {
+    const invoiceId = String(req.body.invoice_id || '').trim();
+    if (!invoiceId) throw new Error('Missing invoice id');
+
+    const conn = db.getConnectionOrThrow();
+    const oauthClient = getOAuthClient(conn);
+
+    const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
+    const invoice = invResp?.Invoice;
+    if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
+
+    // Build organic-only lines (based on SKU settings)
+    const lines = (invoice?.Line || [])
+      .filter(l => l?.DetailType === 'SalesItemLineDetail')
+      .map(l => {
+        const det = l.SalesItemLineDetail;
+        const qboItemId = det?.ItemRef?.value || null;
+        const qboName = det?.ItemRef?.name || null;
+        const qty = Number(det?.Qty || 0);
+        return { qboItemId, qboName, qty };
+      })
+      .filter(x => x.qboItemId && x.qty > 0);
+
+    const organicLines = [];
+    const lotsBySku = {};
+
+    for (const ln of lines) {
+      const sku = db.getSkuByQboItemId(ln.qboItemId);
+      if (!sku) continue;
+      if (!sku.is_organic) continue; // ✅ only organic SKUs
+
+      organicLines.push({
+        sku_id: sku.id,
+        sku_name: sku.name,
+        unit_type: sku.unit_type,
+        qboItemId: ln.qboItemId,
+        qboName: ln.qboName,
+        qty: ln.qty
+      });
+
+      if (!lotsBySku[String(sku.id)]) {
+        lotsBySku[String(sku.id)] = db.listLotsForSku(sku.id);
+      }
+    }
+
+    const existing = db.listAuditAllocations(invoiceId);
+
+    res.render('inventory_audit', {
+      msg: organicLines.length ? null : 'No organic SKUs found on this invoice (based on SKU settings).',
+      invoiceId,
+      invoice,
+      organicLines,
+      lotsBySku,
+      existing
+    });
+  } catch (e) {
+    res.status(400).render('inventory_audit', {
+      msg: e?.message || String(e),
+      invoiceId: '',
+      invoice: null,
+      organicLines: [],
+      lotsBySku: {},
+      existing: []
+    });
+  }
+});
+
+app.post('/inventory/audit/save', requireConnected, (req, res) => {
+  try {
+    const invoiceId = String(req.body.invoice_id || '').trim();
+    if (!invoiceId) throw new Error('Missing invoice id');
+
+    const txnDate = req.body.txn_date ? String(req.body.txn_date) : null;
+    const customerName = req.body.customer_name ? String(req.body.customer_name) : null;
+
+    const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
+    const skuArr = toArr(req.body.sku_id);
+    const lotArr = toArr(req.body.lot_id);
+    const qtyArr = toArr(req.body.qty_units);
+    const noteArr = toArr(req.body.note);
+
+    if (skuArr.length === 0) throw new Error('No rows submitted.');
+
+    const rows = [];
+    for (let i = 0; i < skuArr.length; i++) {
+      const sku_id = Number(skuArr[i]);
+      const lot_id_raw = lotArr[i];
+      const lot_id = (lot_id_raw === '' || lot_id_raw === null || lot_id_raw === undefined) ? null : Number(lot_id_raw);
+      const qty_units = Number(qtyArr[i]);
+
+      if (!sku_id) continue;
+      if (!Number.isFinite(qty_units) || qty_units <= 0) continue;
+
+      // ✅ safety: only allow organic SKUs
+      const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(sku_id);
+      if (!sku || !sku.is_organic) continue;
+
+      rows.push({
+        sku_id,
+        lot_id,
+        qty_units,
+        method: 'MANUAL',
+        note: noteArr[i] ? String(noteArr[i]) : null
+      });
+    }
+
+    db.replaceAuditAllocations({ invoiceId, txnDate, customerName, rows });
+
+    // Redirect back to the page
+    res.redirect('/inventory/audit');
+  } catch (e) {
+    res.status(500).send(`Audit save failed: ${e?.message || e}`);
+  }
+});
+
+
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
