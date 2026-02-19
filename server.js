@@ -390,30 +390,7 @@ function parsePackWeightListText(text) {
   return { doc_date, container_no, rows };
 }
 
-  // Example row (from your PDF):
-  // 06 ORGANIC SWEETENED ACAI SORBET 9KG 2008.99.20 BUCKET 282828-BB 720 6.480,00 6.901,20 25086017
-  const rowRe = /^(\d{2})\s+(.+?)\s+(\d{4}\.\d+)\s+([A-Z]+)\s+([A-Z0-9\-]+)\s+(\d+)\s+([\d\.,]+)\s+([\d\.,]+)\s+(\d+)$/i;
-
-  const rows = [];
-  for (const l of lines) {
-    const m = l.match(rowRe);
-    if (!m) continue;
-
-    rows.push({
-      line_no: Number(m[1]),
-      raw_product_name: m[2].trim(),
-      ncm: m[3],
-      package_type: m[4],
-      package_code: m[5],
-      qty_packages: Number(m[6]),
-      net_kg: parseBrazilNumber(m[7]),
-      gross_kg: parseBrazilNumber(m[8]),
-      lot_number: m[9]
-    });
-  }
-
-  return { doc_date, container_no, rows };
-}
+ 
 
 app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), async (req, res) => {
   try {
