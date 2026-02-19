@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Inbound Docs</title>
+  <style>
+    body { font-family: system-ui; margin:24px; max-width:1000px; }
+    .muted { color:#666; font-size:13px; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; }
+    th { background:#fafafa; }
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+  </style>
+</head>
+<body>
+  <h1>Inbound Docs</h1>
+  <% if (msg) { %><div class="card"><%= msg %></div><% } %>
+
+  <div class="card">
+    <h3>Upload Pack & Weight List (PDF)</h3>
+    <form method="POST" action="/inventory/inbound/upload" enctype="multipart/form-data">
+      <input type="file" name="pdf" accept="application/pdf" required />
+      <button type="submit">Upload</button>
+    </form>
+    <div class="muted" style="margin-top:8px;">
+      Upload each container’s pack/weight list. Then map line names → SKUs once; aliases auto-learn for next time.
+    </div>
+  </div>
+
+  <h3 style="margin-top:18px;">Uploaded</h3>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Date</th><th>Container</th><th>File</th><th></th></tr>
+    </thead>
+    <tbody>
+      <% if (!docs || docs.length === 0) { %>
+        <tr><td colspan="5" class="muted">No inbound docs yet.</td></tr>
+      <% } else { %>
+        <% docs.forEach(d => { %>
+          <tr>
+            <td class="muted"><%= d.id %></td>
+            <td><%= d.doc_date || '' %></td>
+            <td><%= d.container_no || '' %></td>
+            <td class="muted"><%= d.source_filename || '' %></td>
+            <td><a href="/inventory/inbound/<%= d.id %>">Open</a></td>
+          </tr>
+        <% }) %>
+      <% } %>
+    </tbody>
+  </table>
+</body>
+</html>

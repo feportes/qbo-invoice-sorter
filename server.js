@@ -1,3 +1,6 @@
+import multer from 'multer';
+import pdfParse from 'pdf-parse';
+
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -19,6 +22,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 }
+});
+
 
 ensureSchema();
 seedDefaults();
@@ -215,6 +224,138 @@ app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
     res.render('process_result', { result });
   } catch (e) {
     res.status(500).send(`Force process failed: ${e?.message || e}`);
+  }
+});
+
+// ==========================================================
+// Inbound Docs: upload pack/weight list (organic lot evidence)
+// ==========================================================
+app.get('/inventory/inbound', requireConnected, (req, res) => {
+  const docs = db.listInboundDocs();
+  res.render('inventory_inbound', { docs, msg: null });
+});
+
+function parseBrazilNumber(x) {
+  // "6.480,00" -> 6480.00
+  const s = String(x || '').trim();
+  if (!s) return null;
+  const norm = s.replace(/\./g, '').replace(',', '.');
+  const n = Number(norm);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parsePackWeightListText(text) {
+  const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+
+  let doc_date = null;
+  let container_no = null;
+
+  for (const l of lines) {
+    const mDate = l.match(/^DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+    if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
+
+    const mCont = l.match(/^CONTAINER\s+([A-Z0-9]+)/i);
+    if (mCont) container_no = mCont[1];
+  }
+
+  // Example row (from your PDF):
+  // 06 ORGANIC SWEETENED ACAI SORBET 9KG 2008.99.20 BUCKET 282828-BB 720 6.480,00 6.901,20 25086017
+  const rowRe = /^(\d{2})\s+(.+?)\s+(\d{4}\.\d+)\s+([A-Z]+)\s+([A-Z0-9\-]+)\s+(\d+)\s+([\d\.,]+)\s+([\d\.,]+)\s+(\d+)$/i;
+
+  const rows = [];
+  for (const l of lines) {
+    const m = l.match(rowRe);
+    if (!m) continue;
+
+    rows.push({
+      line_no: Number(m[1]),
+      raw_product_name: m[2].trim(),
+      ncm: m[3],
+      package_type: m[4],
+      package_code: m[5],
+      qty_packages: Number(m[6]),
+      net_kg: parseBrazilNumber(m[7]),
+      gross_kg: parseBrazilNumber(m[8]),
+      lot_number: m[9]
+    });
+  }
+
+  return { doc_date, container_no, rows };
+}
+
+app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) throw new Error('Missing PDF file');
+
+    const parsed = await pdfParse(req.file.buffer);
+    const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
+
+    const inboundDocId = db.createInboundDoc({
+      doc_date,
+      container_no,
+      source_filename: req.file.originalname,
+      notes: null
+    });
+
+    for (const r of rows) {
+      const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);
+      db.addInboundDocLine(inboundDocId, { ...r, sku_id: skuId });
+    }
+
+    res.redirect(`/inventory/inbound/${inboundDocId}`);
+  } catch (e) {
+    const docs = db.listInboundDocs();
+    res.status(400).render('inventory_inbound', { docs, msg: e?.message || String(e) });
+  }
+});
+
+app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
+  const doc = db.getInboundDoc(req.params.id);
+  const lines = db.listInboundDocLines(req.params.id);
+  const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
+  res.render('inventory_inbound_review', { doc, lines, skus, msg: null });
+});
+
+// ✅ Save mappings + auto-create lots + auto-save aliases
+app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
+  try {
+    const docId = Number(req.params.id);
+    const doc = db.getInboundDoc(docId);
+    if (!doc) throw new Error('Inbound doc not found');
+
+    const lineIds = Array.isArray(req.body.line_id) ? req.body.line_id : [req.body.line_id].filter(Boolean);
+    const skuIds  = Array.isArray(req.body.sku_id)  ? req.body.sku_id  : [req.body.sku_id].filter(Boolean);
+
+    // 1) Save line->SKU mappings
+    for (let i = 0; i < lineIds.length; i++) {
+      const lineId = Number(lineIds[i]);
+      const skuId = skuIds[i] ? Number(skuIds[i]) : null;
+      db.setInboundLineSku(lineId, skuId);
+    }
+
+    // 2) Reload lines to get raw names + lot numbers
+    const lines = db.listInboundDocLines(docId);
+
+    // 3) Auto-save aliases for mapped lines
+    for (const ln of lines) {
+      if (!ln.sku_id) continue;
+      if (!ln.raw_product_name) continue;
+      db.addSkuAlias({ sku_id: ln.sku_id, alias: ln.raw_product_name });
+    }
+
+    // 4) Create lots for mapped lines
+    for (const ln of lines) {
+      if (!ln.sku_id) continue;
+      if (!ln.lot_number) continue;
+      db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
+    }
+
+    const updatedLines = db.listInboundDocLines(docId);
+    const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
+    res.render('inventory_inbound_review', { doc, lines: updatedLines, skus, msg: 'Saved mappings + aliases + lots created.' });
+
+  } catch (e) {
+    res.status(500).send(`Apply inbound failed: ${e?.message || e}`);
   }
 });
 

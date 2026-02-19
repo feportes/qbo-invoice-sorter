@@ -2,6 +2,46 @@ import { db } from './db.js';
 
 export function ensureSchema() {
   const s = db.sqlite;
+sqlite.exec(`
+CREATE TABLE IF NOT EXISTS inbound_docs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_type TEXT NOT NULL DEFAULT 'PACK_WEIGHT_LIST',
+  doc_date TEXT NULL,              -- YYYY-MM-DD (parsed)
+  container_no TEXT NULL,
+  source_filename TEXT NULL,
+  uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  notes TEXT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inbound_doc_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  inbound_doc_id INTEGER NOT NULL,
+  line_no INTEGER NULL,
+
+  raw_product_name TEXT NULL,      -- exactly as PDF
+  package_type TEXT NULL,          -- BUCKET / BOX etc
+  package_code TEXT NULL,
+  ncm TEXT NULL,
+
+  qty_packages REAL NULL,
+  net_kg REAL NULL,
+  gross_kg REAL NULL,
+
+  lot_number TEXT NULL,            -- Batch N°
+  sku_id INTEGER NULL,             -- mapped later
+
+  FOREIGN KEY (inbound_doc_id) REFERENCES inbound_docs(id)
+);
+
+CREATE TABLE IF NOT EXISTS sku_aliases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sku_id INTEGER NOT NULL,
+  alias TEXT NOT NULL,
+  UNIQUE(sku_id, alias),
+  FOREIGN KEY (sku_id) REFERENCES skus(id)
+);
+`);
+
 
   s.exec(`
     CREATE TABLE IF NOT EXISTS connections (

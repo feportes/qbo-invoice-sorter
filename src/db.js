@@ -12,6 +12,114 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+createInboundDoc({ doc_date, container_no, source_filename, notes }) {
+  const r = sqlite.prepare(`
+    INSERT INTO inbound_docs (doc_date, container_no, source_filename, notes)
+    VALUES (?, ?, ?, ?)
+  `).run(doc_date || null, container_no || null, source_filename || null, notes || null);
+  return Number(r.lastInsertRowid);
+},
+
+addInboundDocLine(inbound_doc_id, line) {
+  sqlite.prepare(`
+    INSERT INTO inbound_doc_lines
+      (inbound_doc_id, line_no, raw_product_name, package_type, package_code, ncm,
+       qty_packages, net_kg, gross_kg, lot_number, sku_id)
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    Number(inbound_doc_id),
+    line.line_no ?? null,
+    line.raw_product_name ?? null,
+    line.package_type ?? null,
+    line.package_code ?? null,
+    line.ncm ?? null,
+    line.qty_packages ?? null,
+    line.net_kg ?? null,
+    line.gross_kg ?? null,
+    line.lot_number ?? null,
+    line.sku_id ?? null
+  );
+},
+
+getInboundDoc(id) {
+  return sqlite.prepare(`SELECT * FROM inbound_docs WHERE id=?`).get(Number(id));
+},
+
+listInboundDocs() {
+  return sqlite.prepare(`
+    SELECT * FROM inbound_docs
+    ORDER BY uploaded_at DESC, id DESC
+  `).all();
+},
+
+listInboundDocLines(docId) {
+  return sqlite.prepare(`
+    SELECT l.*,
+           s.name AS sku_name
+    FROM inbound_doc_lines l
+    LEFT JOIN skus s ON s.id = l.sku_id
+    WHERE l.inbound_doc_id=?
+    ORDER BY COALESCE(l.line_no, l.id) ASC
+  `).all(Number(docId));
+},
+
+addSkuAlias({ sku_id, alias }) {
+  const a = String(alias || '').trim();
+  if (!a) return;
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO sku_aliases (sku_id, alias)
+    VALUES (?, ?)
+  `).run(Number(sku_id), a);
+},
+
+findSkuIdByAliasOrName(rawName) {
+  const nm = String(rawName || '').trim();
+  if (!nm) return null;
+
+  const a = sqlite.prepare(`
+    SELECT sku_id FROM sku_aliases
+    WHERE lower(alias)=lower(?)
+    LIMIT 1
+  `).get(nm);
+  if (a?.sku_id) return Number(a.sku_id);
+
+  const s = sqlite.prepare(`
+    SELECT id FROM skus
+    WHERE lower(name)=lower(?)
+    LIMIT 1
+  `).get(nm);
+  if (s?.id) return Number(s.id);
+
+  return null;
+},
+
+setInboundLineSku(lineId, skuId) {
+  sqlite.prepare(`UPDATE inbound_doc_lines SET sku_id=? WHERE id=?`)
+    .run(skuId ? Number(skuId) : null, Number(lineId));
+},
+
+upsertLotForSku({ sku_id, lot_number, production_date = null, expiration_date = null }) {
+  const lotNum = String(lot_number || '').trim();
+  if (!lotNum) return null;
+
+  const lot = sqlite.prepare(`
+    SELECT * FROM lots
+    WHERE sku_id=? AND lot_number=?
+    LIMIT 1
+  `).get(Number(sku_id), lotNum);
+
+  if (lot?.id) return Number(lot.id);
+
+  const r = sqlite.prepare(`
+    INSERT INTO lots (sku_id, lot_number, production_date, expiration_date)
+    VALUES (?, ?, ?, ?)
+  `).run(Number(sku_id), lotNum, production_date, expiration_date);
+
+  return Number(r.lastInsertRowid);
+},
+
+
 // ==========================================================
 // Invoice SKU line index (audit search)
 // ==========================================================
