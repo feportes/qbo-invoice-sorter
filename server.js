@@ -252,98 +252,70 @@ function parseBrazilNumber(x) {
 }
 
 function parsePackWeightListText(text) {
-  const lines = String(text || '')
-    .split('\n')
-    .map(l => l.trim())
-    .filter(Boolean);
+  const raw = String(text || '');
 
+  // Flatten all whitespace so line breaks / wraps don’t matter
+  const flat = raw.replace(/\s+/g, ' ').trim();
+
+  // Extract header fields
   let doc_date = null;
   let container_no = null;
 
-  // Buffer for wrapped product names (lines that appear BEFORE the numbered row)
-  let pendingDesc = '';
+  const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+  if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-  // A) Normal: "06 ORGANIC SWEETENED ACAI SORBET 9KG 2008.992140 BUCKET 282828-BB 720 6.480,00 6.901,20 25086017"
-  const rowFull =
-    /^(\d{2})\s+(.+?)\s+(\d{4}\.\d{4,})\s+([A-Z]+)\s+([A-Z0-9\-]+)\s+(\d+(?:[.,]\d+)?)\s+([\d\.,]+)\s+([\d\.,]+)\s+(\d+)$/i;
+  const mCont = flat.match(/CONTAINER\s+([A-Z0-9]+)/i);
+  if (mCont) container_no = mCont[1];
 
-  // B) Wrapped-name: "05 2009.897065 BOX 232323 336 2.016,00 2.370,82 25013038"
-  // (product name is in pendingDesc)
-  const rowNoName =
-    /^(\d{2})\s+(\d{4}\.\d{4,})\s+([A-Z]+)\s+([A-Z0-9\-]+)\s+(\d+(?:[.,]\d+)?)\s+([\d\.,]+)\s+([\d\.,]+)\s+(\d+)$/i;
+  // Row pattern:
+  // 01 PITAYA BLEND 9.5KG 2008.992140 BUCKET 292929-0 139 1.320,50 1.406,33 25223008
+  // Also handles: 05ORGANIC ... 100G2009.897065 BOX 232323 336 2.016,00 2.370,82 25013038
+  const rowRe = /(\d{2})\s*([A-ZÀ-ÿ0-9%'.\-\/ ]+?)\s*(\d{4}\.\d{4,})\s+([A-Z]+)\s+([A-Z0-9\-]+)\s+(\d+(?:[.,]\d+)?)\s+([\d\.,]+)\s+([\d\.,]+)\s+(\d{6,})/gi;
 
   const rows = [];
+  let m;
 
-  for (const l of lines) {
-    // Header fields
-    const mDate = l.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
-    if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
+  while ((m = rowRe.exec(flat)) !== null) {
+    const line_no = Number(m[1]);
+    const raw_product_name = String(m[2] || '').trim();
+    const ncm = String(m[3] || '').trim();
+    const package_type = String(m[4] || '').trim();
+    const package_code = String(m[5] || '').trim();
+    const qty_packages = Number(String(m[6]).replace(',', '.'));
+    const net_kg = parseBrazilNumber(m[7]);
+    const gross_kg = parseBrazilNumber(m[8]);
+    const lot_number = String(m[9] || '').trim();
 
-    const mCont = l.match(/CONTAINER\s+([A-Z0-9]+)/i);
-    if (mCont) container_no = mCont[1];
+    // Ignore junk rows like "09 10 11..." because they won’t match this pattern anyway,
+    // but keep a safety check:
+    if (!raw_product_name || !ncm || !lot_number) continue;
 
-    // Skip obvious header-ish lines
-    if (
-      /^Pack and Weight List/i.test(l) ||
-      /^Costumer:/i.test(l) ||
-      /^Country:/i.test(l) ||
-      /^Total Package:/i.test(l) ||
-      /^Total Net Weight:/i.test(l) ||
-      /^Gross Weight:/i.test(l) ||
-      /^Net Weight/i.test(l) ||
-      /^Product\s+NCM/i.test(l) ||
-      /^\(Kg\)/i.test(l)
-    ) {
-      continue;
-    }
-
-    // Try normal full row
-    let m = l.match(rowFull);
-    if (m) {
-      pendingDesc = '';
-      rows.push({
-        line_no: Number(m[1]),
-        raw_product_name: m[2].trim(),
-        ncm: m[3],
-        package_type: m[4],
-        package_code: m[5],
-        qty_packages: Number(String(m[6]).replace(',', '.')),
-        net_kg: parseBrazilNumber(m[7]),
-        gross_kg: parseBrazilNumber(m[8]),
-        lot_number: m[9]
-      });
-      continue;
-    }
-
-    // Try wrapped-name row
-    m = l.match(rowNoName);
-    if (m) {
-      const name = pendingDesc.trim();
-      pendingDesc = '';
-      rows.push({
-        line_no: Number(m[1]),
-        raw_product_name: name || '(UNPARSED PRODUCT NAME)',
-        ncm: m[2],
-        package_type: m[3],
-        package_code: m[4],
-        qty_packages: Number(String(m[5]).replace(',', '.')),
-        net_kg: parseBrazilNumber(m[6]),
-        gross_kg: parseBrazilNumber(m[7]),
-        lot_number: m[8]
-      });
-      continue;
-    }
-
-    // Otherwise it may be a product-name continuation line
-    if (/[A-Z]/i.test(l) && !/^\d{2}$/.test(l)) {
-      pendingDesc = pendingDesc ? `${pendingDesc} ${l}` : l;
-    }
+    rows.push({
+      line_no,
+      raw_product_name,
+      ncm,
+      package_type,
+      package_code,
+      qty_packages,
+      net_kg,
+      gross_kg,
+      lot_number
+    });
   }
 
   return { doc_date, container_no, rows };
 }
 
- 
+
+ app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
+  try {
+    db.deleteInboundDoc(req.params.id);
+    res.redirect('/inventory/inbound');
+  } catch (e) {
+    res.status(500).send(`Delete inbound doc failed: ${e?.message || e}`);
+  }
+});
+
  
 
 app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), async (req, res) => {
@@ -353,12 +325,13 @@ app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), as
     const parsed = await pdfParse(req.file.buffer);
     const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
 
-    const inboundDocId = db.createInboundDoc({
-      doc_date,
-      container_no,
-      source_filename: req.file.originalname,
-      notes: null
-    });
+const inboundDocId = db.createInboundDoc({
+  doc_date,
+  container_no,
+  source_filename: req.file.originalname,
+  notes: `parsed_rows=${rows.length}`
+});
+
 
     for (const r of rows) {
       const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);

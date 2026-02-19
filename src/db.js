@@ -12,6 +12,16 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+deleteInboundDoc(docId) {
+  const id = Number(docId);
+  const tx = sqlite.transaction(() => {
+    sqlite.prepare(`DELETE FROM inbound_doc_lines WHERE inbound_doc_id=?`).run(id);
+    sqlite.prepare(`DELETE FROM inbound_docs WHERE id=?`).run(id);
+  });
+  tx();
+},
+
+
 createInboundDoc({ doc_date, container_no, source_filename, notes }) {
   const r = sqlite.prepare(`
     INSERT INTO inbound_docs (doc_date, container_no, source_filename, notes)
