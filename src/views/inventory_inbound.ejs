@@ -42,7 +42,14 @@
             <td><%= d.doc_date || '' %></td>
             <td><%= d.container_no || '' %></td>
             <td class="muted"><%= d.source_filename || '' %></td>
-            <td><a href="/inventory/inbound/<%= d.id %>">Open</a></td>
+            <td style="display:flex; gap:10px; align-items:center;">
+  <a href="/inventory/inbound/<%= d.id %>">Open</a>
+  <form method="POST" action="/inventory/inbound/<%= d.id %>/delete"
+        onsubmit="return confirm('Delete inbound doc #<%= d.id %>? This removes parsed lines too.');">
+    <button type="submit">Delete</button>
+  </form>
+</td>
+
           </tr>
         <% }) %>
       <% } %>
