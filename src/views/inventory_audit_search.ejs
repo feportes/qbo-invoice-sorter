@@ -31,6 +31,15 @@
 <div class="card">
   <% if (msg) { %><div class="muted"><b><%= msg %></b></div><% } %>
 
+<form method="POST" action="/inventory/audit/auto-assign-all" style="display:inline-block; margin-left:8px;">
+  <input type="hidden" name="start_date" value="<%= startDate %>"/>
+  <input type="hidden" name="end_date" value="<%= endDate %>"/>
+  <button type="submit" onclick="return confirm('Auto-assign lots for ALL organic SKUs in this date range?')">
+    Auto Assign ALL Organic SKUs
+  </button>
+</form>
+
+
   <form method="get" action="/inventory/audit/search" class="row" style="margin-top:10px;">
     <label class="muted"><b>Organic SKU</b></label>
     <select name="sku" required>

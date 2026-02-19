@@ -315,33 +315,46 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   },
 
   replaceAuditAllocations({ invoiceId, txnDate, customerName, rows }) {
-    const tx = sqlite.transaction(() => {
-      sqlite.prepare(`DELETE FROM invoice_lot_audit_allocations WHERE qbo_invoice_id=?`)
-        .run(String(invoiceId));
+  const tx = sqlite.transaction(() => {
+    // ✅ Only delete allocations for the SKU(s) being replaced,
+    // NOT the entire invoice (prevents wiping other SKU allocations).
+    const skuIds = [...new Set((rows || []).map(r => Number(r.sku_id)).filter(Boolean))];
 
-      const ins = sqlite.prepare(`
-        INSERT INTO invoice_lot_audit_allocations
-          (qbo_invoice_id, txn_date, customer_name, sku_id, lot_id, qty_units, method, note)
-        VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
+    if (skuIds.length === 0) {
+      return;
+    }
 
-      for (const r of rows) {
-        ins.run(
-          String(invoiceId),
-          txnDate ? String(txnDate) : null,
-          customerName ? String(customerName) : null,
-          Number(r.sku_id),
-          r.lot_id ? Number(r.lot_id) : null,
-          Number(r.qty_units),
-          String(r.method || 'MANUAL'),
-          r.note ? String(r.note) : null
-        );
-      }
-    });
+    const placeholders = skuIds.map(() => '?').join(',');
+    sqlite.prepare(`
+      DELETE FROM invoice_lot_audit_allocations
+      WHERE qbo_invoice_id=?
+        AND sku_id IN (${placeholders})
+    `).run(String(invoiceId), ...skuIds);
 
-    tx();
-  },
+    const ins = sqlite.prepare(`
+      INSERT INTO invoice_lot_audit_allocations
+        (qbo_invoice_id, txn_date, customer_name, sku_id, lot_id, qty_units, method, note)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const r of rows) {
+      ins.run(
+        String(invoiceId),
+        txnDate ? String(txnDate) : null,
+        customerName ? String(customerName) : null,
+        Number(r.sku_id),
+        r.lot_id ? Number(r.lot_id) : null,
+        Number(r.qty_units),
+        String(r.method || 'MANUAL'),
+        r.note ? String(r.note) : null
+      );
+    }
+  });
+
+  tx();
+},
+
 
 
   // Active SKUs only (for dropdowns like Add Pallet)

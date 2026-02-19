@@ -1495,6 +1495,87 @@ app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
 });
 
 // ==========================================================
+// Auto-assign lots for ALL organic SKUs (unassigned only)
+// ==========================================================
+app.post('/inventory/audit/auto-assign-all', requireConnected, (req, res) => {
+  try {
+    const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
+    const endDate = String(req.body.end_date || '').trim() || null;
+
+    const skus = db.sqlite.prepare(`
+      SELECT id, name
+      FROM skus
+      WHERE is_organic=1 AND active=1
+      ORDER BY name COLLATE NOCASE
+    `).all();
+
+    let totalSkus = skus.length;
+    let totalAssigned = 0;
+    let totalUnknown = 0;
+    let totalSkipped = 0;
+
+    for (const sku of skus) {
+      const skuId = Number(sku.id);
+
+      const invs = db.sqlite.prepare(`
+        SELECT
+          qbo_invoice_id,
+          MAX(txn_date) AS txn_date,
+          MAX(customer_name) AS customer_name,
+          SUM(qty_units) AS qty_units
+        FROM invoice_sku_lines
+        WHERE sku_id=?
+          AND (? IS NULL OR txn_date >= ?)
+          AND (? IS NULL OR txn_date <= ?)
+        GROUP BY qbo_invoice_id
+        ORDER BY txn_date ASC
+      `).all(
+        skuId,
+        startDate || null, startDate || null,
+        endDate || null, endDate || null
+      );
+
+      for (const inv of invs) {
+        const invoiceId = String(inv.qbo_invoice_id);
+        const txnDate = inv.txn_date ? String(inv.txn_date) : null;
+
+        // If already assigned for this invoice+SKU, skip.
+        if (db.hasAuditAllocationForInvoiceSku(invoiceId, skuId)) {
+          totalSkipped++;
+          continue;
+        }
+
+        const lotId = txnDate ? db.getSuggestedLotForSkuOnDate(skuId, txnDate) : null;
+        if (!lotId) totalUnknown++;
+
+        db.replaceAuditAllocations({
+          invoiceId,
+          txnDate,
+          customerName: inv.customer_name || null,
+          rows: [{
+            sku_id: skuId,
+            lot_id: lotId,
+            qty_units: Number(inv.qty_units || 0),
+            method: 'AUTO_SUGGEST',
+            note: lotId ? 'Auto-suggested by date' : 'Auto-suggest failed: UNKNOWN LOT'
+          }]
+        });
+
+        totalAssigned++;
+      }
+    }
+
+    // Send user back to search with a status message
+    const msg = `Auto-assign ALL complete: skus=${totalSkus}, assigned=${totalAssigned}, unknown=${totalUnknown}, skipped(existing)=${totalSkipped}.`;
+    res.redirect(`/inventory/audit/search?start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(msg)}`);
+
+  } catch (e) {
+    res.status(500).send(`Auto-assign ALL failed: ${e?.message || e}`);
+  }
+});
+
+
+// ==========================================================
 // Master printable report (ALL organic SKUs + lots)
 // ==========================================================
 app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
