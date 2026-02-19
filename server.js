@@ -252,18 +252,96 @@ function parseBrazilNumber(x) {
 }
 
 function parsePackWeightListText(text) {
-  const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const lines = String(text || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
 
   let doc_date = null;
   let container_no = null;
 
+  // Buffer for wrapped product names (lines that appear BEFORE the numbered row)
+  let pendingDesc = '';
+
+  // Row patterns:
+  // A) Normal: "06 ORGANIC SWEETENED ACAI SORBET 9KG 2008.992140 BUCKET 282828-BB 720 6.480,00 6.901,20 25086017"
+  const rowFull = /^(\d{2})\s+(.+?)\s+(\d{4}\.\d{4,})\s+([A-Z]+)\s+([A-Z0-9\-]+)\s+(\d+(?:[.,]\d+)?)\s+([\d\.,]+)\s+([\d\.,]+)\s+(\d+)$/i;
+
+  // B) Wrapped name case: "05 2009.897065 BOX 232323 336 2.016,00 2.370,82 25013038"
+  // (product name is in pendingDesc)
+  const rowNoName = /^(\d{2})\s+(\d{4}\.\d{4,})\s+([A-Z]+)\s+([A-Z0-9\-]+)\s+(\d+(?:[.,]\d+)?)\s+([\d\.,]+)\s+([\d\.,]+)\s+(\d+)$/i;
+
+  const rows = [];
+
   for (const l of lines) {
-    const mDate = l.match(/^DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+    // Header fields
+    const mDate = l.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
     if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-    const mCont = l.match(/^CONTAINER\s+([A-Z0-9]+)/i);
+    const mCont = l.match(/CONTAINER\s+([A-Z0-9]+)/i);
     if (mCont) container_no = mCont[1];
+
+    // Skip obvious header lines
+    if (
+      /^Pack and Weight List/i.test(l) ||
+      /^Costumer:/i.test(l) ||
+      /^Country:/i.test(l) ||
+      /^Total Package:/i.test(l) ||
+      /^Total Net Weight:/i.test(l) ||
+      /^Gross Weight:/i.test(l) ||
+      /^Net Weight/i.test(l) ||
+      /^Product\s+NCM/i.test(l) ||
+      /^\(Kg\)/i.test(l)
+    ) {
+      continue;
+    }
+
+    // Try normal full row
+    let m = l.match(rowFull);
+    if (m) {
+      pendingDesc = ''; // reset buffer when a clean row is parsed
+      rows.push({
+        line_no: Number(m[1]),
+        raw_product_name: m[2].trim(),
+        ncm: m[3],
+        package_type: m[4],
+        package_code: m[5],
+        qty_packages: Number(String(m[6]).replace(',', '.')),
+        net_kg: parseBrazilNumber(m[7]),
+        gross_kg: parseBrazilNumber(m[8]),
+        lot_number: m[9]
+      });
+      continue;
+    }
+
+    // Try wrapped-name row (no product on this line)
+    m = l.match(rowNoName);
+    if (m) {
+      const name = pendingDesc.trim();
+      pendingDesc = ''; // consume buffer
+      rows.push({
+        line_no: Number(m[1]),
+        raw_product_name: name || '(UNPARSED PRODUCT NAME)',
+        ncm: m[2],
+        package_type: m[3],
+        package_code: m[4],
+        qty_packages: Number(String(m[5]).replace(',', '.')),
+        net_kg: parseBrazilNumber(m[6]),
+        gross_kg: parseBrazilNumber(m[7]),
+        lot_number: m[8]
+      });
+      continue;
+    }
+
+    // If it’s not a row, it might be a wrapped product name line.
+    // Heuristic: contains letters, not just a standalone number like "09".
+    if (/[A-Z]/i.test(l) && !/^\d{2}$/.test(l)) {
+      pendingDesc = pendingDesc ? `${pendingDesc} ${l}` : l;
+    }
   }
+
+  return { doc_date, container_no, rows };
+}
 
   // Example row (from your PDF):
   // 06 ORGANIC SWEETENED ACAI SORBET 9KG 2008.99.20 BUCKET 282828-BB 720 6.480,00 6.901,20 25086017
