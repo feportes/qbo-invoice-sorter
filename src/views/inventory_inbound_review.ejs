@@ -59,12 +59,16 @@
               <td class="right"><%= (ln.qty_packages ?? '') %></td>
               <td class="right"><%= (ln.net_kg ?? '') %></td>
               <td class="right"><%= (ln.gross_kg ?? '') %></td>
-              <td style="display:flex; gap:10px; align-items:center;">
-  <a href="/inventory/inbound/<%= d.id %>">Open</a>
-  <form method="POST" action="/inventory/inbound/<%= d.id %>/delete" onsubmit="return confirm('Delete inbound doc #<%= d.id %>? This removes the parsed lines too.');">
-    <button type="submit">Delete</button>
-  </form>
+              <td>
+  <input type="hidden" name="line_id" value="<%= ln.id %>"/>
+  <select name="sku_id">
+    <option value="">-- not mapped --</option>
+    <% skus.forEach(s => { %>
+      <option value="<%= s.id %>" <%= (ln.sku_id == s.id ? 'selected' : '') %>><%= s.name %></option>
+    <% }) %>
+  </select>
 </td>
+
 
                 <input type="hidden" name="line_id" value="<%= ln.id %>"/>
                 <select name="sku_id">
