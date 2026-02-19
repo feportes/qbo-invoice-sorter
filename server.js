@@ -2,8 +2,8 @@ import multer from 'multer';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
-// ✅ Robust loader for pdf-parse across versions/ESM/CJS shapes
-const pdfParseMod = require('pdf-parse');
+const pdfParse = require('pdf-parse'); // ✅ v1.1.1 exports a function
+
 
 let pdfParse =
   (typeof pdfParseMod === 'function') ? pdfParseMod :
