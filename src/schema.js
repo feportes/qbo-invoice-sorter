@@ -2,7 +2,7 @@ import { db } from './db.js';
 
 export function ensureSchema() {
   const s = db.sqlite;
-sqlite.exec(`
+s.exec(`
 CREATE TABLE IF NOT EXISTS inbound_docs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   doc_type TEXT NOT NULL DEFAULT 'PACK_WEIGHT_LIST',
