@@ -253,8 +253,6 @@ function parseBrazilNumber(x) {
 
 function parsePackWeightListText(text) {
   const raw = String(text || '');
-
-  // Flatten whitespace so wrapping doesn't matter
   const flat = raw.replace(/\s+/g, ' ').trim();
 
   // DATE
@@ -262,56 +260,57 @@ function parsePackWeightListText(text) {
   const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-  // CONTAINER: look anywhere for 4 letters + 7 digits (MSDU9803683, TTNU8744624 etc)
+  // CONTAINER anywhere (MSDU9803683 etc)
   let container_no = null;
   const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
   if (mContAny) container_no = mContAny[1];
 
-  // ROW REGEX — handles:
-  // - line number glued to name (02PASTEURIZED...)
-  // - NCM as 8 digits (20098990) OR dotted (2008.99.2140)
-  // - package code like 232323 OR 282828-BB OR 212121-IQF OR 242424-14
-  // - glued code+qty (2323231681.008,00)
-  // - glued net+gross (4.842,005.694,19)
-  //
-  // Groups:
-  // 1=line, 2=name, 3=ncm, 4=packageType, 5=code, 6=qty, 7=net, 8=gross, 9=batch
- // Capture qty+net as a single glued chunk, then gross, then batch.
-// qty+net examples: "1681.008,00"  "8074.842,00"  "33198,00"  "72012.960,00"
-const rowRe =
-  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\.,]+?)\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(\d{6,})/gi;
+  // Row capture:
+  // line + name + NCM + package type + code + (tail chunk) + batch
+  // Tail chunk may be glued: 2323231681.008,00 1.185,41
+  const rowRe =
+    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
 
+  // brazil number like 1.008,00 or 232,85 or 12.960,00
+  const brNumRe = /(\d{1,3}(?:\.\d{3})*,\d{2})/g;
 
   const rows = [];
-let m;
+  let m;
 
-const netRegex = /[0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}$/;
+  while ((m = rowRe.exec(flat)) !== null) {
+    const line_no = Number(m[1]);
+    const raw_product_name = String(m[2] || '').trim();
+    const ncm = String(m[3] || '').trim();
+    const package_type = String(m[4] || '').trim();
+    const package_code = String(m[5] || '').trim();
+    const tail = String(m[6] || '').trim();    // contains qty + net + gross (maybe glued)
+    const lot_number = String(m[7] || '').trim();
 
-while ((m = rowRe.exec(flat)) !== null) {
-  const qtyNetGlue = String(m[6] || '').trim();     // e.g. "33198,00" or "1681.008,00"
-  const grossStr = String(m[7] || '').trim();       // e.g. "232,85"
-  const batch = String(m[8] || '').trim();
+    // Extract all brazil numbers from tail: first is NET, second is GROSS (if present)
+    const nums = tail.match(brNumRe) || [];
+    if (nums.length === 0) continue;
 
-  const netMatch = qtyNetGlue.match(netRegex);
-  if (!netMatch) continue;
+    const netStr = nums[0];
+    const grossStr = nums[1] || null;
 
-  const netStr = netMatch[0];                       // last "number,dd" part = NET
-  const qtyStrRaw = qtyNetGlue.slice(0, -netStr.length); // leftover = QTY (may include dots)
-  const qtyDigits = qtyStrRaw.replace(/[^\d]/g, '');      // keep digits only
-  const qty = qtyDigits ? Number(qtyDigits) : null;
+    // Qty = digits BEFORE the first brazil number starts
+    const idxFirstNum = tail.indexOf(netStr);
+    const qtyPart = idxFirstNum >= 0 ? tail.slice(0, idxFirstNum) : '';
+    const qtyDigits = qtyPart.replace(/[^\d]/g, ''); // remove dots/spaces/etc
+    const qty_packages = qtyDigits ? Number(qtyDigits) : null;
 
-  rows.push({
-    line_no: Number(m[1]),
-    raw_product_name: String(m[2] || '').trim(),
-    ncm: String(m[3] || '').trim(),
-    package_type: String(m[4] || '').trim(),
-    package_code: String(m[5] || '').trim(),
-    qty_packages: qty,
-    net_kg: parseBrazilNumber(netStr),
-    gross_kg: parseBrazilNumber(grossStr),
-    lot_number: batch
-  });
-}
+    rows.push({
+      line_no,
+      raw_product_name,
+      ncm,
+      package_type,
+      package_code,
+      qty_packages,
+      net_kg: parseBrazilNumber(netStr),
+      gross_kg: grossStr ? parseBrazilNumber(grossStr) : null,
+      lot_number
+    });
+  }
 
   return { doc_date, container_no, rows };
 }
