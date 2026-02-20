@@ -277,7 +277,7 @@ function parsePackWeightListText(text) {
   // Groups:
   // 1=line, 2=name, 3=ncm, 4=packageType, 5=code, 6=qty, 7=net, 8=gross, 9=batch
   const rowRe =
-  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9]{1,6}?)(?=([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}))\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(\d{6,})/gi;
+  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*(\d{1,6})(?=\s*[0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(\d{6,})/gi;
 
 
 
@@ -291,10 +291,10 @@ function parsePackWeightListText(text) {
   ncm: String(m[3] || '').trim(),
   package_type: String(m[4] || '').trim(),
   package_code: String(m[5] || '').trim(),
-  qty_packages: Number(m[6]),        // ✅ 168 / 807 / 33 / 101 / 119 / 720
-  net_kg: parseBrazilNumber(m[8]),   // ✅ 1.008,00 etc  (m[7] is lookahead helper)
-  gross_kg: parseBrazilNumber(m[9]),
-  lot_number: String(m[10] || '').trim() // ✅ 24035005 etc (Batch N°)
+  qty_packages: Number(m[6]),      // ✅ 168 / 807 / 33 / 101 / 119 / 720
+  net_kg: parseBrazilNumber(m[7]), // ✅ 1.008,00 -> 1008
+  gross_kg: parseBrazilNumber(m[8]),
+  lot_number: String(m[9] || '').trim()
 });
 
 
