@@ -7,11 +7,19 @@
     body { font-family: system-ui; margin:24px; max-width:1100px; }
     .muted { color:#666; font-size:13px; }
     table { width:100%; border-collapse:collapse; margin-top:12px; }
-    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; }
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; vertical-align: top; }
     th { background:#fafafa; }
     .q { font-family: ui-monospace, monospace; font-size:12px; }
     .right { text-align:right; }
     .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+
+    .sku-filter { width: 100%; padding: 6px 8px; margin-bottom: 6px; box-sizing: border-box; }
+    .sku-select { width: 100%; padding: 6px 8px; box-sizing: border-box; }
+
+    @media print {
+      .no-print { display:none; }
+      body { margin: 0; }
+    }
   </style>
 </head>
 <body>
@@ -44,14 +52,18 @@
           <th class="right">Packages</th>
           <th class="right">Net kg</th>
           <th class="right">Gross kg</th>
-          <th>Map to SKU</th>
+          <th style="min-width: 320px;">Map to SKU</th>
         </tr>
       </thead>
       <tbody>
         <% if (!lines || lines.length === 0) { %>
-          <tr><td colspan="7" class="muted">No parsed lines were found for this PDF. (Parsing regex may need adjustment.)</td></tr>
+          <tr>
+            <td colspan="7" class="muted">
+              No parsed lines were found for this PDF. (Parsing regex may need adjustment.)
+            </td>
+          </tr>
         <% } else { %>
-          <% lines.forEach(ln => { %>
+          <% lines.forEach((ln, idx) => { %>
             <tr>
               <td class="q"><%= ln.line_no ?? '' %></td>
               <td><%= ln.raw_product_name || '' %></td>
@@ -59,24 +71,33 @@
               <td class="right"><%= (ln.qty_packages ?? '') %></td>
               <td class="right"><%= (ln.net_kg ?? '') %></td>
               <td class="right"><%= (ln.gross_kg ?? '') %></td>
+
               <td>
-  <input type="hidden" name="line_id" value="<%= ln.id %>"/>
-  <select name="sku_id">
-    <option value="">-- not mapped --</option>
-    <% skus.forEach(s => { %>
-      <option value="<%= s.id %>" <%= (ln.sku_id == s.id ? 'selected' : '') %>><%= s.name %></option>
-    <% }) %>
-  </select>
-</td>
-
-
+                <!-- This is what gets submitted -->
                 <input type="hidden" name="line_id" value="<%= ln.id %>"/>
-                <select name="sku_id">
+
+                <!-- Search box to filter the select -->
+                <input
+                  type="text"
+                  class="sku-filter"
+                  placeholder="Type to search SKU…"
+                  data-select-id="sku_select_<%= idx %>"
+                />
+
+                <!-- The actual select submitted to server -->
+                <select id="sku_select_<%= idx %>" name="sku_id" class="sku-select">
                   <option value="">-- not mapped --</option>
                   <% skus.forEach(s => { %>
-                    <option value="<%= s.id %>" <%= (ln.sku_id == s.id ? 'selected' : '') %>><%= s.name %></option>
+                    <option
+                      value="<%= s.id %>"
+                      <%= (ln.sku_id == s.id ? 'selected' : '') %>
+                    ><%= s.name %></option>
                   <% }) %>
                 </select>
+
+                <div class="muted" style="margin-top:6px;">
+                  Tip: type “IQF”, “18KG”, “unsweet”, etc.
+                </div>
               </td>
             </tr>
           <% }) %>
@@ -91,5 +112,55 @@
       </div>
     </div>
   </form>
+
+  <script>
+    // Simple client-side filtering of <select> options per row.
+    // No libraries needed.
+    (function () {
+      function normalize(s) {
+        return (s || '').toString().toLowerCase().trim();
+      }
+
+      document.querySelectorAll('.sku-filter').forEach(input => {
+        const selectId = input.getAttribute('data-select-id');
+        const select = document.getElementById(selectId);
+        if (!select) return;
+
+        // cache original options so we can restore after filtering
+        const originalOptions = Array.from(select.options).map(o => ({
+          value: o.value,
+          text: o.text,
+          selected: o.selected
+        }));
+
+        function applyFilter() {
+          const q = normalize(input.value);
+
+          // Keep current selection value
+          const currentValue = select.value;
+
+          // Rebuild options
+          select.innerHTML = '';
+          for (const opt of originalOptions) {
+            // Always include "-- not mapped --"
+            if (!opt.value) {
+              const o = new Option(opt.text, opt.value, false, currentValue === opt.value);
+              select.add(o);
+              continue;
+            }
+
+            if (!q || normalize(opt.text).includes(q)) {
+              const o = new Option(opt.text, opt.value, false, currentValue === opt.value);
+              select.add(o);
+            }
+          }
+        }
+
+        input.addEventListener('input', applyFilter);
+        // Optional: if you click into box, show all first
+        input.addEventListener('focus', applyFilter);
+      });
+    })();
+  </script>
 </body>
 </html>
