@@ -268,11 +268,62 @@ function parsePackWeightListText(text) {
   // Row capture:
   // line + name + NCM + package type + code + (tail chunk) + batch
   // Tail chunk may be glued: 2323231681.008,00 1.185,41
+// Row capture: everything after code until Batch (tail contains qty + net + gross, sometimes glued)
 const rowRe =
-  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\., ]+?)\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(\d{6,})/gi;
-  // brazil number like 1.008,00 or 232,85 or 12.960,00
+  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
 
- const brNumRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
+// Helper: extract a brazil number ending at a given comma+2dec index
+function extractBrazilNumEndingAt(s, commaPos) {
+  // commaPos points to the comma in ",dd"
+  const end = commaPos + 3; // include ",dd"
+  let start = commaPos - 1;
+  while (start >= 0 && (/[0-9.]/.test(s[start]))) start--;
+  start++;
+  return s.slice(start, end);
+}
+
+// Helper: split qty + net when they are glued like "1681.008,00" or "72012.960,00"
+function splitQtyAndNet(gluedNetStr) {
+  // gluedNetStr looks like "1681.008,00" (qty=168, net=1.008,00)
+  // or "33198,00" (qty=33, net=198,00)
+  const parts = gluedNetStr.split(',');
+  if (parts.length !== 2) return null;
+  const left = parts[0];     // e.g. "1681.008" or "33198"
+  const dec = parts[1];      // "00"
+
+  // if left has no dot, net is last 1-3 digits, qty is the rest (best effort)
+  if (!left.includes('.')) {
+    // try k=1..3 for net-leading length
+    for (let k = 3; k >= 1; k--) {
+      if (left.length <= k) continue;
+      const qty = left.slice(0, -k);
+      const netLead = left.slice(-k);
+      if (!/^\d+$/.test(qty) || !/^\d{1,3}$/.test(netLead)) continue;
+      return { qty: Number(qty), netStr: `${netLead},${dec}` };
+    }
+    return null;
+  }
+
+  // left contains dot(s): assume last group is thousands group, netLead is 1..3 digits right before first dot
+  const idxDot = left.indexOf('.');
+  const beforeDot = left.slice(0, idxDot); // e.g. "1681" or "72012"
+  const afterDot = left.slice(idxDot);     // e.g. ".008" or ".960" (may include more groups)
+
+  // try k=1..3 as net lead taken from end of beforeDot
+  for (let k = 3; k >= 1; k--) {
+    if (beforeDot.length <= k) continue;
+    const qty = beforeDot.slice(0, -k);
+    const netLead = beforeDot.slice(-k);
+
+    if (!/^\d+$/.test(qty) || !/^\d{1,3}$/.test(netLead)) continue;
+
+    // build net candidate
+    const netStr = `${netLead}${afterDot},${dec}`;  // e.g. "1.008,00" or "12.960,00"
+    return { qty: Number(qty), netStr };
+  }
+
+  return null;
+}
 
 const rows = [];
 let m;
@@ -283,49 +334,29 @@ while ((m = rowRe.exec(flat)) !== null) {
   const ncm = String(m[3] || '').trim();
   const package_type = String(m[4] || '').trim();
   const package_code = String(m[5] || '').trim();
+  const tail = String(m[6] || '').trim();        // contains qty + net + gross (space or glued)
+  const lot_number = String(m[7] || '').trim();  // Batch N°
 
-  const qtyNetGlue = String(m[6] || '').trim();   // e.g. "1681.008,00" or "33198,00" or "72012.960,00"
-  const grossStr = String(m[7] || '').trim();     // e.g. "1.185,41"
-  const lot_number = String(m[8] || '').trim();
+  // Find all comma positions for ",dd" in tail
+  const commaMatches = [...tail.matchAll(/,\d{2}/g)];
+  if (commaMatches.length < 2) continue;
+
+  // last is gross, second last is net (but net might be glued with qty)
+  const grossCommaPos = commaMatches[commaMatches.length - 1].index;
+  const netCommaPos = commaMatches[commaMatches.length - 2].index;
+
+  const grossStr = extractBrazilNumEndingAt(tail, grossCommaPos);
+  const netMaybeGlued = extractBrazilNumEndingAt(tail, netCommaPos);
 
   const grossVal = parseBrazilNumber(grossStr);
   if (!grossVal) continue;
 
-  // all brazil numbers inside the glue
-  const allNums = [...qtyNetGlue.matchAll(brNumRe)].map(x => x[0]);
+  // Split qty+net from netMaybeGlued
+  const split = splitQtyAndNet(netMaybeGlued);
+  if (!split) continue;
 
-  // only candidates that could be the NET at the end of the glue chunk
-  const candidates = allNums.filter(n => qtyNetGlue.endsWith(n));
-  if (candidates.length === 0) continue;
-
-  let best = null;
-
-  for (const netStr of candidates) {
-    const netVal = parseBrazilNumber(netStr);
-    if (!netVal) continue;
-
-    const qtyPart = qtyNetGlue.slice(0, qtyNetGlue.length - netStr.length);
-    const qtyDigits = qtyPart.replace(/[^\d]/g, '');
-    const qty = qtyDigits ? Number(qtyDigits) : null;
-    if (!qty) continue;
-
-    // scoring: prefer net close to gross and net <= gross
-    let penalty = 0;
-
-    // impossible cases
-    if (netVal > grossVal + 0.01) penalty += 10000;          // net should not exceed gross
-    if (netVal > 200000) penalty += 10000;                   // prevents 681008kg nonsense
-    if (qty > 10000) penalty += 1000;
-    if (qty <= 2) penalty += 100;                            // often wrong split
-
-    // closeness
-    const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
-    const score = penalty + closeness * 100;
-
-    if (!best || score < best.score) best = { netVal, netStr, qty, score };
-  }
-
-  if (!best) continue;
+  const netVal = parseBrazilNumber(split.netStr);
+  if (!netVal) continue;
 
   rows.push({
     line_no,
@@ -333,8 +364,8 @@ while ((m = rowRe.exec(flat)) !== null) {
     ncm,
     package_type,
     package_code,
-    qty_packages: best.qty,            // ✅ 168, 807, 33, 101, 119, 720
-    net_kg: best.netVal,               // ✅ 1008, 4842, 198, 909, 1071, 12960
+    qty_packages: split.qty,
+    net_kg: netVal,
     gross_kg: grossVal,
     lot_number
   });
