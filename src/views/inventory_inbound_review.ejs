@@ -15,11 +15,6 @@
 
     .sku-filter { width: 100%; padding: 6px 8px; margin-bottom: 6px; box-sizing: border-box; }
     .sku-select { width: 100%; padding: 6px 8px; box-sizing: border-box; }
-
-    @media print {
-      .no-print { display:none; }
-      body { margin: 0; }
-    }
   </style>
 </head>
 <body>
@@ -52,14 +47,15 @@
           <th class="right">Packages</th>
           <th class="right">Net kg</th>
           <th class="right">Gross kg</th>
-          <th style="min-width: 320px;">Map to SKU</th>
+          <th style="min-width:320px;">Map to SKU</th>
         </tr>
       </thead>
+
       <tbody>
         <% if (!lines || lines.length === 0) { %>
           <tr>
             <td colspan="7" class="muted">
-              No parsed lines were found for this PDF. (Parsing regex may need adjustment.)
+              No parsed lines were found for this PDF. (This usually means it’s a different PDF format like “Packing List” vs “Pack & Weight List”, or the parser needs a fallback.)
             </td>
           </tr>
         <% } else { %>
@@ -73,10 +69,8 @@
               <td class="right"><%= (ln.gross_kg ?? '') %></td>
 
               <td>
-                <!-- This is what gets submitted -->
                 <input type="hidden" name="line_id" value="<%= ln.id %>"/>
 
-                <!-- Search box to filter the select -->
                 <input
                   type="text"
                   class="sku-filter"
@@ -84,14 +78,10 @@
                   data-select-id="sku_select_<%= idx %>"
                 />
 
-                <!-- The actual select submitted to server -->
                 <select id="sku_select_<%= idx %>" name="sku_id" class="sku-select">
                   <option value="">-- not mapped --</option>
                   <% skus.forEach(s => { %>
-                    <option
-                      value="<%= s.id %>"
-                      <%= (ln.sku_id == s.id ? 'selected' : '') %>
-                    ><%= s.name %></option>
+                    <option value="<%= s.id %>" <%= (ln.sku_id == s.id ? 'selected' : '') %>><%= s.name %></option>
                   <% }) %>
                 </select>
 
@@ -114,53 +104,40 @@
   </form>
 
   <script>
-    // Simple client-side filtering of <select> options per row.
-    // No libraries needed.
     (function () {
-      function normalize(s) {
-        return (s || '').toString().toLowerCase().trim();
-      }
+      function normalize(s) { return (s || '').toString().toLowerCase().trim(); }
 
       document.querySelectorAll('.sku-filter').forEach(input => {
         const selectId = input.getAttribute('data-select-id');
         const select = document.getElementById(selectId);
         if (!select) return;
 
-        // cache original options so we can restore after filtering
         const originalOptions = Array.from(select.options).map(o => ({
           value: o.value,
-          text: o.text,
-          selected: o.selected
+          text: o.text
         }));
 
         function applyFilter() {
           const q = normalize(input.value);
-
-          // Keep current selection value
           const currentValue = select.value;
 
-          // Rebuild options
           select.innerHTML = '';
           for (const opt of originalOptions) {
-            // Always include "-- not mapped --"
             if (!opt.value) {
-              const o = new Option(opt.text, opt.value, false, currentValue === opt.value);
-              select.add(o);
+              select.add(new Option(opt.text, opt.value, false, currentValue === opt.value));
               continue;
             }
-
             if (!q || normalize(opt.text).includes(q)) {
-              const o = new Option(opt.text, opt.value, false, currentValue === opt.value);
-              select.add(o);
+              select.add(new Option(opt.text, opt.value, false, currentValue === opt.value));
             }
           }
         }
 
         input.addEventListener('input', applyFilter);
-        // Optional: if you click into box, show all first
         input.addEventListener('focus', applyFilter);
       });
     })();
   </script>
 </body>
 </html>
+
