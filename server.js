@@ -254,52 +254,45 @@ function parseBrazilNumber(x) {
 function parsePackWeightListText(text) {
   const raw = String(text || '');
 
-  // Flatten all whitespace so line breaks / wraps don’t matter
+  // Flatten whitespace so wrapping doesn't matter
   const flat = raw.replace(/\s+/g, ' ').trim();
 
-  // Extract header fields
+  // DATE
   let doc_date = null;
-  let container_no = null;
-
   const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-  const mCont = flat.match(/CONTAINER\s+([A-Z0-9]+)/i);
-  if (mCont) container_no = mCont[1];
+  // CONTAINER: look anywhere for 4 letters + 7 digits (MSDU9803683, TTNU8744624 etc)
+  let container_no = null;
+  const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
+  if (mContAny) container_no = mContAny[1];
 
-  // Row pattern:
-  // 01 PITAYA BLEND 9.5KG 2008.992140 BUCKET 292929-0 139 1.320,50 1.406,33 25223008
-  // Also handles: 05ORGANIC ... 100G2009.897065 BOX 232323 336 2.016,00 2.370,82 25013038
-  const rowRe = /(\d{2})\s*([A-ZÀ-ÿ0-9%'.\-\/ ]+?)\s*(\d{4}\.\d{4,})\s+([A-Z]+)\s+([A-Z0-9\-]+)\s+(\d+(?:[.,]\d+)?)\s+([\d\.,]+)\s+([\d\.,]+)\s+(\d{6,})/gi;
+  // ROW REGEX — handles:
+  // - line number glued to name (02PASTEURIZED...)
+  // - NCM as 8 digits (20098990) OR dotted (2008.99.2140)
+  // - package code like 232323 OR 282828-BB OR 212121-IQF OR 242424-14
+  // - glued code+qty (2323231681.008,00)
+  // - glued net+gross (4.842,005.694,19)
+  //
+  // Groups:
+  // 1=line, 2=name, 3=ncm, 4=packageType, 5=code, 6=qty, 7=net, 8=gross, 9=batch
+  const rowRe =
+    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*(\d+)\s*([\d\.]+,\d{2})\s*([\d\.]+,\d{2})\s*(\d{6,})/gi;
 
   const rows = [];
   let m;
 
   while ((m = rowRe.exec(flat)) !== null) {
-    const line_no = Number(m[1]);
-    const raw_product_name = String(m[2] || '').trim();
-    const ncm = String(m[3] || '').trim();
-    const package_type = String(m[4] || '').trim();
-    const package_code = String(m[5] || '').trim();
-    const qty_packages = Number(String(m[6]).replace(',', '.'));
-    const net_kg = parseBrazilNumber(m[7]);
-    const gross_kg = parseBrazilNumber(m[8]);
-    const lot_number = String(m[9] || '').trim();
-
-    // Ignore junk rows like "09 10 11..." because they won’t match this pattern anyway,
-    // but keep a safety check:
-    if (!raw_product_name || !ncm || !lot_number) continue;
-
     rows.push({
-      line_no,
-      raw_product_name,
-      ncm,
-      package_type,
-      package_code,
-      qty_packages,
-      net_kg,
-      gross_kg,
-      lot_number
+      line_no: Number(m[1]),
+      raw_product_name: String(m[2] || '').trim(),
+      ncm: String(m[3] || '').trim(),
+      package_type: String(m[4] || '').trim(),
+      package_code: String(m[5] || '').trim(),
+      qty_packages: Number(m[6]),
+      net_kg: parseBrazilNumber(m[7]),
+      gross_kg: parseBrazilNumber(m[8]),
+      lot_number: String(m[9] || '').trim()
     });
   }
 
@@ -331,7 +324,7 @@ console.log('[inbound] extracted_text_last_800:\n', (parsed?.text || '').slice(-
 console.log('======================================');
 
     const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
-console.log('[inbound] parsed header:', { doc_date, container_no, rows_len: rows?.length || 0 });
+console.log('[inbound] parsed:', { file: req.file?.originalname, doc_date, container_no, rows_len: rows.length });
 if (rows?.length) console.log('[inbound] first_row:', rows[0]);
 
 
