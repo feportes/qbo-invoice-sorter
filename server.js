@@ -357,14 +357,22 @@ function parsePackWeightListText(text) {
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
   // CONTAINER anywhere (MSDU9803683 / TTNU8744624 etc)
-  let container_no = null;
-  const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
-  if (mContAny) container_no = mContAny[1];
+ let container_no = null;
+
+// 1) Normal: MSDU9803683
+let mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
+if (mContAny) {
+  container_no = mContAny[1];
+} else {
+  // 2) Sometimes extracted with a space: "MSDU 9803683"
+  const mSplit = flat.match(/\b([A-Z]{4})\s+(\d{7})\b/);
+  if (mSplit) container_no = `${mSplit[1]}${mSplit[2]}`;
+}
 
   // Capture each row up to Batch.
   // tail contains qty+net+gross in some glued pattern.
   const rowRe =
-    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
+  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*([A-Z0-9\-]+)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
 
   const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;             // full brazil number
   const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;          // anywhere in string
@@ -372,12 +380,28 @@ function parsePackWeightListText(text) {
   const rows = [];
   let m;
 
+function normalizeCodeAndQty(codeRaw) {
+  const s = String(codeRaw || '').trim();
+
+  // Case: 292929-01391  -> code=292929-0, extraQty="139"
+  // Also supports 242424-14720 -> code=242424-14, extraQty="720"
+  const m = s.match(/^(\d{6})-([0-9]{1,2})(\d{1,5})$/);
+  if (m) {
+    return {
+      code: `${m[1]}-${m[2]}`,
+      extraQtyDigits: m[3]
+    };
+  }
+
+  return { code: s, extraQtyDigits: '' };
+}
+
   while ((m = rowRe.exec(flat)) !== null) {
     const line_no = Number(m[1]);
     const raw_product_name = String(m[2] || '').trim();
     const ncm = String(m[3] || '').trim();
     const package_type = String(m[4] || '').trim();
-    const package_code = String(m[5] || '').trim();
+    const { code: package_code, extraQtyDigits } = normalizeCodeAndQty(m[5]);
     const tail = String(m[6] || '').trim();
     const lot_number = String(m[7] || '').trim();
 
@@ -401,7 +425,7 @@ function parsePackWeightListText(text) {
       if (!brFullRe.test(suffix)) continue;
 
       const prefix = qtyNetGlue.slice(0, k);
-      const qtyDigits = prefix.replace(/[^\d]/g, '');
+      const qtyDigits = (extraQtyDigits + prefix.replace(/[^\d]/g, ''));
       const qty = qtyDigits ? Number(qtyDigits) : null;
       if (!qty) continue;
 
