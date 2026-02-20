@@ -270,15 +270,12 @@ function parsePackWeightListText(text) {
   // Tail chunk may be glued: 2323231681.008,00 1.185,41
 const rowRe =
   /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\., ]+?)\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(\d{6,})/gi;
-
   // brazil number like 1.008,00 or 232,85 or 12.960,00
-  const brNumRe = /(\d{1,3}(?:\.\d{3})*,\d{2})/g;
 
- const rows = [];
+ const brNumRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
+
+const rows = [];
 let m;
-
-// candidate brazil number like 1.008,00 or 232,85 or 12.960,00
-const brNumRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
 
 while ((m = rowRe.exec(flat)) !== null) {
   const line_no = Number(m[1]);
@@ -287,25 +284,20 @@ while ((m = rowRe.exec(flat)) !== null) {
   const package_type = String(m[4] || '').trim();
   const package_code = String(m[5] || '').trim();
 
-  // This chunk contains qty + net glued or spaced (ex: "2323231681.008,00" or "1191.071,00")
-  // In our regex it's whatever comes between code and the gross number.
-  const qtyNetGlue = String(m[6] || '').trim();
-
-  const grossStr = String(m[7] || '').trim();
+  const qtyNetGlue = String(m[6] || '').trim();   // e.g. "1681.008,00" or "33198,00" or "72012.960,00"
+  const grossStr = String(m[7] || '').trim();     // e.g. "1.185,41"
   const lot_number = String(m[8] || '').trim();
 
   const grossVal = parseBrazilNumber(grossStr);
   if (!grossVal) continue;
 
-  // Find ALL brazil-number substrings inside qtyNetGlue.
-  // We only consider candidates that END at the end of the glue chunk.
+  // all brazil numbers inside the glue
   const allNums = [...qtyNetGlue.matchAll(brNumRe)].map(x => x[0]);
-  const candidates = allNums.filter(n => qtyNetGlue.endsWith(n));
 
+  // only candidates that could be the NET at the end of the glue chunk
+  const candidates = allNums.filter(n => qtyNetGlue.endsWith(n));
   if (candidates.length === 0) continue;
 
-  // Score candidates: prefer net that is reasonably close to gross (gross slightly higher),
-  // and qty not insanely large.
   let best = null;
 
   for (const netStr of candidates) {
@@ -317,31 +309,20 @@ while ((m = rowRe.exec(flat)) !== null) {
     const qty = qtyDigits ? Number(qtyDigits) : null;
     if (!qty) continue;
 
-    // heuristics
+    // scoring: prefer net close to gross and net <= gross
     let penalty = 0;
 
-    // net should not be massively larger than gross
-    if (netVal > grossVal * 1.5) penalty += 1000;
+    // impossible cases
+    if (netVal > grossVal + 0.01) penalty += 10000;          // net should not exceed gross
+    if (netVal > 200000) penalty += 10000;                   // prevents 681008kg nonsense
+    if (qty > 10000) penalty += 1000;
+    if (qty <= 2) penalty += 100;                            // often wrong split
 
-    // gross should usually be >= net (allow tiny rounding tolerance)
-    if (grossVal + 0.01 < netVal) penalty += 1000;
+    // closeness
+    const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
+    const score = penalty + closeness * 100;
 
-    // qty packages should be "reasonable"
-    if (qty > 5000) penalty += 500;
-    if (qty > 20000) penalty += 2000;
-
-    // prefer larger qty when two nets are plausible? actually we prefer qty that keeps net realistic
-    // so add a mild penalty for super tiny qty (often wrong split like qty=1)
-    if (qty <= 2) penalty += 50;
-
-    // prefer net values that look realistic (avoid 681008kg nonsense)
-    if (netVal > 200000) penalty += 5000;
-
-    const score = penalty + (Math.abs(grossVal - netVal) / Math.max(1, grossVal)) * 10;
-
-    if (!best || score < best.score) {
-      best = { netStr, netVal, qty, score };
-    }
+    if (!best || score < best.score) best = { netVal, netStr, qty, score };
   }
 
   if (!best) continue;
@@ -352,12 +333,13 @@ while ((m = rowRe.exec(flat)) !== null) {
     ncm,
     package_type,
     package_code,
-    qty_packages: best.qty,
-    net_kg: best.netVal,
+    qty_packages: best.qty,            // ✅ 168, 807, 33, 101, 119, 720
+    net_kg: best.netVal,               // ✅ 1008, 4842, 198, 909, 1071, 12960
     gross_kg: grossVal,
     lot_number
   });
 }
+
 
   return { doc_date, container_no, rows };
 }
