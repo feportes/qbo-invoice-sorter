@@ -277,23 +277,25 @@ function parsePackWeightListText(text) {
   // Groups:
   // 1=line, 2=name, 3=ncm, 4=packageType, 5=code, 6=qty, 7=net, 8=gross, 9=batch
   const rowRe =
-    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*(\d+)\s*([\d\.]+,\d{2})\s*([\d\.]+,\d{2})\s*(\d{6,})/gi;
+  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9]{1,6}?)(?=([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}))\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(\d{6,})/gi;
+
 
   const rows = [];
   let m;
 
   while ((m = rowRe.exec(flat)) !== null) {
     rows.push({
-      line_no: Number(m[1]),
-      raw_product_name: String(m[2] || '').trim(),
-      ncm: String(m[3] || '').trim(),
-      package_type: String(m[4] || '').trim(),
-      package_code: String(m[5] || '').trim(),
-      qty_packages: Number(m[6]),
-      net_kg: parseBrazilNumber(m[7]),
-      gross_kg: parseBrazilNumber(m[8]),
-      lot_number: String(m[9] || '').trim()
-    });
+  line_no: Number(m[1]),
+  raw_product_name: String(m[2] || '').trim(),
+  ncm: String(m[3] || '').trim(),
+  package_type: String(m[4] || '').trim(),
+  package_code: String(m[5] || '').trim(),
+  qty_packages: Number(m[6]),          // ✅ now "168" not "1681"
+  net_kg: parseBrazilNumber(m[7]),     // ✅ now "1.008,00" not ".008,00"
+  gross_kg: parseBrazilNumber(m[8]),
+  lot_number: String(m[9] || '').trim()
+});
+
   }
 
   return { doc_date, container_no, rows };
