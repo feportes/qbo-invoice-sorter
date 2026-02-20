@@ -276,29 +276,42 @@ function parsePackWeightListText(text) {
   //
   // Groups:
   // 1=line, 2=name, 3=ncm, 4=packageType, 5=code, 6=qty, 7=net, 8=gross, 9=batch
-  const rowRe =
-  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*(\d{1,6})(?=\s*[0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(\d{6,})/gi;
-
+ // Capture qty+net as a single glued chunk, then gross, then batch.
+// qty+net examples: "1681.008,00"  "8074.842,00"  "33198,00"  "72012.960,00"
+const rowRe =
+  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\.,]+?)\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(\d{6,})/gi;
 
 
   const rows = [];
-  let m;
+let m;
 
-  while ((m = rowRe.exec(flat)) !== null) {
-   rows.push({
-  line_no: Number(m[1]),
-  raw_product_name: String(m[2] || '').trim(),
-  ncm: String(m[3] || '').trim(),
-  package_type: String(m[4] || '').trim(),
-  package_code: String(m[5] || '').trim(),
-  qty_packages: Number(m[6]),      // ✅ 168 / 807 / 33 / 101 / 119 / 720
-  net_kg: parseBrazilNumber(m[7]), // ✅ 1.008,00 -> 1008
-  gross_kg: parseBrazilNumber(m[8]),
-  lot_number: String(m[9] || '').trim()
-});
+const netRegex = /[0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}$/;
 
+while ((m = rowRe.exec(flat)) !== null) {
+  const qtyNetGlue = String(m[6] || '').trim();     // e.g. "33198,00" or "1681.008,00"
+  const grossStr = String(m[7] || '').trim();       // e.g. "232,85"
+  const batch = String(m[8] || '').trim();
 
-  }
+  const netMatch = qtyNetGlue.match(netRegex);
+  if (!netMatch) continue;
+
+  const netStr = netMatch[0];                       // last "number,dd" part = NET
+  const qtyStrRaw = qtyNetGlue.slice(0, -netStr.length); // leftover = QTY (may include dots)
+  const qtyDigits = qtyStrRaw.replace(/[^\d]/g, '');      // keep digits only
+  const qty = qtyDigits ? Number(qtyDigits) : null;
+
+  rows.push({
+    line_no: Number(m[1]),
+    raw_product_name: String(m[2] || '').trim(),
+    ncm: String(m[3] || '').trim(),
+    package_type: String(m[4] || '').trim(),
+    package_code: String(m[5] || '').trim(),
+    qty_packages: qty,
+    net_kg: parseBrazilNumber(netStr),
+    gross_kg: parseBrazilNumber(grossStr),
+    lot_number: batch
+  });
+}
 
   return { doc_date, container_no, rows };
 }
