@@ -236,6 +236,99 @@ app.get('/inventory/inbound', requireConnected, (req, res) => {
   res.render('inventory_inbound', { docs, msg: null });
 });
 
+app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
+  try {
+    db.deleteInboundDoc(req.params.id);
+    res.redirect('/inventory/inbound');
+  } catch (e) {
+    res.status(500).send(`Delete inbound doc failed: ${e?.message || e}`);
+  }
+});
+
+app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) throw new Error('Missing PDF file');
+
+    const parsed = await pdfParse(req.file.buffer);
+    const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
+
+    // minimal debug (keep for now)
+    console.log('[inbound] parsed:', {
+      file: req.file?.originalname,
+      doc_date,
+      container_no,
+      rows_len: rows.length
+    });
+    if (rows?.length) console.log('[inbound] first_row:', rows[0]);
+
+    const inboundDocId = db.createInboundDoc({
+      doc_date,
+      container_no,
+      source_filename: req.file.originalname,
+      notes: `parsed_rows=${rows.length}`
+    });
+
+    for (const r of rows) {
+      const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);
+      db.addInboundDocLine(inboundDocId, { ...r, sku_id: skuId });
+    }
+
+    res.redirect(`/inventory/inbound/${inboundDocId}`);
+  } catch (e) {
+    const docs = db.listInboundDocs();
+    res.status(400).render('inventory_inbound', { docs, msg: e?.message || String(e) });
+  }
+});
+
+app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
+  const doc = db.getInboundDoc(req.params.id);
+  const lines = db.listInboundDocLines(req.params.id);
+  const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
+  res.render('inventory_inbound_review', { doc, lines, skus, msg: null });
+});
+
+// Save mappings + auto-create lots + auto-save aliases
+app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
+  try {
+    const docId = Number(req.params.id);
+    const doc = db.getInboundDoc(docId);
+    if (!doc) throw new Error('Inbound doc not found');
+
+    const lineIds = Array.isArray(req.body.line_id) ? req.body.line_id : [req.body.line_id].filter(Boolean);
+    const skuIds  = Array.isArray(req.body.sku_id)  ? req.body.sku_id  : [req.body.sku_id].filter(Boolean);
+
+    // Save line->SKU mappings
+    for (let i = 0; i < lineIds.length; i++) {
+      const lineId = Number(lineIds[i]);
+      const skuId = skuIds[i] ? Number(skuIds[i]) : null;
+      db.setInboundLineSku(lineId, skuId);
+    }
+
+    // Reload lines
+    const lines = db.listInboundDocLines(docId);
+
+    // Auto-save aliases
+    for (const ln of lines) {
+      if (!ln.sku_id) continue;
+      if (!ln.raw_product_name) continue;
+      db.addSkuAlias({ sku_id: ln.sku_id, alias: ln.raw_product_name });
+    }
+
+    // Create lots
+    for (const ln of lines) {
+      if (!ln.sku_id) continue;
+      if (!ln.lot_number) continue;
+      db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
+    }
+
+    const updatedLines = db.listInboundDocLines(docId);
+    const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
+    res.render('inventory_inbound_review', { doc, lines: updatedLines, skus, msg: 'Saved mappings + aliases + lots created.' });
+
+  } catch (e) {
+    res.status(500).send(`Apply inbound failed: ${e?.message || e}`);
+  }
+});
 function parseBrazilNumber(x) {
   // "12.960,00" -> 12960.00
   const s = String(x || '').trim();
@@ -245,11 +338,15 @@ function parseBrazilNumber(x) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Robust Pack & Weight List parser for your pdf-parse output:
-// Handles:
-// - code+qty+net glued: 2323231681.008,00
-// - net+gross glued: 4.842,005.694,19
-// - rows with lineNo glued to name: 02PASTEURIZED...
+/**
+ * Robust parser for Xingu "Pack and Weight List" extracted text.
+ * Handles:
+ * - Code+Qty+Net glued (2323231681.008,00)
+ * - Net+Gross glued (4.842,005.694,19)
+ * - LineNo glued to name (02PASTEURIZED...)
+ * - Codes with suffix (282828-BB / 212121-IQF / 242424-14)
+ * - NCM as 8 digits or dotted format
+ */
 function parsePackWeightListText(text) {
   const raw = String(text || '');
   const flat = raw.replace(/\s+/g, ' ').trim();
@@ -259,26 +356,18 @@ function parsePackWeightListText(text) {
   const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-  // Container anywhere (MSDU9803683, TTNU8744624, etc)
+  // CONTAINER anywhere (MSDU9803683 / TTNU8744624 etc)
   let container_no = null;
   const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
   if (mContAny) container_no = mContAny[1];
 
-  // Row capture (tail includes qty+net+gross in whatever glued format)
-  // groups:
-  // 1 lineNo
-  // 2 product
-  // 3 NCM
-  // 4 package type
-  // 5 code (supports 282828-BB etc)
-  // 6 tail (qty+net(+gross) maybe glued)
-  // 7 batch
+  // Capture each row up to Batch.
+  // tail contains qty+net+gross in some glued pattern.
   const rowRe =
     /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
 
-  // Brazil number like 1.008,00 or 232,85 or 12.960,00
-  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
-  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
+  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;             // full brazil number
+  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;          // anywhere in string
 
   const rows = [];
   let m;
@@ -292,20 +381,20 @@ function parsePackWeightListText(text) {
     const tail = String(m[6] || '').trim();
     const lot_number = String(m[7] || '').trim();
 
-    // 1) Find gross = LAST brazil number in tail (works even when net+gross glued)
+    // Extract all brazil numbers in tail -> last is gross, the one before it belongs to qty+net glue.
     const allNums = tail.match(brAnywhereRe) || [];
-    if (allNums.length < 2) continue; // must have net + gross
+    if (allNums.length < 2) continue;
+
     const grossStr = allNums[allNums.length - 1];
     const grossVal = parseBrazilNumber(grossStr);
     if (!grossVal) continue;
 
-    // 2) Remove grossStr from end (best effort) to isolate qty+net glue
+    // Remove gross (best effort) to isolate qty+net glue
     const idxGross = tail.lastIndexOf(grossStr);
-    const qtyNetGlue = idxGross >= 0 ? tail.slice(0, idxGross).trim() : tail;
+    const qtyNetGlue = (idxGross >= 0 ? tail.slice(0, idxGross) : tail).trim();
 
-    // 3) Generate all possible (qty, net) splits by scanning suffixes that look like a brazil number.
-    // This solves overlapping candidate problem:
-    // "1681.008,00" contains "681.008,00" and "1.008,00" — suffix scanning finds the correct "1.008,00".
+    // Generate ALL possible splits: prefix=qty, suffix=net
+    // This solves overlapping matches like 1681.008,00 (we can find suffix 1.008,00).
     const candidates = [];
     for (let k = 0; k < qtyNetGlue.length; k++) {
       const suffix = qtyNetGlue.slice(k).trim();
@@ -323,37 +412,33 @@ function parsePackWeightListText(text) {
     }
     if (candidates.length === 0) continue;
 
-    // 4) Choose best candidate: net must be <= gross, and reasonably close.
+    // Choose best candidate:
+    // - net <= gross
+    // - no leading-zero net group (012.960,00 is almost always wrong)
+    // - in ties, prefer larger qty (720 beats 72)
     let best = null;
-   for (const c of candidates) {
-  let penalty = 0;
 
-  // net must be <= gross
-  if (c.netVal > grossVal + 0.01) penalty += 10000;
+    for (const c of candidates) {
+      let penalty = 0;
 
-  // block insane nets
-  if (c.netVal > 200000) penalty += 10000;
+      if (c.netVal > grossVal + 0.01) penalty += 10000;
+      if (c.netVal > 200000) penalty += 10000;
+      if (c.qty > 20000) penalty += 2000;
+      if (c.qty > 5000) penalty += 500;
+      if (c.qty <= 2) penalty += 100;
 
-  // qty sanity
-  if (c.qty > 20000) penalty += 2000;
-  if (c.qty > 5000) penalty += 500;
-  if (c.qty <= 2) penalty += 100;
+      // penalize leading-zero net like 012.960,00
+      const lead = String(c.netStr).split(/[.,]/)[0];
+      if (lead.length > 1 && lead.startsWith('0')) penalty += 5000;
 
-  // ✅ NEW: penalize "leading-zero" net strings like 012.960,00 or 098,00
-  // because these are almost always the wrong split (they come from stealing a digit from qty)
-  if (typeof c.netStr === 'string') {
-    const lead = c.netStr.split(/[.,]/)[0]; // group before '.' or ',' (e.g. "012")
-    if (lead.length > 1 && lead.startsWith('0')) penalty += 5000;
-  }
+      const closeness = Math.abs(grossVal - c.netVal) / Math.max(1, grossVal);
+      const score = penalty + closeness * 100;
 
-  const closeness = Math.abs(grossVal - c.netVal) / Math.max(1, grossVal);
-  const score = penalty + closeness * 100;
+      if (!best || score < best.score || (score === best.score && c.qty > best.qty)) {
+        best = { ...c, score };
+      }
+    }
 
-  // ✅ NEW: tie-breaker -> prefer larger qty (so 720 beats 72)
-  if (!best || score < best.score || (score === best.score && c.qty > best.qty)) {
-    best = { ...c, score };
-  }
-}
     if (!best) continue;
 
     rows.push({
@@ -371,7 +456,6 @@ function parsePackWeightListText(text) {
 
   return { doc_date, container_no, rows };
 }
-
  app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   try {
     db.deleteInboundDoc(req.params.id);
