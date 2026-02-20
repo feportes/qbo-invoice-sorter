@@ -13,8 +13,56 @@
     .right { text-align:right; }
     .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
 
-    .sku-filter { width: 100%; padding: 6px 8px; margin-bottom: 6px; box-sizing: border-box; }
-    .sku-select { width: 100%; padding: 6px 8px; box-sizing: border-box; }
+    .sku-wrap { position: relative; }
+    .sku-input {
+      width: 100%;
+      padding: 6px 8px;
+      box-sizing: border-box;
+    }
+    .sku-suggestions {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      max-height: 240px;
+      overflow: auto;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+      list-style: none;
+      margin: 0;
+      padding: 6px 0;
+      z-index: 10;
+      display: none;
+    }
+    .sku-suggestions li {
+      padding: 8px 10px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sku-suggestions li:hover {
+      background: #f5f5f5;
+    }
+    .sku-pill {
+      display:inline-block;
+      margin-top:6px;
+      font-size:12px;
+      color:#333;
+      background:#f3f3f3;
+      border:1px solid #e6e6e6;
+      padding:3px 8px;
+      border-radius:999px;
+    }
+    .sku-clear {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #666;
+      cursor: pointer;
+      display: inline-block;
+    }
   </style>
 </head>
 <body>
@@ -47,17 +95,13 @@
           <th class="right">Packages</th>
           <th class="right">Net kg</th>
           <th class="right">Gross kg</th>
-          <th style="min-width:320px;">Map to SKU</th>
+          <th style="min-width: 360px;">Map to SKU</th>
         </tr>
       </thead>
 
       <tbody>
         <% if (!lines || lines.length === 0) { %>
-          <tr>
-            <td colspan="7" class="muted">
-              No parsed lines were found for this PDF. (This usually means it’s a different PDF format like “Packing List” vs “Pack & Weight List”, or the parser needs a fallback.)
-            </td>
-          </tr>
+          <tr><td colspan="7" class="muted">No parsed lines were found for this PDF.</td></tr>
         <% } else { %>
           <% lines.forEach((ln, idx) => { %>
             <tr>
@@ -71,23 +115,30 @@
               <td>
                 <input type="hidden" name="line_id" value="<%= ln.id %>"/>
 
-                <input
-                  type="text"
-                  class="sku-filter"
-                  placeholder="Type to search SKU…"
-                  data-select-id="sku_select_<%= idx %>"
-                />
+                <!-- Hidden value submitted -->
+                <input type="hidden" name="sku_id" id="sku_id_<%= idx %>" value="<%= ln.sku_id || '' %>"/>
 
-                <select id="sku_select_<%= idx %>" name="sku_id" class="sku-select">
-                  <option value="">-- not mapped --</option>
-                  <% skus.forEach(s => { %>
-                    <option value="<%= s.id %>" <%= (ln.sku_id == s.id ? 'selected' : '') %>><%= s.name %></option>
-                  <% }) %>
-                </select>
-
-                <div class="muted" style="margin-top:6px;">
-                  Tip: type “IQF”, “18KG”, “unsweet”, etc.
+                <!-- Single bar the user types into -->
+                <div class="sku-wrap">
+                  <input
+                    class="sku-input"
+                    id="sku_input_<%= idx %>"
+                    type="text"
+                    placeholder="Type to search SKU…"
+                    autocomplete="off"
+                    data-idx="<%= idx %>"
+                    value="<%= (ln.sku_name || '') %>"
+                  />
+                  <ul class="sku-suggestions" id="sku_sug_<%= idx %>"></ul>
                 </div>
+
+                <div class="sku-clear" data-idx="<%= idx %>">Clear</div>
+
+                <% if (ln.sku_name) { %>
+                  <div class="sku-pill">Selected: <%= ln.sku_name %></div>
+                <% } else { %>
+                  <div class="muted" style="margin-top:6px;">Not mapped</div>
+                <% } %>
               </td>
             </tr>
           <% }) %>
@@ -104,39 +155,91 @@
   </form>
 
   <script>
-    (function () {
-      function normalize(s) { return (s || '').toString().toLowerCase().trim(); }
+    // Make SKUs available to JS (id + name)
+    const ALL_SKUS = <%- JSON.stringify((skus || []).map(s => ({ id: String(s.id), name: String(s.name) }))) %>;
 
-      document.querySelectorAll('.sku-filter').forEach(input => {
-        const selectId = input.getAttribute('data-select-id');
-        const select = document.getElementById(selectId);
-        if (!select) return;
+    function norm(s) { return (s || '').toString().toLowerCase().trim(); }
 
-        const originalOptions = Array.from(select.options).map(o => ({
-          value: o.value,
-          text: o.text
-        }));
+    function renderSuggestions(idx, matches) {
+      const ul = document.getElementById(`sku_sug_${idx}`);
+      ul.innerHTML = '';
 
-        function applyFilter() {
-          const q = normalize(input.value);
-          const currentValue = select.value;
+      if (!matches.length) {
+        ul.style.display = 'none';
+        return;
+      }
 
-          select.innerHTML = '';
-          for (const opt of originalOptions) {
-            if (!opt.value) {
-              select.add(new Option(opt.text, opt.value, false, currentValue === opt.value));
-              continue;
-            }
-            if (!q || normalize(opt.text).includes(q)) {
-              select.add(new Option(opt.text, opt.value, false, currentValue === opt.value));
-            }
-          }
-        }
+      for (const it of matches) {
+        const li = document.createElement('li');
+        li.textContent = it.name;
+        li.dataset.id = it.id;
+        li.dataset.name = it.name;
+        ul.appendChild(li);
+      }
 
-        input.addEventListener('input', applyFilter);
-        input.addEventListener('focus', applyFilter);
+      ul.style.display = 'block';
+    }
+
+    function hideSuggestions(idx) {
+      const ul = document.getElementById(`sku_sug_${idx}`);
+      if (ul) ul.style.display = 'none';
+    }
+
+    // Click outside closes any open suggestion lists
+    document.addEventListener('click', (e) => {
+      document.querySelectorAll('.sku-suggestions').forEach(ul => ul.style.display = 'none');
+    });
+
+    document.querySelectorAll('.sku-input').forEach(inp => {
+      const idx = inp.dataset.idx;
+
+      inp.addEventListener('input', () => {
+        const q = norm(inp.value);
+        if (!q) { hideSuggestions(idx); return; }
+
+        // filter + limit
+        const matches = ALL_SKUS
+          .filter(s => norm(s.name).includes(q))
+          .slice(0, 30);
+
+        renderSuggestions(idx, matches);
       });
-    })();
+
+      inp.addEventListener('focus', () => {
+        // show suggestions immediately if there is text
+        const q = norm(inp.value);
+        if (!q) return;
+        const matches = ALL_SKUS
+          .filter(s => norm(s.name).includes(q))
+          .slice(0, 30);
+        renderSuggestions(idx, matches);
+      });
+
+      // pick from list
+      const ul = document.getElementById(`sku_sug_${idx}`);
+      ul.addEventListener('click', (e) => {
+        const li = e.target.closest('li');
+        if (!li) return;
+
+        const skuId = li.dataset.id;
+        const skuName = li.dataset.name;
+
+        document.getElementById(`sku_id_${idx}`).value = skuId;
+        inp.value = skuName;
+
+        hideSuggestions(idx);
+      });
+    });
+
+    // Clear button
+    document.querySelectorAll('.sku-clear').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = btn.dataset.idx;
+        document.getElementById(`sku_id_${idx}`).value = '';
+        document.getElementById(`sku_input_${idx}`).value = '';
+        hideSuggestions(idx);
+      });
+    });
   </script>
 </body>
 </html>
