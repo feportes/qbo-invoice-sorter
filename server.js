@@ -1,18 +1,11 @@
-import multer from 'multer';
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse'); // <-- ONLY ONE pdfParse definition
-
-
-
-
-
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+import multer from 'multer';
+import { createRequire } from 'module';
 
 import { db } from './src/db.js';
 import { ensureSchema, seedDefaults } from './src/schema.js';
@@ -22,8 +15,10 @@ import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
 import { runAutoAllocateForInvoice } from './src/inventory_engine.js';
-
 import { buildPlanFromInvoice, applyPlan } from './src/inventory_allocate.js';
+
+const require = createRequire(import.meta.url);
+const pdfParse = require('pdf-parse'); // pdf-parse@1.1.1
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,7 +29,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 }
 });
-
 
 ensureSchema();
 seedDefaults();
@@ -243,7 +237,7 @@ app.get('/inventory/inbound', requireConnected, (req, res) => {
 });
 
 function parseBrazilNumber(x) {
-  // "6.480,00" -> 6480.00
+  // "12.960,00" -> 12960.00
   const s = String(x || '').trim();
   if (!s) return null;
   const norm = s.replace(/\./g, '').replace(',', '.');
@@ -251,6 +245,11 @@ function parseBrazilNumber(x) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Robust Pack & Weight List parser for your pdf-parse output:
+// Handles:
+// - code+qty+net glued: 2323231681.008,00
+// - net+gross glued: 4.842,005.694,19
+// - rows with lineNo glued to name: 02PASTEURIZED...
 function parsePackWeightListText(text) {
   const raw = String(text || '');
   const flat = raw.replace(/\s+/g, ' ').trim();
@@ -260,121 +259,103 @@ function parsePackWeightListText(text) {
   const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-  // CONTAINER anywhere (MSDU9803683 etc)
+  // Container anywhere (MSDU9803683, TTNU8744624, etc)
   let container_no = null;
   const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
   if (mContAny) container_no = mContAny[1];
 
-  // Row capture:
-  // line + name + NCM + package type + code + (tail chunk) + batch
-  // Tail chunk may be glued: 2323231681.008,00 1.185,41
-// Row capture: everything after code until Batch (tail contains qty + net + gross, sometimes glued)
-const rowRe =
-  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
+  // Row capture (tail includes qty+net+gross in whatever glued format)
+  // groups:
+  // 1 lineNo
+  // 2 product
+  // 3 NCM
+  // 4 package type
+  // 5 code (supports 282828-BB etc)
+  // 6 tail (qty+net(+gross) maybe glued)
+  // 7 batch
+  const rowRe =
+    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*(\d{6}(?:-[A-Z0-9]+)?)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
 
-// Helper: extract a brazil number ending at a given comma+2dec index
-function extractBrazilNumEndingAt(s, commaPos) {
-  // commaPos points to the comma in ",dd"
-  const end = commaPos + 3; // include ",dd"
-  let start = commaPos - 1;
-  while (start >= 0 && (/[0-9.]/.test(s[start]))) start--;
-  start++;
-  return s.slice(start, end);
-}
+  // Brazil number like 1.008,00 or 232,85 or 12.960,00
+  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
+  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
 
-// Helper: split qty + net when they are glued like "1681.008,00" or "72012.960,00"
-function splitQtyAndNet(gluedNetStr) {
-  // gluedNetStr looks like "1681.008,00" (qty=168, net=1.008,00)
-  // or "33198,00" (qty=33, net=198,00)
-  const parts = gluedNetStr.split(',');
-  if (parts.length !== 2) return null;
-  const left = parts[0];     // e.g. "1681.008" or "33198"
-  const dec = parts[1];      // "00"
+  const rows = [];
+  let m;
 
-  // if left has no dot, net is last 1-3 digits, qty is the rest (best effort)
-  if (!left.includes('.')) {
-    // try k=1..3 for net-leading length
-    for (let k = 3; k >= 1; k--) {
-      if (left.length <= k) continue;
-      const qty = left.slice(0, -k);
-      const netLead = left.slice(-k);
-      if (!/^\d+$/.test(qty) || !/^\d{1,3}$/.test(netLead)) continue;
-      return { qty: Number(qty), netStr: `${netLead},${dec}` };
+  while ((m = rowRe.exec(flat)) !== null) {
+    const line_no = Number(m[1]);
+    const raw_product_name = String(m[2] || '').trim();
+    const ncm = String(m[3] || '').trim();
+    const package_type = String(m[4] || '').trim();
+    const package_code = String(m[5] || '').trim();
+    const tail = String(m[6] || '').trim();
+    const lot_number = String(m[7] || '').trim();
+
+    // 1) Find gross = LAST brazil number in tail (works even when net+gross glued)
+    const allNums = tail.match(brAnywhereRe) || [];
+    if (allNums.length < 2) continue; // must have net + gross
+    const grossStr = allNums[allNums.length - 1];
+    const grossVal = parseBrazilNumber(grossStr);
+    if (!grossVal) continue;
+
+    // 2) Remove grossStr from end (best effort) to isolate qty+net glue
+    const idxGross = tail.lastIndexOf(grossStr);
+    const qtyNetGlue = idxGross >= 0 ? tail.slice(0, idxGross).trim() : tail;
+
+    // 3) Generate all possible (qty, net) splits by scanning suffixes that look like a brazil number.
+    // This solves overlapping candidate problem:
+    // "1681.008,00" contains "681.008,00" and "1.008,00" — suffix scanning finds the correct "1.008,00".
+    const candidates = [];
+    for (let k = 0; k < qtyNetGlue.length; k++) {
+      const suffix = qtyNetGlue.slice(k).trim();
+      if (!brFullRe.test(suffix)) continue;
+
+      const prefix = qtyNetGlue.slice(0, k);
+      const qtyDigits = prefix.replace(/[^\d]/g, '');
+      const qty = qtyDigits ? Number(qtyDigits) : null;
+      if (!qty) continue;
+
+      const netVal = parseBrazilNumber(suffix);
+      if (!netVal) continue;
+
+      candidates.push({ qty, netVal });
     }
-    return null;
+    if (candidates.length === 0) continue;
+
+    // 4) Choose best candidate: net must be <= gross, and reasonably close.
+    let best = null;
+    for (const c of candidates) {
+      let penalty = 0;
+
+      if (c.netVal > grossVal + 0.01) penalty += 10000;
+      if (c.netVal > 200000) penalty += 10000; // blocks 681008 nonsense
+      if (c.qty > 20000) penalty += 2000;
+      if (c.qty > 5000) penalty += 500;
+      if (c.qty <= 2) penalty += 100;
+
+      const closeness = Math.abs(grossVal - c.netVal) / Math.max(1, grossVal);
+      const score = penalty + closeness * 100;
+
+      if (!best || score < best.score) best = { ...c, score };
+    }
+    if (!best) continue;
+
+    rows.push({
+      line_no,
+      raw_product_name,
+      ncm,
+      package_type,
+      package_code,
+      qty_packages: best.qty,
+      net_kg: best.netVal,
+      gross_kg: grossVal,
+      lot_number
+    });
   }
-
-  // left contains dot(s): assume last group is thousands group, netLead is 1..3 digits right before first dot
-  const idxDot = left.indexOf('.');
-  const beforeDot = left.slice(0, idxDot); // e.g. "1681" or "72012"
-  const afterDot = left.slice(idxDot);     // e.g. ".008" or ".960" (may include more groups)
-
-  // try k=1..3 as net lead taken from end of beforeDot
-  for (let k = 3; k >= 1; k--) {
-    if (beforeDot.length <= k) continue;
-    const qty = beforeDot.slice(0, -k);
-    const netLead = beforeDot.slice(-k);
-
-    if (!/^\d+$/.test(qty) || !/^\d{1,3}$/.test(netLead)) continue;
-
-    // build net candidate
-    const netStr = `${netLead}${afterDot},${dec}`;  // e.g. "1.008,00" or "12.960,00"
-    return { qty: Number(qty), netStr };
-  }
-
-  return null;
-}
-
-const rows = [];
-let m;
-
-while ((m = rowRe.exec(flat)) !== null) {
-  const line_no = Number(m[1]);
-  const raw_product_name = String(m[2] || '').trim();
-  const ncm = String(m[3] || '').trim();
-  const package_type = String(m[4] || '').trim();
-  const package_code = String(m[5] || '').trim();
-  const tail = String(m[6] || '').trim();        // contains qty + net + gross (space or glued)
-  const lot_number = String(m[7] || '').trim();  // Batch N°
-
-  // Find all comma positions for ",dd" in tail
-  const commaMatches = [...tail.matchAll(/,\d{2}/g)];
-  if (commaMatches.length < 2) continue;
-
-  // last is gross, second last is net (but net might be glued with qty)
-  const grossCommaPos = commaMatches[commaMatches.length - 1].index;
-  const netCommaPos = commaMatches[commaMatches.length - 2].index;
-
-  const grossStr = extractBrazilNumEndingAt(tail, grossCommaPos);
-  const netMaybeGlued = extractBrazilNumEndingAt(tail, netCommaPos);
-
-  const grossVal = parseBrazilNumber(grossStr);
-  if (!grossVal) continue;
-
-  // Split qty+net from netMaybeGlued
-  const split = splitQtyAndNet(netMaybeGlued);
-  if (!split) continue;
-
-  const netVal = parseBrazilNumber(split.netStr);
-  if (!netVal) continue;
-
-  rows.push({
-    line_no,
-    raw_product_name,
-    ncm,
-    package_type,
-    package_code,
-    qty_packages: split.qty,
-    net_kg: netVal,
-    gross_kg: grossVal,
-    lot_number
-  });
-}
-
 
   return { doc_date, container_no, rows };
 }
-
 
  app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   try {
@@ -392,25 +373,17 @@ app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), as
     if (!req.file) throw new Error('Missing PDF file');
 
     const parsed = await pdfParse(req.file.buffer);
-console.log('========== INBOUND PDF DEBUG ==========');
-console.log('[inbound] filename:', req.file?.originalname);
-console.log('[inbound] extracted_text_len:', (parsed?.text || '').length);
-console.log('[inbound] extracted_text_first_800:\n', (parsed?.text || '').slice(0, 800));
-console.log('[inbound] extracted_text_last_800:\n', (parsed?.text || '').slice(-800));
-console.log('======================================');
-
     const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
-console.log('[inbound] parsed:', { file: req.file?.originalname, doc_date, container_no, rows_len: rows.length });
-if (rows?.length) console.log('[inbound] first_row:', rows[0]);
 
+    console.log('[inbound] parsed:', { file: req.file?.originalname, doc_date, container_no, rows_len: rows.length });
+    if (rows?.length) console.log('[inbound] first_row:', rows[0]);
 
-const inboundDocId = db.createInboundDoc({
-  doc_date,
-  container_no,
-  source_filename: req.file.originalname,
-  notes: `parsed_rows=${rows.length}`
-});
-
+    const inboundDocId = db.createInboundDoc({
+      doc_date,
+      container_no,
+      source_filename: req.file.originalname,
+      notes: `parsed_rows=${rows.length}`
+    });
 
     for (const r of rows) {
       const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);
