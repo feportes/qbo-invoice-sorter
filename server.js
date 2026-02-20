@@ -319,26 +319,41 @@ function parsePackWeightListText(text) {
       const netVal = parseBrazilNumber(suffix);
       if (!netVal) continue;
 
-      candidates.push({ qty, netVal });
+      candidates.push({ qty, netVal, netStr: suffix });
     }
     if (candidates.length === 0) continue;
 
     // 4) Choose best candidate: net must be <= gross, and reasonably close.
     let best = null;
-    for (const c of candidates) {
-      let penalty = 0;
+   for (const c of candidates) {
+  let penalty = 0;
 
-      if (c.netVal > grossVal + 0.01) penalty += 10000;
-      if (c.netVal > 200000) penalty += 10000; // blocks 681008 nonsense
-      if (c.qty > 20000) penalty += 2000;
-      if (c.qty > 5000) penalty += 500;
-      if (c.qty <= 2) penalty += 100;
+  // net must be <= gross
+  if (c.netVal > grossVal + 0.01) penalty += 10000;
 
-      const closeness = Math.abs(grossVal - c.netVal) / Math.max(1, grossVal);
-      const score = penalty + closeness * 100;
+  // block insane nets
+  if (c.netVal > 200000) penalty += 10000;
 
-      if (!best || score < best.score) best = { ...c, score };
-    }
+  // qty sanity
+  if (c.qty > 20000) penalty += 2000;
+  if (c.qty > 5000) penalty += 500;
+  if (c.qty <= 2) penalty += 100;
+
+  // ✅ NEW: penalize "leading-zero" net strings like 012.960,00 or 098,00
+  // because these are almost always the wrong split (they come from stealing a digit from qty)
+  if (typeof c.netStr === 'string') {
+    const lead = c.netStr.split(/[.,]/)[0]; // group before '.' or ',' (e.g. "012")
+    if (lead.length > 1 && lead.startsWith('0')) penalty += 5000;
+  }
+
+  const closeness = Math.abs(grossVal - c.netVal) / Math.max(1, grossVal);
+  const score = penalty + closeness * 100;
+
+  // ✅ NEW: tie-breaker -> prefer larger qty (so 720 beats 72)
+  if (!best || score < best.score || (score === best.score && c.qty > best.qty)) {
+    best = { ...c, score };
+  }
+}
     if (!best) continue;
 
     rows.push({
