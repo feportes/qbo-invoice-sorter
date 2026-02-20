@@ -357,109 +357,150 @@ function parsePackWeightListText(text) {
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
   // CONTAINER anywhere (MSDU9803683 / TTNU8744624 etc)
- let container_no = null;
+  let container_no = null;
+  const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
+  if (mContAny) {
+    container_no = mContAny[1];
+  } else {
+    const mSplit = flat.match(/\b([A-Z]{4})\s+(\d{7})\b/);
+    if (mSplit) container_no = `${mSplit[1]}${mSplit[2]}`;
+  }
 
-// 1) Normal: MSDU9803683
-let mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
-if (mContAny) {
-  container_no = mContAny[1];
-} else {
-  // 2) Sometimes extracted with a space: "MSDU 9803683"
-  const mSplit = flat.match(/\b([A-Z]{4})\s+(\d{7})\b/);
-  if (mSplit) container_no = `${mSplit[1]}${mSplit[2]}`;
-}
-
-  // Capture each row up to Batch.
-  // tail contains qty+net+gross in some glued pattern.
+  // Row capture:
+  // line + product + NCM + package type + codeRaw + tail + batch
+  // codeRaw may be "292929-01391" (dirty/glued)
+  // tail contains qty+net+gross (sometimes glued)
   const rowRe =
-  /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*([A-Z0-9\-]+)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
+    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*([A-Z0-9\-]+)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
 
-  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;             // full brazil number
-  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;          // anywhere in string
+  // Brazil numbers
+  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
+  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
+
+  // Some PDFs glue digits after hyphen: 292929-01391 (should be code 292929-0, qty 139, and maybe net-leading digit)
+  function codeSplitOptions(codeRaw) {
+    const s = String(codeRaw || '').trim();
+
+    // If it doesn't look like the "digits after hyphen" case, keep as-is.
+    // (Examples: 282828-BB, 212121-IQF, 242424-14)
+    if (!/^\d{6}-\d+$/.test(s)) {
+      return [{ code: s, extraQty: '', shift: '' }];
+    }
+
+    const mm = s.match(/^(\d{6})-(\d+)$/);
+    if (!mm) return [{ code: s, extraQty: '', shift: '' }];
+
+    const base = mm[1];
+    const digits = mm[2];
+
+    const opts = [];
+
+    // suffixLen 1 or 2 -> code suffix (0..99)
+    for (const suffixLen of [1, 2]) {
+      if (digits.length <= suffixLen) continue;
+
+      const codeSuffix = digits.slice(0, suffixLen);
+      const rest = digits.slice(suffixLen);
+
+      // shiftLen 0..3 -> digits stolen from start of NET (e.g. "1" from 1.320,50)
+      for (const shiftLen of [0, 1, 2, 3]) {
+        if (rest.length <= shiftLen) continue;
+
+        const extraQty = rest.slice(0, rest.length - shiftLen);
+        const shift = rest.slice(rest.length - shiftLen);
+
+        if (!/^\d+$/.test(extraQty)) continue;
+        if (extraQty.length < 1) continue;
+
+        opts.push({
+          code: `${base}-${codeSuffix}`,
+          extraQty,
+          shift
+        });
+      }
+    }
+
+    return opts.length ? opts : [{ code: s, extraQty: '', shift: '' }];
+  }
 
   const rows = [];
   let m;
-
-function normalizeCodeAndQty(codeRaw) {
-  const s = String(codeRaw || '').trim();
-
-  // Case: 292929-01391  -> code=292929-0, extraQty="139"
-  // Also supports 242424-14720 -> code=242424-14, extraQty="720"
-  const m = s.match(/^(\d{6})-([0-9]{1,2})(\d{1,5})$/);
-  if (m) {
-    return {
-      code: `${m[1]}-${m[2]}`,
-      extraQtyDigits: m[3]
-    };
-  }
-
-  return { code: s, extraQtyDigits: '' };
-}
 
   while ((m = rowRe.exec(flat)) !== null) {
     const line_no = Number(m[1]);
     const raw_product_name = String(m[2] || '').trim();
     const ncm = String(m[3] || '').trim();
     const package_type = String(m[4] || '').trim();
-    const { code: package_code, extraQtyDigits } = normalizeCodeAndQty(m[5]);
+    const codeRaw = String(m[5] || '').trim();
     const tail = String(m[6] || '').trim();
     const lot_number = String(m[7] || '').trim();
 
-    // Extract all brazil numbers in tail -> last is gross, the one before it belongs to qty+net glue.
-    const allNums = tail.match(brAnywhereRe) || [];
-    if (allNums.length < 2) continue;
+    // Extract all brazil numbers from tail: last is gross.
+    // Works even when net+gross are glued (4.842,005.694,19).
+    const nums = tail.match(brAnywhereRe) || [];
+    if (nums.length < 2) continue;
 
-    const grossStr = allNums[allNums.length - 1];
+    const grossStr = nums[nums.length - 1];
     const grossVal = parseBrazilNumber(grossStr);
     if (!grossVal) continue;
 
-    // Remove gross (best effort) to isolate qty+net glue
+    // Remove gross substring from tail to isolate qty+net glue (best effort)
     const idxGross = tail.lastIndexOf(grossStr);
-    const qtyNetGlue = (idxGross >= 0 ? tail.slice(0, idxGross) : tail).trim();
+    const qtyNetGlueBase = (idxGross >= 0 ? tail.slice(0, idxGross) : tail).trim();
 
-    // Generate ALL possible splits: prefix=qty, suffix=net
-    // This solves overlapping matches like 1681.008,00 (we can find suffix 1.008,00).
-    const candidates = [];
-    for (let k = 0; k < qtyNetGlue.length; k++) {
-      const suffix = qtyNetGlue.slice(k).trim();
-      if (!brFullRe.test(suffix)) continue;
-
-      const prefix = qtyNetGlue.slice(0, k);
-      const qtyDigits = (extraQtyDigits + prefix.replace(/[^\d]/g, ''));
-      const qty = qtyDigits ? Number(qtyDigits) : null;
-      if (!qty) continue;
-
-      const netVal = parseBrazilNumber(suffix);
-      if (!netVal) continue;
-
-      candidates.push({ qty, netVal, netStr: suffix });
-    }
-    if (candidates.length === 0) continue;
-
-    // Choose best candidate:
-    // - net <= gross
-    // - no leading-zero net group (012.960,00 is almost always wrong)
-    // - in ties, prefer larger qty (720 beats 72)
     let best = null;
 
-    for (const c of candidates) {
-      let penalty = 0;
+    // Try multiple interpretations of codeRaw (for dirty/glued formats)
+    for (const opt of codeSplitOptions(codeRaw)) {
+      const package_code = opt.code;
 
-      if (c.netVal > grossVal + 0.01) penalty += 10000;
-      if (c.netVal > 200000) penalty += 10000;
-      if (c.qty > 20000) penalty += 2000;
-      if (c.qty > 5000) penalty += 500;
-      if (c.qty <= 2) penalty += 100;
+      // If shift exists, push it back in front of the glue (it belongs to NET)
+      const qtyNetGlue = (opt.shift ? (opt.shift + qtyNetGlueBase) : qtyNetGlueBase);
 
-      // penalize leading-zero net like 012.960,00
-      const lead = String(c.netStr).split(/[.,]/)[0];
-      if (lead.length > 1 && lead.startsWith('0')) penalty += 5000;
+      // Generate all splits prefix=qty suffix=net by scanning suffixes
+      // This solves overlapping candidates like 1681.008,00 (finds suffix 1.008,00).
+      for (let k = 0; k < qtyNetGlue.length; k++) {
+        const netStr = qtyNetGlue.slice(k).trim();
+        if (!brFullRe.test(netStr)) continue;
 
-      const closeness = Math.abs(grossVal - c.netVal) / Math.max(1, grossVal);
-      const score = penalty + closeness * 100;
+        const prefix = qtyNetGlue.slice(0, k);
+        const prefixDigits = prefix.replace(/[^\d]/g, '');
 
-      if (!best || score < best.score || (score === best.score && c.qty > best.qty)) {
-        best = { ...c, score };
+        // prepend any extra qty digits stolen into codeRaw (like "...-0 139")
+        const qtyDigits = (opt.extraQty || '') + prefixDigits;
+        const qty = qtyDigits ? Number(qtyDigits) : null;
+        if (!qty) continue;
+
+        const netVal = parseBrazilNumber(netStr);
+        if (!netVal) continue;
+
+        // scoring
+        let penalty = 0;
+
+        // net should not exceed gross
+        if (netVal > grossVal + 0.01) penalty += 10000;
+
+        // block nonsense like 681008
+        if (netVal > 200000) penalty += 10000;
+
+        // qty sanity
+        if (qty > 20000) penalty += 2000;
+        if (qty > 5000) penalty += 500;
+        if (qty <= 2) penalty += 100;
+
+        // penalize leading-zero net like 012.960,00 or 098,00
+        const lead = String(netStr).split(/[.,]/)[0];
+        if (lead.length > 1 && lead.startsWith('0')) penalty += 5000;
+
+        const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
+        const score = penalty + closeness * 100;
+
+        const cand = { package_code, qty, netVal, score };
+
+        // tie-breaker: prefer larger qty
+        if (!best || score < best.score || (score === best.score && qty > best.qty)) {
+          best = cand;
+        }
       }
     }
 
@@ -470,7 +511,7 @@ function normalizeCodeAndQty(codeRaw) {
       raw_product_name,
       ncm,
       package_type,
-      package_code,
+      package_code: best.package_code,
       qty_packages: best.qty,
       net_kg: best.netVal,
       gross_kg: grossVal,
@@ -479,8 +520,7 @@ function normalizeCodeAndQty(codeRaw) {
   }
 
   return { doc_date, container_no, rows };
-}
- app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
+} app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   try {
     db.deleteInboundDoc(req.params.id);
     res.redirect('/inventory/inbound');
