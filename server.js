@@ -496,11 +496,6 @@ function parsePackWeightListText(text) {
   }
 
 
-  for (const l of lines) {
-    const r = parseStrictLine(l);
-    if (r) strictRows.push(r);
-  }
-
   if (strictRows.length >= 3) {
     return { doc_date, container_no, rows: strictRows };
   }
