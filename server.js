@@ -350,73 +350,134 @@ function parseBrazilNumber(x) {
 function parsePackWeightListText(text) {
   const raw = String(text || '');
   const flat = raw.replace(/\s+/g, ' ').trim();
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // DATE
+  // ---------- DATE ----------
   let doc_date = null;
   const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-  // CONTAINER anywhere (MSDU9803683 / TTNU8744624 etc)
+  // ---------- CONTAINER ----------
   let container_no = null;
   const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
   if (mContAny) {
     container_no = mContAny[1];
   } else {
+    // Sometimes extracted with a space: "MSDU 9803683"
     const mSplit = flat.match(/\b([A-Z]{4})\s+(\d{7})\b/);
     if (mSplit) container_no = `${mSplit[1]}${mSplit[2]}`;
   }
 
-  // Row capture:
-  // line + product + NCM + package type + codeRaw + tail + batch
-  // codeRaw may be "292929-01391" (dirty/glued)
-  // tail contains qty+net+gross (sometimes glued)
-  const rowRe =
-    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{3,10})\s*([A-Z0-9\-]+)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
+  // ---------- helpers ----------
+  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;       // 1.320,50
+  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;    // anywhere
 
-  // Brazil numbers
-  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
-  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
+  function parseBrazilNumber(x) {
+    const s = String(x || '').trim();
+    if (!s) return null;
+    const norm = s.replace(/\./g, '').replace(',', '.');
+    const n = Number(norm);
+    return Number.isFinite(n) ? n : null;
+  }
 
-  // Some PDFs glue digits after hyphen: 292929-01391 (should be code 292929-0, qty 139, and maybe net-leading digit)
+  function kgPenalty({ name, package_type, qty, netVal }) {
+    let unitKg = null;
+
+    // 9KG / 9.5KG / 18KG etc
+    const kgMatch = String(name).match(/(\d+(?:\.\d+)?)\s*KG\b/i);
+    if (kgMatch) unitKg = Number(kgMatch[1]);
+
+    // 100G BOX often behaves like 60x100g = 6kg
+    if (!unitKg) {
+      const is100g = /100G\b/i.test(String(name));
+      if (is100g && String(package_type).toUpperCase() === 'BOX') unitKg = 6;
+    }
+
+    if (!unitKg || !Number.isFinite(unitKg) || unitKg <= 0) return 0;
+
+    const expected = qty * unitKg;
+    const relErr = Math.abs(netVal - expected) / Math.max(1, expected);
+    return relErr * 5000; // strong penalty
+  }
+
+  // =========================================================
+  // PASS 1 (STRICT): parse clean table rows line-by-line
+  // =========================================================
+  // Supports optional Code and "RD PAIL" etc.
+  // Example:
+  // 01 PITAYA BLEND 9.5KG 2008.992140 BUCKET 292929-0 139 1.320,50 1.406,33 25223008
+  // Also OK if code is missing (some files):
+  // 09 ... 2008.992140 BUCKET 240 2.280,00 2.428,20 25020004
+  const strictRowRe =
+    /^(\d{2})\s+(.+?)\s+(\d{8}|\d{4}(?:\.\d+)+)\s+([A-Z]{2,10}(?:\s+[A-Z]{2,10})?)\s+(?:([A-Z0-9\-]+\s*(?:-\s*[A-Z0-9]+)?)\s+)?(\d{1,6}(?:\.\d{3})?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s+(\d{6,})$/i;
+
+  const strictRows = [];
+  for (const l of lines) {
+    const m = l.match(strictRowRe);
+    if (!m) continue;
+
+    const qty = Number(String(m[6]).replace(/\./g, '')); // qty can be 1.051 -> 1051
+    const netVal = parseBrazilNumber(m[7]);
+    const grossVal = parseBrazilNumber(m[8]);
+
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    if (!netVal || !grossVal) continue;
+
+    // normalize code spacing like "212121- IQF" => "212121-IQF"
+    let code = m[5] ? String(m[5]).trim() : null;
+    if (code) code = code.replace(/\s+/g, '').replace(/-+/g, '-');
+
+    strictRows.push({
+      line_no: Number(m[1]),
+      raw_product_name: String(m[2]).trim(),
+      ncm: String(m[3]).trim(),
+      package_type: String(m[4]).trim(),
+      package_code: code,
+      qty_packages: qty,
+      net_kg: netVal,
+      gross_kg: grossVal,
+      lot_number: String(m[9]).trim()
+    });
+  }
+
+  // If strict parser finds enough rows, trust it and skip glue mode.
+  if (strictRows.length >= 3) {
+    return { doc_date, container_no, rows: strictRows };
+  }
+
+  // =========================================================
+  // PASS 2 (FALLBACK): glue-solver (TP1824 / glued TP1225 etc)
+  // =========================================================
+  const fallbackRowRe =
+    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{2,10})\s*([A-Z0-9\-]+)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
+
   function codeSplitOptions(codeRaw) {
     const s = String(codeRaw || '').trim();
 
-    // If it doesn't look like the "digits after hyphen" case, keep as-is.
-    // (Examples: 282828-BB, 212121-IQF, 242424-14)
-    if (!/^\d{6}-\d+$/.test(s)) {
-      return [{ code: s, extraQty: '', shift: '' }];
-    }
+    // If not "digits after hyphen", keep it as-is
+    if (!/^\d{6}-\d+$/.test(s)) return [{ code: s, extraQty: '', shift: '' }];
 
     const mm = s.match(/^(\d{6})-(\d+)$/);
     if (!mm) return [{ code: s, extraQty: '', shift: '' }];
 
     const base = mm[1];
     const digits = mm[2];
-
     const opts = [];
 
-    // suffixLen 1 or 2 -> code suffix (0..99)
+    // suffixLen = 1 or 2 digits after hyphen (0 / 14 / etc)
     for (const suffixLen of [1, 2]) {
       if (digits.length <= suffixLen) continue;
-
       const codeSuffix = digits.slice(0, suffixLen);
       const rest = digits.slice(suffixLen);
 
-      // shiftLen 0..3 -> digits stolen from start of NET (e.g. "1" from 1.320,50)
+      // shiftLen 0..3 digits stolen from start of NET (e.g. the "1" in 1.320,50)
       for (const shiftLen of [0, 1, 2, 3]) {
         if (rest.length <= shiftLen) continue;
-
         const extraQty = rest.slice(0, rest.length - shiftLen);
         const shift = rest.slice(rest.length - shiftLen);
-
         if (!/^\d+$/.test(extraQty)) continue;
         if (extraQty.length < 1) continue;
-
-        opts.push({
-          code: `${base}-${codeSuffix}`,
-          extraQty,
-          shift
-        });
+        opts.push({ code: `${base}-${codeSuffix}`, extraQty, shift });
       }
     }
 
@@ -426,7 +487,7 @@ function parsePackWeightListText(text) {
   const rows = [];
   let m;
 
-  while ((m = rowRe.exec(flat)) !== null) {
+  while ((m = fallbackRowRe.exec(flat)) !== null) {
     const line_no = Number(m[1]);
     const raw_product_name = String(m[2] || '').trim();
     const ncm = String(m[3] || '').trim();
@@ -435,8 +496,7 @@ function parsePackWeightListText(text) {
     const tail = String(m[6] || '').trim();
     const lot_number = String(m[7] || '').trim();
 
-    // Extract all brazil numbers from tail: last is gross.
-    // Works even when net+gross are glued (4.842,005.694,19).
+    // gross = last brazil number found in tail (even if net+gross glued)
     const nums = tail.match(brAnywhereRe) || [];
     if (nums.length < 2) continue;
 
@@ -444,75 +504,50 @@ function parsePackWeightListText(text) {
     const grossVal = parseBrazilNumber(grossStr);
     if (!grossVal) continue;
 
-    // Remove gross substring from tail to isolate qty+net glue (best effort)
     const idxGross = tail.lastIndexOf(grossStr);
     const qtyNetGlueBase = (idxGross >= 0 ? tail.slice(0, idxGross) : tail).trim();
 
     let best = null;
 
-    // Try multiple interpretations of codeRaw (for dirty/glued formats)
     for (const opt of codeSplitOptions(codeRaw)) {
       const package_code = opt.code;
-
-      // If shift exists, push it back in front of the glue (it belongs to NET)
       const qtyNetGlue = (opt.shift ? (opt.shift + qtyNetGlueBase) : qtyNetGlueBase);
 
-      // Generate all splits prefix=qty suffix=net by scanning suffixes
-      // This solves overlapping candidates like 1681.008,00 (finds suffix 1.008,00).
+      // suffix scan for net candidates (solves overlap like 1681.008,00 -> 1.008,00)
       for (let k = 0; k < qtyNetGlue.length; k++) {
         const netStr = qtyNetGlue.slice(k).trim();
         if (!brFullRe.test(netStr)) continue;
 
         const prefix = qtyNetGlue.slice(0, k);
         const prefixDigits = prefix.replace(/[^\d]/g, '');
-
-        // prepend any extra qty digits stolen into codeRaw (like "...-0 139")
         const qtyDigits = (opt.extraQty || '') + prefixDigits;
+
         const qty = qtyDigits ? Number(qtyDigits) : null;
         if (!qty) continue;
 
         const netVal = parseBrazilNumber(netStr);
         if (!netVal) continue;
 
-        // scoring
         let penalty = 0;
 
-        // net should not exceed gross
         if (netVal > grossVal + 0.01) penalty += 10000;
-
-        // block nonsense like 681008
         if (netVal > 200000) penalty += 10000;
 
-        // qty sanity
         if (qty > 20000) penalty += 2000;
         if (qty > 5000) penalty += 500;
         if (qty <= 2) penalty += 100;
 
-        // penalize leading-zero net like 012.960,00 or 098,00
         const lead = String(netStr).split(/[.,]/)[0];
         if (lead.length > 1 && lead.startsWith('0')) penalty += 5000;
 
-        // Base score (net close to gross, net <= gross already enforced above)
-const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
-let score = penalty + closeness * 100;
+        const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
+        let score = penalty + closeness * 100;
 
-// ✅ NEW: If product name contains "X KG", net should be close to qty * X (very strong signal)
-const kgMatch = raw_product_name.match(/(\d+(?:\.\d+)?)\s*KG\b/i);
-if (kgMatch) {
-  const unitKg = Number(kgMatch[1]);
-  if (Number.isFinite(unitKg) && unitKg > 0) {
-    const expectedNet = qty * unitKg;
-    const relErr = Math.abs(netVal - expectedNet) / Math.max(1, expectedNet);
-    // heavily penalize wrong qty/net splits for KG-labeled products
-    score += relErr * 5000;
-  }
-}
+        // KG hint prevents 2/80 vs 240/2280 issues for 9KG/9.5KG etc
+        score += kgPenalty({ name: raw_product_name, package_type, qty, netVal });
 
-        const cand = { package_code, qty, netVal, score };
-
-        // tie-breaker: prefer larger qty
         if (!best || score < best.score || (score === best.score && qty > best.qty)) {
-          best = cand;
+          best = { package_code, qty, netVal, score };
         }
       }
     }
@@ -532,6 +567,8 @@ if (kgMatch) {
     });
   }
 
+  return { doc_date, container_no, rows };
+}
   return { doc_date, container_no, rows };
 } app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   try {
