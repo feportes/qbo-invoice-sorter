@@ -6,7 +6,23 @@
   <style>
     body { font-family: system-ui; margin:24px; max-width:1250px; }
     .muted { color:#666; font-size:13px; }
-    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  table-layout: fixed;   /* 🔥 important */
+}
+th:nth-child(1), td:nth-child(1) { width: 40px; }   /* # */
+th:nth-child(2), td:nth-child(2) { width: 260px; }  /* Product */
+th:nth-child(3), td:nth-child(3) { width: 110px; }  /* NCM */
+th:nth-child(4), td:nth-child(4) { width: 110px; }  /* Pkg */
+th:nth-child(5), td:nth-child(5) { width: 150px; }  /* Code */
+th:nth-child(6), td:nth-child(6) { width: 110px; }  /* Packages */
+th:nth-child(7), td:nth-child(7) { width: 120px; }  /* Net */
+th:nth-child(8), td:nth-child(8) { width: 120px; }  /* Gross */
+th:nth-child(9), td:nth-child(9) { width: 140px; }  /* Batch */
+th:nth-child(10), td:nth-child(10) { width: 360px; } /* SKU */
+
     th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; vertical-align: top; }
     th { background:#fafafa; }
     .q { font-family: ui-monospace, monospace; font-size:12px; }
@@ -83,7 +99,8 @@
   </div>
 
   <form method="POST" action="/inventory/inbound/<%= doc.id %>/apply">
-    <table>
+    <div style="overflow-x:auto;">
+<table>
       <thead>
         <tr>
           <th>#</th>
@@ -173,7 +190,7 @@
       </tbody>
     </table>
 
-    <div class="card">
+    <div>
       <button type="submit">Save edits + mappings + create lots</button>
       <div class="muted" style="margin-top:8px;">
         Safe for inspection workflow: edits override parsing, and lots are created from your saved rows.
