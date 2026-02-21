@@ -569,8 +569,8 @@ function parsePackWeightListText(text) {
 
   return { doc_date, container_no, rows };
 }
-  return { doc_date, container_no, rows };
-} app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
+  
+app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   try {
     db.deleteInboundDoc(req.params.id);
     res.redirect('/inventory/inbound');
