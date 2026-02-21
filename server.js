@@ -495,7 +495,7 @@ function parsePackWeightListText(text) {
     return { doc_date, container_no, rows: strictRows };
   }
 
-  const strictRows = [];
+
   for (const l of lines) {
     const r = parseStrictLine(l);
     if (r) strictRows.push(r);
