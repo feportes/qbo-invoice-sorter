@@ -11,6 +11,40 @@ sqlite.pragma('journal_mode = WAL');
 
 export const db = {
   sqlite,
+updateInboundLineAllFields({
+  line_id,
+  raw_product_name,
+  ncm,
+  package_type,
+  package_code,
+  qty_packages,
+  net_kg,
+  gross_kg,
+  lot_number
+}) {
+  sqlite.prepare(`
+    UPDATE inbound_doc_lines
+    SET raw_product_name = ?,
+        ncm = ?,
+        package_type = ?,
+        package_code = ?,
+        qty_packages = ?,
+        net_kg = ?,
+        gross_kg = ?,
+        lot_number = ?
+    WHERE id = ?
+  `).run(
+    raw_product_name ? String(raw_product_name).trim() : null,
+    ncm ? String(ncm).trim() : null,
+    package_type ? String(package_type).trim() : null,
+    package_code ? String(package_code).trim() : null,
+    (qty_packages === '' || qty_packages === null || qty_packages === undefined) ? null : Number(qty_packages),
+    (net_kg === '' || net_kg === null || net_kg === undefined) ? null : Number(net_kg),
+    (gross_kg === '' || gross_kg === null || gross_kg === undefined) ? null : Number(gross_kg),
+    lot_number ? String(lot_number).trim() : null,
+    Number(line_id)
+  );
+},
 
 deleteInboundDoc(docId) {
   const id = Number(docId);
