@@ -492,8 +492,21 @@ function parsePackWeightListText(text) {
         const lead = String(netStr).split(/[.,]/)[0];
         if (lead.length > 1 && lead.startsWith('0')) penalty += 5000;
 
-        const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
-        const score = penalty + closeness * 100;
+        // Base score (net close to gross, net <= gross already enforced above)
+const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
+let score = penalty + closeness * 100;
+
+// ✅ NEW: If product name contains "X KG", net should be close to qty * X (very strong signal)
+const kgMatch = raw_product_name.match(/(\d+(?:\.\d+)?)\s*KG\b/i);
+if (kgMatch) {
+  const unitKg = Number(kgMatch[1]);
+  if (Number.isFinite(unitKg) && unitKg > 0) {
+    const expectedNet = qty * unitKg;
+    const relErr = Math.abs(netVal - expectedNet) / Math.max(1, expectedNet);
+    // heavily penalize wrong qty/net splits for KG-labeled products
+    score += relErr * 5000;
+  }
+}
 
         const cand = { package_code, qty, netVal, score };
 
