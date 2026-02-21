@@ -368,6 +368,11 @@ function parsePackWeightListText(text) {
     if (mSplit) container_no = `${mSplit[1]}${mSplit[2]}`;
   }
 
+  if (!container_no) {
+    const mAfter = flat.match(/CONTAINER\s+([A-Z]{4}\d{7})/i);
+    if (mAfter) container_no = mAfter[1];
+  }
+
   // ---------- helpers ----------
   const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;       // 1.320,50
   const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;    // anywhere
@@ -400,47 +405,102 @@ function parsePackWeightListText(text) {
     return relErr * 5000; // strong penalty
   }
 
+   // =========================================================
+  // PASS 1 (STRICT): parse clean table rows by parsing from RIGHT side
   // =========================================================
-  // PASS 1 (STRICT): parse clean table rows line-by-line
-  // =========================================================
-  // Supports optional Code and "RD PAIL" etc.
-  // Example:
-  // 01 PITAYA BLEND 9.5KG 2008.992140 BUCKET 292929-0 139 1.320,50 1.406,33 25223008
-  // Also OK if code is missing (some files):
-  // 09 ... 2008.992140 BUCKET 240 2.280,00 2.428,20 25020004
-  const strictRowRe =
-    /^(\d{2})\s+(.+?)\s+(\d{8}|\d{4}(?:\.\d+)+)\s+([A-Z]{2,10}(?:\s+[A-Z]{2,10})?)\s+(?:([A-Z0-9\-]+\s*(?:-\s*[A-Z0-9]+)?)\s+)?(\d{1,6}(?:\.\d{3})?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s+(\d{6,})$/i;
 
-  const strictRows = [];
-  for (const l of lines) {
-    const m = l.match(strictRowRe);
-    if (!m) continue;
+  const pkgTokens = new Set(['BOX','PAIL','BUCKET','DRAW','RD','BAG','DRUM']); // add more if you see them
+  const ncmRe = /^(\d{8}|\d{4}(?:\.\d+)+)$/;
+  const brNumTokenRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/; // 1.320,50
 
-    const qty = Number(String(m[6]).replace(/\./g, '')); // qty can be 1.051 -> 1051
-    const netVal = parseBrazilNumber(m[7]);
-    const grossVal = parseBrazilNumber(m[8]);
+  function normalizeCodeToken(s) {
+    // normalize "212121- IQF" or "282828 - JC" -> "212121-IQF"
+    return String(s || '').trim().replace(/\s+/g, '').replace(/-+/g, '-');
+  }
 
-    if (!Number.isFinite(qty) || qty <= 0) continue;
-    if (!netVal || !grossVal) continue;
+  function parseStrictLine(line) {
+    // Only consider lines that start with row number "01", "02", etc.
+    const start = line.match(/^(\d{2})\s+/);
+    if (!start) return null;
 
-    // normalize code spacing like "212121- IQF" => "212121-IQF"
-    let code = m[5] ? String(m[5]).trim() : null;
-    if (code) code = code.replace(/\s+/g, '').replace(/-+/g, '-');
+    const tokens = line.split(/\s+/).filter(Boolean);
+    if (tokens.length < 6) return null;
 
-    strictRows.push({
-      line_no: Number(m[1]),
-      raw_product_name: String(m[2]).trim(),
-      ncm: String(m[3]).trim(),
-      package_type: String(m[4]).trim(),
+    // batch must be last token (digits)
+    const lot = tokens[tokens.length - 1];
+    if (!/^\d{6,}$/.test(lot)) return null;
+
+    // gross + net are the 2 tokens before batch (must be brazil numbers)
+    const grossStr = tokens[tokens.length - 2];
+    const netStr = tokens[tokens.length - 3];
+    if (!brNumTokenRe.test(grossStr) || !brNumTokenRe.test(netStr)) return null;
+
+    const grossVal = parseBrazilNumber(grossStr);
+    const netVal = parseBrazilNumber(netStr);
+    if (!grossVal || !netVal) return null;
+
+    // qty is token before net (can be 1.051 or 240 etc)
+    const qtyRaw = tokens[tokens.length - 4].replace(/\./g, '');
+    const qty = Number(qtyRaw);
+    if (!Number.isFinite(qty) || qty <= 0) return null;
+
+    // Now parse the left side: [lineNo] [product words...] [NCM] [package tokens...] [optional code]
+    const lineNo = Number(tokens[0]);
+
+    // Find NCM index (first token that matches)
+    let idxNcm = -1;
+    for (let i = 1; i < tokens.length; i++) {
+      if (ncmRe.test(tokens[i])) { idxNcm = i; break; }
+    }
+    if (idxNcm === -1) return null;
+
+    const productName = tokens.slice(1, idxNcm).join(' ').trim();
+    const ncm = tokens[idxNcm];
+
+    // Remaining tokens between NCM and qty are: package_type (1–2 tokens like "RD PAIL") and maybe code
+    const mid = tokens.slice(idxNcm + 1, tokens.length - 4);
+
+    // Determine package_type: take 1 or 2 tokens if they look like package words
+    let package_type = null;
+    let code = null;
+
+    if (mid.length === 0) return null;
+
+    // If first two tokens are like "RD PAIL"
+    if (mid.length >= 2 && pkgTokens.has(mid[0].toUpperCase()) && pkgTokens.has(mid[1].toUpperCase())) {
+      package_type = `${mid[0]} ${mid[1]}`;
+      if (mid.length >= 3) code = normalizeCodeToken(mid.slice(2).join(' '));
+    } else {
+      // else package is first token
+      package_type = mid[0];
+      if (mid.length >= 2) code = normalizeCodeToken(mid.slice(1).join(' '));
+    }
+
+    // code may be missing on some files; normalize empty -> null
+    if (code) {
+      // if code is all punctuation, drop it
+      if (!/[A-Z0-9]/i.test(code)) code = null;
+    }
+
+    return {
+      line_no: lineNo,
+      raw_product_name: productName,
+      ncm,
+      package_type,
       package_code: code,
       qty_packages: qty,
       net_kg: netVal,
       gross_kg: grossVal,
-      lot_number: String(m[9]).trim()
-    });
+      lot_number: lot
+    };
   }
 
-  // If strict parser finds enough rows, trust it and skip glue mode.
+  const strictRows = [];
+  for (const l of lines) {
+    const r = parseStrictLine(l);
+    if (r) strictRows.push(r);
+  }
+
   if (strictRows.length >= 3) {
     return { doc_date, container_no, rows: strictRows };
   }
