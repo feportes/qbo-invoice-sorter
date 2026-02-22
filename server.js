@@ -679,20 +679,16 @@ app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
     const doc = db.getInboundDoc(docId);
     if (!doc) throw new Error('Inbound doc not found');
 
-    const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
+ const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
 
 const lineIds = toArr(req.body.line_id);
-const skuIds = toArr(req.body.sku_id);
+const skuIds  = toArr(req.body.sku_id);
 
-const nameArr = toArr(req.body.raw_product_name);
-const ncmArr = toArr(req.body.ncm);
-const pkgTypeArr = toArr(req.body.package_type);
-const codeArr = toArr(req.body.package_code);
-
-const qtyArr = toArr(req.body.qty_packages);
-const netArr = toArr(req.body.net_kg);
+const nameArr  = toArr(req.body.raw_product_name);
+const qtyArr   = toArr(req.body.qty_packages);
+const netArr   = toArr(req.body.net_kg);
 const grossArr = toArr(req.body.gross_kg);
-const lotArr = toArr(req.body.lot_number);
+const lotArr   = toArr(req.body.lot_number);
 
 for (let i = 0; i < lineIds.length; i++) {
   const lineId = Number(lineIds[i]);
@@ -700,16 +696,14 @@ for (let i = 0; i < lineIds.length; i++) {
 
   const skuId = skuIds[i] ? Number(skuIds[i]) : null;
 
-  // 1) save sku mapping
   db.setInboundLineSku(lineId, skuId);
 
-  // 2) save edited fields
   db.updateInboundLineAllFields({
     line_id: lineId,
     raw_product_name: nameArr[i],
-    ncm: ncmArr[i],
-    package_type: pkgTypeArr[i],
-    package_code: codeArr[i],
+    ncm: null,
+    package_type: null,
+    package_code: null,
     qty_packages: qtyArr[i],
     net_kg: netArr[i],
     gross_kg: grossArr[i],

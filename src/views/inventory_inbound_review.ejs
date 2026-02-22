@@ -4,23 +4,23 @@
   <meta charset="utf-8"/>
   <title>Inbound Review</title>
   <style>
-    body { font-family: system-ui; margin:24px; max-width:1250px; }
+    body { font-family: system-ui; margin:24px; max-width:1400px; }
     .muted { color:#666; font-size:13px; }
+    .q { font-family: ui-monospace, monospace; font-size:12px; }
+    .right { text-align:right; }
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+
+    /* Scroll container */
+    .table-wrap { overflow-x:auto; border:1px solid #eee; border-radius:12px; margin-top:12px; }
 
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 12px;
       table-layout: fixed;
+      min-width: 1200px; /* forces horizontal scroll instead of squishing */
     }
 
-    th, td {
-      border-bottom: 1px solid #eee;
-      padding: 10px;
-      text-align: left;
-      vertical-align: top;
-    }
-
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; vertical-align: top; }
     th { background:#fafafa; }
 
     /* Sticky header */
@@ -34,14 +34,11 @@
       background: #fff;
     }
 
-    /* When a row is highlighted, keep sticky cell the same highlight */
+    /* Keep sticky cell background correct when row is highlighted */
     tr.suspicious td.sticky-product { background: #fff3cd; }
     tr.bad td.sticky-product { background: #ffe0e0; }
 
-    .q { font-family: ui-monospace, monospace; font-size:12px; }
-    .right { text-align:right; }
-    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
-
+    /* Inputs */
     input[type="text"], input[type="number"] {
       width: 100%;
       box-sizing: border-box;
@@ -52,15 +49,16 @@
       min-width: 0;
     }
 
-    /* Column widths (now that we removed NCM/pkg/code) */
-    th:nth-child(1), td:nth-child(1) { width: 50px; }    /* # */
-    th:nth-child(2), td:nth-child(2) { width: 320px; }   /* Product */
-    th:nth-child(3), td:nth-child(3) { width: 120px; }   /* Packages */
-    th:nth-child(4), td:nth-child(4) { width: 140px; }   /* Net */
-    th:nth-child(5), td:nth-child(5) { width: 140px; }   /* Gross */
-    th:nth-child(6), td:nth-child(6) { width: 160px; }   /* Batch */
-    th:nth-child(7), td:nth-child(7) { width: 360px; }   /* SKU */
+    /* Column widths (7 columns total) */
+    th:nth-child(1), td:nth-child(1) { width: 55px; }   /* # */
+    th:nth-child(2), td:nth-child(2) { width: 360px; }  /* Product */
+    th:nth-child(3), td:nth-child(3) { width: 120px; }  /* Packages */
+    th:nth-child(4), td:nth-child(4) { width: 140px; }  /* Net */
+    th:nth-child(5), td:nth-child(5) { width: 140px; }  /* Gross */
+    th:nth-child(6), td:nth-child(6) { width: 170px; }  /* Batch */
+    th:nth-child(7), td:nth-child(7) { width: 360px; }  /* SKU */
 
+    /* SKU autocomplete */
     .sku-wrap { position: relative; }
     .sku-suggestions {
       position: absolute;
@@ -81,14 +79,14 @@
     }
     .sku-suggestions li { padding: 8px 10px; cursor: pointer; }
     .sku-suggestions li:hover { background:#f5f5f5; }
-
     .sku-clear { margin-top: 6px; font-size: 12px; color: #666; cursor: pointer; display: inline-block; }
 
     /* Suspicious row highlight */
-    tr.suspicious td { background: #fff3cd; }
-    tr.bad td { background: #ffe0e0; }
+    tr.suspicious td { background: #fff3cd; } /* yellow */
+    tr.bad td { background: #ffe0e0; }        /* red */
   </style>
 </head>
+
 <body>
   <a href="/inventory/inbound">← Back</a>
 
@@ -111,12 +109,12 @@
 
   <div class="card muted">
     Rows highlighted:
-    <div>- <b>Yellow</b>: suspicious (qty very small vs net, missing lot, etc.)</div>
-    <div>- <b>Red</b>: invalid (net &gt; gross, missing net/gross, etc.)</div>
+    <div>- <b>Yellow</b>: suspicious (qty very small vs net, missing batch, KG mismatch, etc.)</div>
+    <div>- <b>Red</b>: invalid (net &gt; gross, missing net/gross)</div>
   </div>
 
   <form method="POST" action="/inventory/inbound/<%= doc.id %>/apply">
-    <div style="overflow-x:auto;">
+    <div class="table-wrap">
       <table>
         <thead>
           <tr>
@@ -141,6 +139,7 @@
                   data-gross="<%= ln.gross_kg ?? '' %>"
                   data-lot="<%= ln.lot_number ?? '' %>"
                   data-name="<%= (ln.raw_product_name || '') %>">
+
                 <td class="q"><%= ln.line_no ?? '' %></td>
 
                 <td class="sticky-product">
@@ -165,6 +164,7 @@
                 </td>
 
                 <td>
+                  <!-- Hidden sku_id submitted -->
                   <input type="hidden" name="sku_id" id="sku_id_<%= idx %>" value="<%= ln.sku_id || '' %>"/>
 
                   <div class="sku-wrap">
@@ -195,7 +195,7 @@
     <div class="card">
       <button type="submit">Save edits + mappings + create lots</button>
       <div class="muted" style="margin-top:8px;">
-        Safe for inspection workflow: edits override parsing, and lots are created from your saved rows.
+        Edits override parsing. This is the safe inspection workflow.
       </div>
     </div>
   </form>
