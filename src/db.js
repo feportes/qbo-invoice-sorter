@@ -11,6 +11,48 @@ sqlite.pragma('journal_mode = WAL');
 
 export const db = {
   sqlite,
+
+updateInboundDocRawText(docId, rawText) {
+  sqlite.prepare(`UPDATE inbound_docs SET raw_text=? WHERE id=?`)
+    .run(rawText ? String(rawText) : null, Number(docId));
+},
+
+getInboundDocRawText(docId) {
+  const r = sqlite.prepare(`SELECT raw_text FROM inbound_docs WHERE id=?`).get(Number(docId));
+  return r?.raw_text || null;
+},
+
+replaceInboundDocLines(docId, rows) {
+  const id = Number(docId);
+  const tx = sqlite.transaction(() => {
+    sqlite.prepare(`DELETE FROM inbound_doc_lines WHERE inbound_doc_id=?`).run(id);
+
+    const ins = sqlite.prepare(`
+      INSERT INTO inbound_doc_lines
+        (inbound_doc_id, line_no, raw_product_name, ncm, package_type, package_code,
+         qty_packages, net_kg, gross_kg, lot_number, sku_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const r of rows) {
+      ins.run(
+        id,
+        r.line_no ?? null,
+        r.raw_product_name ?? null,
+        r.ncm ?? null,
+        r.package_type ?? null,
+        r.package_code ?? null,
+        r.qty_packages ?? null,
+        r.net_kg ?? null,
+        r.gross_kg ?? null,
+        r.lot_number ?? null,
+        r.sku_id ?? null
+      );
+    }
+  });
+  tx();
+},
+
 updateInboundLineAllFields({
   line_id,
   raw_product_name,

@@ -236,6 +236,99 @@ app.get('/inventory/inbound', requireConnected, (req, res) => {
   res.render('inventory_inbound', { docs, msg: null });
 });
 
+app.post('/inventory/inbound/:id/reload', requireConnected, (req, res) => {
+  try {
+    const docId = Number(req.params.id);
+    const doc = db.getInboundDoc(docId);
+    if (!doc) throw new Error('Inbound doc not found');
+
+    const rawText = db.getInboundDocRawText(docId);
+    if (!rawText) throw new Error('No stored extracted text for this doc. Re-upload the PDF once.');
+
+    const { doc_date, container_no, rows } = parsePackWeightListText(rawText);
+
+    // Replace all lines for this doc with freshly parsed rows
+    db.replaceInboundDocLines(docId, rows);
+
+    // Update header if parser found date/container
+    if (doc_date || container_no) {
+      db.updateInboundDocHeader({
+        id: docId,
+        doc_date: doc_date || doc.doc_date,
+        container_no: container_no || doc.container_no
+      });
+    }
+
+    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent('Reloaded from PDF text.')}`);
+  } catch (e) {
+    return res.status(500).send(`Reload from PDF failed: ${e?.message || e}`);
+  }
+});
+
+app.post('/inventory/inbound/:id/save-only', requireConnected, (req, res) => {
+  try {
+    const docId = Number(req.params.id);
+
+    const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
+    const lineIds = toArr(req.body.line_id);
+    const skuIds  = toArr(req.body.sku_id);
+
+    const nameArr  = toArr(req.body.raw_product_name);
+    const qtyArr   = toArr(req.body.qty_packages);
+    const netArr   = toArr(req.body.net_kg);
+    const grossArr = toArr(req.body.gross_kg);
+    const lotArr   = toArr(req.body.lot_number);
+
+    for (let i = 0; i < lineIds.length; i++) {
+      const lineId = Number(lineIds[i]);
+      if (!lineId) continue;
+
+      const skuId = skuIds[i] ? Number(skuIds[i]) : null;
+      db.setInboundLineSku(lineId, skuId);
+
+      db.updateInboundLineAllFields({
+        line_id: lineId,
+        raw_product_name: nameArr[i],
+        ncm: null,
+        package_type: null,
+        package_code: null,
+        qty_packages: qtyArr[i],
+        net_kg: netArr[i],
+        gross_kg: grossArr[i],
+        lot_number: lotArr[i]
+      });
+    }
+
+    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent('Saved changes (no lots created).')}`);
+  } catch (e) {
+    return res.status(500).send(`Save-only failed: ${e?.message || e}`);
+  }
+});
+
+app.post('/inventory/inbound/:id/create-lots', requireConnected, (req, res) => {
+  try {
+    const docId = Number(req.params.id);
+    const lines = db.listInboundDocLines(docId);
+
+    let created = 0;
+    let skipped = 0;
+
+    for (const ln of lines) {
+      if (!ln.sku_id || !ln.lot_number) { skipped++; continue; }
+
+      const sku = db.sqlite.prepare(`SELECT is_organic FROM skus WHERE id=?`).get(Number(ln.sku_id));
+      if (!sku || !sku.is_organic) { skipped++; continue; }
+
+      db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
+      created++;
+    }
+
+    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent(`Created/updated organic lots: ${created} (skipped ${skipped}).`)}`);
+  } catch (e) {
+    return res.status(500).send(`Create lots failed: ${e?.message || e}`);
+  }
+});
+
 app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   try {
     db.deleteInboundDoc(req.params.id);
@@ -267,6 +360,9 @@ app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), as
       source_filename: req.file.originalname,
       notes: `parsed_rows=${rows.length}`
     });
+
+// ✅ STORE extracted text for "Reload from PDF"
+db.updateInboundDocRawText(inboundDocId, parsed.text);
 
     for (const r of rows) {
       const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);
