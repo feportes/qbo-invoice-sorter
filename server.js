@@ -483,7 +483,38 @@ function parseBrazilNumber(x) {
 function parsePackWeightListText(text) {
   const raw = String(text || '');
   const flat = raw.replace(/\s+/g, ' ').trim();
-  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Split to lines, trim, and keep non-empty
+  let lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // --- NEW: merge wrapped product rows (e.g., row 06 wraps "WITH" then "GUARANÁ 100G...")
+  // If a line starts with "NN " and the next line does NOT start with "NN " (two digits + space),
+  // treat the next line as continuation unless it is just a placeholder number like "08".
+  const merged = [];
+  for (let i = 0; i < lines.length; i++) {
+    let cur = lines[i];
+
+    const isRowStart = /^\d{2}\s+/.test(cur);
+    if (isRowStart) {
+      // Keep merging continuations
+      while (i + 1 < lines.length) {
+        const next = lines[i + 1];
+
+        // Stop if next is a new row start
+        if (/^\d{2}\s+/.test(next)) break;
+
+        // Stop if next is just a placeholder "08" .. "99"
+        if (/^\d{2}$/.test(next)) break;
+
+        // Otherwise, it's a continuation line -> append
+        cur = `${cur} ${next}`.replace(/\s+/g, ' ').trim();
+        i++;
+      }
+    }
+
+    merged.push(cur);
+  }
+  lines = merged;
 
   // DATE
   let doc_date = null;
@@ -503,7 +534,6 @@ function parsePackWeightListText(text) {
     if (mAfter) container_no = mAfter[1];
   }
 
-  // helpers
   const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
   const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
 
@@ -521,11 +551,27 @@ function parsePackWeightListText(text) {
   for (const line of lines) {
     if (!/^\d{2}\s+/.test(line)) continue;
 
-    const tokens = line.split(/\s+/).filter(Boolean);
+    let tokens = line.split(/\s+/).filter(Boolean);
     if (tokens.length < 6) continue;
 
-    const lot = tokens[tokens.length - 1];
-    if (!/^\d{6,}$/.test(lot)) continue;
+    // --- NEW: strip trailing placeholder numbers like "08" "09" if they got glued on
+    while (tokens.length && /^\d{2}$/.test(tokens[tokens.length - 1])) {
+      tokens.pop();
+    }
+    if (tokens.length < 6) continue;
+
+    // lot must be last token, 6+ digits
+    let lot = tokens[tokens.length - 1];
+    if (!/^\d{6,}$/.test(lot)) {
+      // If last token isn't a lot but second-to-last is, treat it as lot (extra token glitch)
+      const maybeLot = tokens[tokens.length - 2];
+      if (/^\d{6,}$/.test(maybeLot)) {
+        lot = maybeLot;
+        tokens = tokens.slice(0, tokens.length - 1);
+      } else {
+        continue;
+      }
+    }
 
     const grossStr = tokens[tokens.length - 2];
     const netStr = tokens[tokens.length - 3];
@@ -581,7 +627,6 @@ function parsePackWeightListText(text) {
     });
   }
 
-  // accept strict if it found anything (prevents falling back to wrong splits)
   if (strictRows.length >= 1) {
     return { doc_date, container_no, rows: strictRows };
   }

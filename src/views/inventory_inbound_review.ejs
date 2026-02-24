@@ -17,7 +17,7 @@
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
-      min-width: 1200px; /* forces horizontal scroll instead of squishing */
+      min-width: 1100px; /* forces horizontal scroll instead of squishing */
     }
 
     th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; vertical-align: top; }
@@ -49,14 +49,13 @@
       min-width: 0;
     }
 
-    /* Column widths (7 columns total) */
+    /* Column widths (6 visible columns total) */
     th:nth-child(1), td:nth-child(1) { width: 55px; }   /* # */
-    th:nth-child(2), td:nth-child(2) { width: 360px; }  /* Product */
+    th:nth-child(2), td:nth-child(2) { width: 420px; }  /* Product */
     th:nth-child(3), td:nth-child(3) { width: 120px; }  /* Packages */
     th:nth-child(4), td:nth-child(4) { width: 140px; }  /* Net */
-    th:nth-child(5), td:nth-child(5) { width: 140px; }  /* Gross */
-    th:nth-child(6), td:nth-child(6) { width: 170px; }  /* Batch */
-    th:nth-child(7), td:nth-child(7) { width: 360px; }  /* SKU */
+    th:nth-child(5), td:nth-child(5) { width: 170px; }  /* Batch */
+    th:nth-child(6), td:nth-child(6) { width: 380px; }  /* SKU */
 
     /* SKU autocomplete */
     .sku-wrap { position: relative; }
@@ -107,32 +106,31 @@
     File: <span class="q"><%= doc.source_filename || '' %></span>
   </div>
 
-<div class="card" style="display:flex; gap:10px; flex-wrap:wrap;">
-  <!-- IMPORTANT: bind these buttons to the real form below -->
-  <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/reload">
-    Reload from PDF
-  </button>
+  <!-- Action buttons (must be inside/bound to a form to submit reliably) -->
+  <div class="card" style="display:flex; gap:10px; flex-wrap:wrap;">
+    <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/reload">
+      Reload from PDF
+    </button>
 
-  <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/save-only">
-    Save changes
-  </button>
+    <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/save-only">
+      Save changes
+    </button>
 
-  <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/create-lots">
-    Create Organic Lots
-  </button>
+    <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/create-lots">
+      Create Organic Lots
+    </button>
 
-  <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/apply">
-    Save + Create Organic Lots
-  </button>
+    <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/apply">
+      Save + Create Organic Lots
+    </button>
 
-  <a href="/inventory/audit/search" class="btn secondary">Go to Organic Audit</a>
-</div>
-
+    <a href="/inventory/audit/search" class="btn secondary">Go to Organic Audit</a>
+  </div>
 
   <div class="card muted">
     Rows highlighted:
-    <div>- <b>Yellow</b>: suspicious (qty very small vs net, missing batch, KG mismatch, etc.)</div>
-    <div>- <b>Red</b>: invalid (net &gt; gross, missing net/gross)</div>
+    <div>- <b>Yellow</b>: suspicious (missing batch, KG mismatch, etc.)</div>
+    <div>- <b>Red</b>: invalid (missing net)</div>
   </div>
 
   <form id="inboundForm" method="POST" action="/inventory/inbound/<%= doc.id %>/apply">
@@ -144,7 +142,6 @@
             <th class="sticky-product">Product (editable)</th>
             <th class="right">Packages</th>
             <th class="right">Net kg</th>
-            <th class="right">Gross kg</th>
             <th>Batch</th>
             <th>Map to SKU</th>
           </tr>
@@ -152,7 +149,7 @@
 
         <tbody>
           <% if (!lines || lines.length === 0) { %>
-            <tr><td colspan="7" class="muted">No parsed lines were found for this PDF.</td></tr>
+            <tr><td colspan="6" class="muted">No parsed lines were found for this PDF.</td></tr>
           <% } else { %>
             <% lines.forEach((ln, idx) => { %>
               <tr class="inbound-row"
@@ -175,10 +172,8 @@
 
                 <td class="right">
                   <input type="number" step="0.01" name="net_kg" value="<%= (ln.net_kg ?? '') %>"/>
-                </td>
-
-                <td class="right">
-                  <input type="number" step="0.01" name="gross_kg" value="<%= (ln.gross_kg ?? '') %>"/>
+                  <!-- Keep gross_kg flowing through the form even though we hide it -->
+                  <input type="hidden" name="gross_kg" value="<%= (ln.gross_kg ?? '') %>"/>
                 </td>
 
                 <td>
@@ -214,11 +209,11 @@
       </table>
     </div>
 
-<div class="card" style="display:flex; gap:10px; flex-wrap:wrap;">
-  <a href="/inventory/audit/search" class="btn secondary">
-    Go to Organic Audit
-  </a>
-</div>
+    <div class="card" style="display:flex; gap:10px; flex-wrap:wrap;">
+      <a href="/inventory/audit/search" class="btn secondary">
+        Go to Organic Audit
+      </a>
+    </div>
 
     <div class="card">
       <button type="submit">Save edits + mappings + create lots</button>
@@ -302,7 +297,6 @@
     document.querySelectorAll('tr.inbound-row').forEach(tr => {
       const qty = toNum(tr.dataset.qty);
       const net = toNum(tr.dataset.net);
-      const gross = toNum(tr.dataset.gross);
       const lot = (tr.dataset.lot || '').trim();
       const name = (tr.dataset.name || '').trim();
 
@@ -310,10 +304,9 @@
       let bad = false;
 
       if (!lot) suspicious = true;
-      if (!net || !gross) bad = true;
-      if (net && gross && net > gross + 0.01) bad = true;
-      if (qty !== null && net !== null && qty <= 5 && net >= 200) suspicious = true;
+      if (!net) bad = true;
 
+      // KG mismatch heuristic (product name like "9KG" * packages should roughly match net)
       const kgMatch = name.match(/(\d+(?:\.\d+)?)\s*KG\b/i);
       if (kgMatch && qty && net) {
         const unitKg = Number(kgMatch[1]);
