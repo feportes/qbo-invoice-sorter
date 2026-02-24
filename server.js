@@ -447,6 +447,9 @@ app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
     return res.status(500).send(`Apply inbound failed: ${e?.message || e}`);
   }
 });
+// ==========================================================
+// Helpers: Brazil number
+// ==========================================================
 function parseBrazilNumber(x) {
   // "12.960,00" -> 12960.00
   const s = String(x || '').trim();
@@ -456,98 +459,56 @@ function parseBrazilNumber(x) {
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * Robust parser for Xingu "Pack and Weight List" extracted text.
- * Handles:
- * - Code+Qty+Net glued (2323231681.008,00)
- * - Net+Gross glued (4.842,005.694,19)
- * - LineNo glued to name (02PASTEURIZED...)
- * - Codes with suffix (282828-BB / 212121-IQF / 242424-14)
- * - NCM as 8 digits or dotted format
- */
+// ==========================================================
+// Pack & Weight List parser (2-pass: strict then fallback)
+// ==========================================================
 function parsePackWeightListText(text) {
   const raw = String(text || '');
   const flat = raw.replace(/\s+/g, ' ').trim();
   const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // ---------- DATE ----------
+  // DATE
   let doc_date = null;
   const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-  // ---------- CONTAINER ----------
+  // CONTAINER (try multiple ways)
   let container_no = null;
   const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
-  if (mContAny) {
-    container_no = mContAny[1];
-  } else {
-    // Sometimes extracted with a space: "MSDU 9803683"
+  if (mContAny) container_no = mContAny[1];
+  if (!container_no) {
     const mSplit = flat.match(/\b([A-Z]{4})\s+(\d{7})\b/);
     if (mSplit) container_no = `${mSplit[1]}${mSplit[2]}`;
   }
-
   if (!container_no) {
     const mAfter = flat.match(/CONTAINER\s+([A-Z]{4}\d{7})/i);
     if (mAfter) container_no = mAfter[1];
   }
 
-  // ---------- helpers ----------
-  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;       // 1.320,50
-  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;    // anywhere
+  // helpers
+  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
+  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
 
-  function parseBrazilNumber(x) {
-    const s = String(x || '').trim();
-    if (!s) return null;
-    const norm = s.replace(/\./g, '').replace(',', '.');
-    const n = Number(norm);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  function kgPenalty({ name, package_type, qty, netVal }) {
-    let unitKg = null;
-
-    // 9KG / 9.5KG / 18KG etc
-    const kgMatch = String(name).match(/(\d+(?:\.\d+)?)\s*KG\b/i);
-    if (kgMatch) unitKg = Number(kgMatch[1]);
-
-    // 100G BOX often behaves like 60x100g = 6kg
-    if (!unitKg) {
-      const is100g = /100G\b/i.test(String(name));
-      if (is100g && String(package_type).toUpperCase() === 'BOX') unitKg = 6;
-    }
-
-    if (!unitKg || !Number.isFinite(unitKg) || unitKg <= 0) return 0;
-
-    const expected = qty * unitKg;
-    const relErr = Math.abs(netVal - expected) / Math.max(1, expected);
-    return relErr * 5000; // strong penalty
-  }
-
-   // =========================================================
+  // =========================================================
   // PASS 1 (STRICT): parse clean rows by slicing from RIGHT side
   // =========================================================
   const strictRows = [];
-
   const ncmTokenRe = /^(\d{8}|\d{4}(?:\.\d+)+)$/;
   const brNumTokenRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
 
   function normalizeCodeToken(s) {
-    // "212121- IQF" or "282828 - JC" -> "212121-IQF"
     return String(s || '').trim().replace(/\s+/g, '').replace(/-+/g, '-');
   }
 
   for (const line of lines) {
-    // must start with row number like "01", "02", etc
     if (!/^\d{2}\s+/.test(line)) continue;
 
     const tokens = line.split(/\s+/).filter(Boolean);
     if (tokens.length < 6) continue;
 
-    // batch must be last token
     const lot = tokens[tokens.length - 1];
     if (!/^\d{6,}$/.test(lot)) continue;
 
-    // gross & net must be the two tokens before batch
     const grossStr = tokens[tokens.length - 2];
     const netStr = tokens[tokens.length - 3];
     if (!brNumTokenRe.test(netStr) || !brNumTokenRe.test(grossStr)) continue;
@@ -556,17 +517,13 @@ function parsePackWeightListText(text) {
     const netVal = parseBrazilNumber(netStr);
     if (!grossVal || !netVal) continue;
 
-    // qty token right before net
     const qtyRaw = tokens[tokens.length - 4].replace(/\./g, '');
     const qty = Number(qtyRaw);
     if (!Number.isFinite(qty) || qty <= 0) continue;
 
     const lineNo = Number(tokens[0]);
-
-    // everything between lineNo and qty is: product + NCM + package + optional code
     const left = tokens.slice(1, tokens.length - 4);
 
-    // find NCM token
     let idxNcm = -1;
     for (let i = 0; i < left.length; i++) {
       if (ncmTokenRe.test(left[i])) { idxNcm = i; break; }
@@ -576,10 +533,9 @@ function parsePackWeightListText(text) {
     const productName = left.slice(0, idxNcm).join(' ').trim();
     const ncm = left[idxNcm];
 
-    const mid = left.slice(idxNcm + 1); // package + maybe code
+    const mid = left.slice(idxNcm + 1);
     if (mid.length < 1) continue;
 
-    // package type can be 1–2 tokens (e.g., "RD PAIL")
     let package_type = mid[0];
     let startCodeIdx = 1;
 
@@ -607,27 +563,35 @@ function parsePackWeightListText(text) {
     });
   }
 
-  // ✅ IMPORTANT: accept strict if it parsed ANY meaningful rows.
-  // This prevents falling back and producing "2 / 80" errors.
+  // accept strict if it found anything (prevents falling back to wrong splits)
   if (strictRows.length >= 1) {
     return { doc_date, container_no, rows: strictRows };
   }
 
+  // =========================================================
+  // PASS 2 (FALLBACK): glue-solver for bad pdf-parse output
+  // =========================================================
+  function kgPenalty({ name, package_type, qty, netVal }) {
+    let unitKg = null;
+    const kgMatch = String(name).match(/(\d+(?:\.\d+)?)\s*KG\b/i);
+    if (kgMatch) unitKg = Number(kgMatch[1]);
 
-  if (strictRows.length >= 3) {
-    return { doc_date, container_no, rows: strictRows };
+    if (!unitKg) {
+      const is100g = /100G\b/i.test(String(name));
+      if (is100g && String(package_type).toUpperCase() === 'BOX') unitKg = 6;
+    }
+
+    if (!unitKg || !Number.isFinite(unitKg) || unitKg <= 0) return 0;
+    const expected = qty * unitKg;
+    const relErr = Math.abs(netVal - expected) / Math.max(1, expected);
+    return relErr * 5000;
   }
 
-  // =========================================================
-  // PASS 2 (FALLBACK): glue-solver (TP1824 / glued TP1225 etc)
-  // =========================================================
   const fallbackRowRe =
     /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{2,10})\s*([A-Z0-9\-]+)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
 
   function codeSplitOptions(codeRaw) {
     const s = String(codeRaw || '').trim();
-
-    // If not "digits after hyphen", keep it as-is
     if (!/^\d{6}-\d+$/.test(s)) return [{ code: s, extraQty: '', shift: '' }];
 
     const mm = s.match(/^(\d{6})-(\d+)$/);
@@ -637,13 +601,11 @@ function parsePackWeightListText(text) {
     const digits = mm[2];
     const opts = [];
 
-    // suffixLen = 1 or 2 digits after hyphen (0 / 14 / etc)
     for (const suffixLen of [1, 2]) {
       if (digits.length <= suffixLen) continue;
       const codeSuffix = digits.slice(0, suffixLen);
       const rest = digits.slice(suffixLen);
 
-      // shiftLen 0..3 digits stolen from start of NET (e.g. the "1" in 1.320,50)
       for (const shiftLen of [0, 1, 2, 3]) {
         if (rest.length <= shiftLen) continue;
         const extraQty = rest.slice(0, rest.length - shiftLen);
@@ -669,7 +631,6 @@ function parsePackWeightListText(text) {
     const tail = String(m[6] || '').trim();
     const lot_number = String(m[7] || '').trim();
 
-    // gross = last brazil number found in tail (even if net+gross glued)
     const nums = tail.match(brAnywhereRe) || [];
     if (nums.length < 2) continue;
 
@@ -686,7 +647,6 @@ function parsePackWeightListText(text) {
       const package_code = opt.code;
       const qtyNetGlue = (opt.shift ? (opt.shift + qtyNetGlueBase) : qtyNetGlueBase);
 
-      // suffix scan for net candidates (solves overlap like 1681.008,00 -> 1.008,00)
       for (let k = 0; k < qtyNetGlue.length; k++) {
         const netStr = qtyNetGlue.slice(k).trim();
         if (!brFullRe.test(netStr)) continue;
@@ -705,7 +665,6 @@ function parsePackWeightListText(text) {
 
         if (netVal > grossVal + 0.01) penalty += 10000;
         if (netVal > 200000) penalty += 10000;
-
         if (qty > 20000) penalty += 2000;
         if (qty > 5000) penalty += 500;
         if (qty <= 2) penalty += 100;
@@ -715,8 +674,6 @@ function parsePackWeightListText(text) {
 
         const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
         let score = penalty + closeness * 100;
-
-        // KG hint prevents 2/80 vs 240/2280 issues for 9KG/9.5KG etc
         score += kgPenalty({ name: raw_product_name, package_type, qty, netVal });
 
         if (!best || score < best.score || (score === best.score && qty > best.qty)) {
@@ -742,7 +699,10 @@ function parsePackWeightListText(text) {
 
   return { doc_date, container_no, rows };
 }
-  
+
+// ==========================================================
+// Inbound Routes (single set only)
+// ==========================================================
 app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   try {
     db.deleteInboundDoc(req.params.id);
@@ -752,7 +712,37 @@ app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   }
 });
 
- 
+app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) throw new Error('Missing PDF file');
+
+    const parsed = await pdfParse(req.file.buffer);
+    const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
+
+    console.log('[inbound] parsed:', { file: req.file?.originalname, doc_date, container_no, rows_len: rows.length });
+    if (rows?.length) console.log('[inbound] first_row:', rows[0]);
+
+    const inboundDocId = db.createInboundDoc({
+      doc_date,
+      container_no,
+      source_filename: req.file.originalname,
+      notes: `parsed_rows=${rows.length}`
+    });
+
+    // Store extracted text for Reload-from-PDF
+    db.updateInboundDocRawText(inboundDocId, parsed.text);
+
+    for (const r of rows) {
+      const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);
+      db.addInboundDocLine(inboundDocId, { ...r, sku_id: skuId });
+    }
+
+    res.redirect(`/inventory/inbound/${inboundDocId}`);
+  } catch (e) {
+    const docs = db.listInboundDocs();
+    res.status(400).render('inventory_inbound', { docs, msg: e?.message || String(e) });
+  }
+});
 
 app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
   const doc = db.getInboundDoc(req.params.id);
@@ -761,33 +751,72 @@ app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
   res.render('inventory_inbound_review', { doc, lines, skus, msg: String(req.query.msg || '') || null });
 });
 
-}
+// Save edits + mappings + auto-save aliases + create ORGANIC lots only
+app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
+  try {
+    const docId = Number(req.params.id);
+    const doc = db.getInboundDoc(docId);
+    if (!doc) throw new Error('Inbound doc not found');
 
-    // 2) Reload lines to get raw names + lot numbers
+    const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
+
+    const lineIds = toArr(req.body.line_id);
+    const skuIds  = toArr(req.body.sku_id);
+    const nameArr  = toArr(req.body.raw_product_name);
+    const qtyArr   = toArr(req.body.qty_packages);
+    const netArr   = toArr(req.body.net_kg);
+    const grossArr = toArr(req.body.gross_kg);
+    const lotArr   = toArr(req.body.lot_number);
+
+    // 1) Save edits + sku mapping
+    for (let i = 0; i < lineIds.length; i++) {
+      const lineId = Number(lineIds[i]);
+      if (!lineId) continue;
+
+      const skuId = skuIds[i] ? Number(skuIds[i]) : null;
+      db.setInboundLineSku(lineId, skuId);
+
+      db.updateInboundLineAllFields({
+        line_id: lineId,
+        raw_product_name: nameArr[i],
+        ncm: null,
+        package_type: null,
+        package_code: null,
+        qty_packages: qtyArr[i],
+        net_kg: netArr[i],
+        gross_kg: grossArr[i],
+        lot_number: lotArr[i]
+      });
+    }
+
+    // 2) Reload updated lines
     const lines = db.listInboundDocLines(docId);
 
-    // 3) Auto-save aliases for mapped lines
+    // 3) Auto-save aliases
     for (const ln of lines) {
       if (!ln.sku_id) continue;
       if (!ln.raw_product_name) continue;
       db.addSkuAlias({ sku_id: ln.sku_id, alias: ln.raw_product_name });
     }
 
-    // 4) Create lots for mapped lines
+    // 4) Create ORGANIC lots only
+    let created = 0;
+    let skipped = 0;
+
     for (const ln of lines) {
-      if (!ln.sku_id) continue;
-      if (!ln.lot_number) continue;
+      if (!ln.sku_id || !ln.lot_number) { skipped++; continue; }
+
       const sku = db.sqlite.prepare(`SELECT is_organic FROM skus WHERE id=?`).get(Number(ln.sku_id));
-if (!sku || !sku.is_organic) continue;
-db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
+      if (!sku || !sku.is_organic) { skipped++; continue; }
+
+      db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
+      created++;
     }
 
-    const updatedLines = db.listInboundDocLines(docId);
-    const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
-    res.render('inventory_inbound_review', { doc, lines: updatedLines, skus, msg: 'Saved mappings + aliases + lots created.' });
+    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent(`Saved. Organic lots created/updated: ${created} (skipped ${skipped}).`)}`);
 
   } catch (e) {
-    res.status(500).send(`Apply inbound failed: ${e?.message || e}`);
+    return res.status(500).send(`Apply inbound failed: ${e?.message || e}`);
   }
 });
 
