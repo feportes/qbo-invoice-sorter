@@ -376,12 +376,6 @@ db.updateInboundDocRawText(inboundDocId, parsed.text);
   }
 });
 
-app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
-  const doc = db.getInboundDoc(req.params.id);
-  const lines = db.listInboundDocLines(req.params.id);
-  const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
-  res.render('inventory_inbound_review', { doc, lines, skus, msg: String(req.query.msg || '') || null });
-});
 
 // Save edits + mappings + auto-save aliases + create ORGANIC lots only
 app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
@@ -767,45 +761,7 @@ app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
   res.render('inventory_inbound_review', { doc, lines, skus, msg: String(req.query.msg || '') || null });
 });
 
-// ✅ Save mappings + auto-create lots + auto-save aliases
-app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
-  try {
-    const docId = Number(req.params.id);
-    const doc = db.getInboundDoc(docId);
-    if (!doc) throw new Error('Inbound doc not found');
-
- const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
-
-const lineIds = toArr(req.body.line_id);
-const skuIds  = toArr(req.body.sku_id);
-
-const nameArr  = toArr(req.body.raw_product_name);
-const qtyArr   = toArr(req.body.qty_packages);
-const netArr   = toArr(req.body.net_kg);
-const grossArr = toArr(req.body.gross_kg);
-const lotArr   = toArr(req.body.lot_number);
-
-for (let i = 0; i < lineIds.length; i++) {
-  const lineId = Number(lineIds[i]);
-  if (!lineId) continue;
-
-  const skuId = skuIds[i] ? Number(skuIds[i]) : null;
-
-  db.setInboundLineSku(lineId, skuId);
-
-  db.updateInboundLineAllFields({
-    line_id: lineId,
-    raw_product_name: nameArr[i],
-    ncm: null,
-    package_type: null,
-    package_code: null,
-    qty_packages: qtyArr[i],
-    net_kg: netArr[i],
-    gross_kg: grossArr[i],
-    lot_number: lotArr[i]
-  });
 }
-
 
     // 2) Reload lines to get raw names + lot numbers
     const lines = db.listInboundDocLines(docId);
