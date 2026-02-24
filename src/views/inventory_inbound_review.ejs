@@ -108,19 +108,20 @@
   </div>
 
 <div class="card" style="display:flex; gap:10px; flex-wrap:wrap;">
-  <button type="submit" formaction="/inventory/inbound/<%= doc.id %>/reload">
+  <!-- IMPORTANT: bind these buttons to the real form below -->
+  <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/reload">
     Reload from PDF
   </button>
 
-  <button type="submit" formaction="/inventory/inbound/<%= doc.id %>/save-only">
+  <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/save-only">
     Save changes
   </button>
 
-  <button type="submit" formaction="/inventory/inbound/<%= doc.id %>/create-lots">
+  <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/create-lots">
     Create Organic Lots
   </button>
 
-  <button type="submit" formaction="/inventory/inbound/<%= doc.id %>/apply">
+  <button type="submit" form="inboundForm" formaction="/inventory/inbound/<%= doc.id %>/apply">
     Save + Create Organic Lots
   </button>
 
@@ -134,7 +135,7 @@
     <div>- <b>Red</b>: invalid (net &gt; gross, missing net/gross)</div>
   </div>
 
-  <form method="POST" action="/inventory/inbound/<%= doc.id %>/apply">
+  <form id="inboundForm" method="POST" action="/inventory/inbound/<%= doc.id %>/apply">
     <div class="table-wrap">
       <table>
         <thead>

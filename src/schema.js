@@ -224,6 +224,9 @@ CREATE TABLE IF NOT EXISTS sku_aliases (
   try { s.exec(`ALTER TABLE skus ADD COLUMN qbo_category_id TEXT;`); } catch {}
   try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_qbo_category_id ON skus(qbo_category_id);`); } catch {}
 
+  // ✅ Inbound docs: store extracted PDF text for reload/debug/inspection
+  try { s.exec(`ALTER TABLE inbound_docs ADD COLUMN raw_text TEXT;`); } catch {}
+
   // ✅ Allocation tracking
   try {
     s.exec(`
