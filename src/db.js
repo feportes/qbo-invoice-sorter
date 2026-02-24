@@ -12,6 +12,19 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+updateInboundDocHeader({ id, doc_date, container_no }) {
+  sqlite.prepare(`
+    UPDATE inbound_docs
+    SET doc_date = COALESCE(?, doc_date),
+        container_no = COALESCE(?, container_no)
+    WHERE id = ?
+  `).run(
+    doc_date || null,
+    container_no || null,
+    Number(id)
+  );
+},
+
 updateInboundDocRawText(docId, rawText) {
   sqlite.prepare(`UPDATE inbound_docs SET raw_text=? WHERE id=?`)
     .run(rawText ? String(rawText) : null, Number(docId));
