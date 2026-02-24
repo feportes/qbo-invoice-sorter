@@ -383,46 +383,74 @@ app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
   res.render('inventory_inbound_review', { doc, lines, skus, msg: String(req.query.msg || '') || null });
 });
 
-// Save mappings + auto-create lots + auto-save aliases
+// Save edits + mappings + auto-save aliases + create ORGANIC lots only
 app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
   try {
     const docId = Number(req.params.id);
     const doc = db.getInboundDoc(docId);
     if (!doc) throw new Error('Inbound doc not found');
 
-    const lineIds = Array.isArray(req.body.line_id) ? req.body.line_id : [req.body.line_id].filter(Boolean);
-    const skuIds  = Array.isArray(req.body.sku_id)  ? req.body.sku_id  : [req.body.sku_id].filter(Boolean);
+    const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
 
-    // Save line->SKU mappings
+    const lineIds = toArr(req.body.line_id);
+    const skuIds  = toArr(req.body.sku_id);
+
+    const nameArr  = toArr(req.body.raw_product_name);
+    const qtyArr   = toArr(req.body.qty_packages);
+    const netArr   = toArr(req.body.net_kg);
+    const grossArr = toArr(req.body.gross_kg);
+    const lotArr   = toArr(req.body.lot_number);
+
+    // 1) Save edited fields + sku mapping (ONE loop)
     for (let i = 0; i < lineIds.length; i++) {
       const lineId = Number(lineIds[i]);
+      if (!lineId) continue;
+
       const skuId = skuIds[i] ? Number(skuIds[i]) : null;
       db.setInboundLineSku(lineId, skuId);
+
+      db.updateInboundLineAllFields({
+        line_id: lineId,
+        raw_product_name: nameArr[i],
+        ncm: null,
+        package_type: null,
+        package_code: null,
+        qty_packages: qtyArr[i],
+        net_kg: netArr[i],
+        gross_kg: grossArr[i],
+        lot_number: lotArr[i]
+      });
     }
 
-    // Reload lines
+    // 2) Reload updated lines
     const lines = db.listInboundDocLines(docId);
 
-    // Auto-save aliases
+    // 3) Auto-save aliases for mapped lines
     for (const ln of lines) {
       if (!ln.sku_id) continue;
       if (!ln.raw_product_name) continue;
       db.addSkuAlias({ sku_id: ln.sku_id, alias: ln.raw_product_name });
     }
 
-    // Create lots
+    // 4) Create lots for ORGANIC SKUs only
+    let created = 0;
+    let skipped = 0;
+
     for (const ln of lines) {
-      if (!ln.sku_id) continue;
-      if (!ln.lot_number) continue;
+      if (!ln.sku_id || !ln.lot_number) { skipped++; continue; }
+
+      const sku = db.sqlite.prepare(`SELECT is_organic FROM skus WHERE id=?`).get(Number(ln.sku_id));
+      if (!sku || !sku.is_organic) { skipped++; continue; }
+
       db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
+      created++;
     }
 
-    const updatedLines = db.listInboundDocLines(docId);
-    const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
-    res.render('inventory_inbound_review', { doc, lines: updatedLines, skus, msg: 'Saved mappings + aliases + lots created.' });
+    // 5) Redirect back so refresh shows saved state + message
+    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent(`Saved. Organic lots created/updated: ${created} (skipped ${skipped}).`)}`);
 
   } catch (e) {
-    res.status(500).send(`Apply inbound failed: ${e?.message || e}`);
+    return res.status(500).send(`Apply inbound failed: ${e?.message || e}`);
   }
 });
 function parseBrazilNumber(x) {
