@@ -236,6 +236,24 @@ app.get('/inventory/inbound', requireConnected, (req, res) => {
   res.render('inventory_inbound', { docs, msg: null });
 });
 
+app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
+  const docId = Number(req.params.id);
+  const doc = db.getInboundDoc(docId);
+  const lines = db.listInboundDocLines(docId);
+
+  // Keep this simple and stable for inspection: always show SKU list for mapping
+  const skus = db.sqlite
+    .prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`)
+    .all();
+
+  res.render('inventory_inbound_review', {
+    doc,
+    lines,
+    skus,
+    msg: String(req.query.msg || '') || null
+  });
+});
+
 app.post('/inventory/inbound/:id/reload', requireConnected, (req, res) => {
   try {
     const docId = Number(req.params.id);
