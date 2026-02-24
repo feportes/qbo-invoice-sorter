@@ -16,6 +16,12 @@
   <h1>Inbound Docs</h1>
   <% if (msg) { %><div class="card"><%= msg %></div><% } %>
 
+<div class="card" style="display:flex; gap:10px; flex-wrap:wrap;">
+  <a class="btn secondary" href="/">Home</a>
+  <a class="btn secondary" href="/inventory/audit/search">Organic Audit</a>
+  <a class="btn secondary" href="/inventory/audit/master-report">Master Report</a>
+</div>
+
   <div class="card">
     <h3>Upload Pack & Weight List (PDF)</h3>
     <form method="POST" action="/inventory/inbound/upload" enctype="multipart/form-data">

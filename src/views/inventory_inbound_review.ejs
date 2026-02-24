@@ -107,6 +107,25 @@
     File: <span class="q"><%= doc.source_filename || '' %></span>
   </div>
 
+<div class="card" style="display:flex; gap:10px; flex-wrap:wrap;">
+  <button type="submit" formaction="/inventory/inbound/<%= doc.id %>/reload">
+    Reload from PDF
+  </button>
+
+  <button type="submit" formaction="/inventory/inbound/<%= doc.id %>/save-only">
+    Save changes
+  </button>
+
+  <button type="submit" formaction="/inventory/inbound/<%= doc.id %>/create-lots">
+    Create Organic Lots
+  </button>
+
+  <button type="submit" formaction="/inventory/inbound/<%= doc.id %>/apply">
+    Save + Create Organic Lots
+  </button>
+
+  <a href="/inventory/audit/search" class="btn secondary">Go to Organic Audit</a>
+</div>
 
 
   <div class="card muted">

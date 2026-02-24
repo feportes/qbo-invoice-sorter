@@ -380,7 +380,7 @@ app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
   const doc = db.getInboundDoc(req.params.id);
   const lines = db.listInboundDocLines(req.params.id);
   const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
-  res.render('inventory_inbound_review', { doc, lines, skus, msg: null });
+  res.render('inventory_inbound_review', { doc, lines, skus, msg: String(req.query.msg || '') || null });
 });
 
 // Save mappings + auto-create lots + auto-save aliases
