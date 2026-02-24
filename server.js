@@ -484,29 +484,26 @@ function parsePackWeightListText(text) {
   const raw = String(text || '');
   const flat = raw.replace(/\s+/g, ' ').trim();
 
-  // Split to lines, trim, and keep non-empty
+  // Split lines
   let lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // --- NEW: merge wrapped product rows (e.g., row 06 wraps "WITH" then "GUARANÁ 100G...")
-  // If a line starts with "NN " and the next line does NOT start with "NN " (two digits + space),
-  // treat the next line as continuation unless it is just a placeholder number like "08".
+  // ----------------------------------------------------------
+  // NEW: Merge wrapped rows (continuation lines)
+  // If a line starts with "NN " and next line does NOT start with "NN ",
+  // and next line is not just "08" "09" etc, merge it.
+  // ----------------------------------------------------------
   const merged = [];
   for (let i = 0; i < lines.length; i++) {
     let cur = lines[i];
 
-    const isRowStart = /^\d{2}\s+/.test(cur);
-    if (isRowStart) {
-      // Keep merging continuations
+    const curIsRow = /^\d{2}\s+/.test(cur);
+    if (curIsRow) {
       while (i + 1 < lines.length) {
         const next = lines[i + 1];
 
-        // Stop if next is a new row start
-        if (/^\d{2}\s+/.test(next)) break;
+        if (/^\d{2}\s+/.test(next)) break;     // new row
+        if (/^\d{2}$/.test(next)) break;       // placeholder "08" etc
 
-        // Stop if next is just a placeholder "08" .. "99"
-        if (/^\d{2}$/.test(next)) break;
-
-        // Otherwise, it's a continuation line -> append
         cur = `${cur} ${next}`.replace(/\s+/g, ' ').trim();
         i++;
       }
@@ -521,7 +518,7 @@ function parsePackWeightListText(text) {
   const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
   if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
 
-  // CONTAINER (try multiple ways)
+  // CONTAINER
   let container_no = null;
   const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
   if (mContAny) container_no = mContAny[1];
@@ -537,10 +534,6 @@ function parsePackWeightListText(text) {
   const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
   const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
 
-  // =========================================================
-  // PASS 1 (STRICT): parse clean rows by slicing from RIGHT side
-  // =========================================================
-  const strictRows = [];
   const ncmTokenRe = /^(\d{8}|\d{4}(?:\.\d+)+)$/;
   const brNumTokenRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
 
@@ -548,30 +541,26 @@ function parsePackWeightListText(text) {
     return String(s || '').trim().replace(/\s+/g, '').replace(/-+/g, '-');
   }
 
+  // =========================================================
+  // PASS 1 (STRICT)
+  // =========================================================
+  const strictRows = [];
+
   for (const line of lines) {
     if (!/^\d{2}\s+/.test(line)) continue;
 
     let tokens = line.split(/\s+/).filter(Boolean);
     if (tokens.length < 6) continue;
 
-    // --- NEW: strip trailing placeholder numbers like "08" "09" if they got glued on
+    // Strip glued placeholder row numbers ("08" "09" "10") from the end if present
     while (tokens.length && /^\d{2}$/.test(tokens[tokens.length - 1])) {
       tokens.pop();
     }
     if (tokens.length < 6) continue;
 
-    // lot must be last token, 6+ digits
+    // last token should be lot (6+ digits)
     let lot = tokens[tokens.length - 1];
-    if (!/^\d{6,}$/.test(lot)) {
-      // If last token isn't a lot but second-to-last is, treat it as lot (extra token glitch)
-      const maybeLot = tokens[tokens.length - 2];
-      if (/^\d{6,}$/.test(maybeLot)) {
-        lot = maybeLot;
-        tokens = tokens.slice(0, tokens.length - 1);
-      } else {
-        continue;
-      }
-    }
+    if (!/^\d{6,}$/.test(lot)) continue;
 
     const grossStr = tokens[tokens.length - 2];
     const netStr = tokens[tokens.length - 3];
@@ -627,70 +616,20 @@ function parsePackWeightListText(text) {
     });
   }
 
-  if (strictRows.length >= 1) {
-    return { doc_date, container_no, rows: strictRows };
-  }
-
   // =========================================================
-  // PASS 2 (FALLBACK): glue-solver for bad pdf-parse output
+  // PASS 2 (FALLBACK) — keep it simple but tolerant
   // =========================================================
-  function kgPenalty({ name, package_type, qty, netVal }) {
-    let unitKg = null;
-    const kgMatch = String(name).match(/(\d+(?:\.\d+)?)\s*KG\b/i);
-    if (kgMatch) unitKg = Number(kgMatch[1]);
-
-    if (!unitKg) {
-      const is100g = /100G\b/i.test(String(name));
-      if (is100g && String(package_type).toUpperCase() === 'BOX') unitKg = 6;
-    }
-
-    if (!unitKg || !Number.isFinite(unitKg) || unitKg <= 0) return 0;
-    const expected = qty * unitKg;
-    const relErr = Math.abs(netVal - expected) / Math.max(1, expected);
-    return relErr * 5000;
-  }
-
+  const fallbackRows = [];
   const fallbackRowRe =
     /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{2,10})\s*([A-Z0-9\-]+)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
 
-  function codeSplitOptions(codeRaw) {
-    const s = String(codeRaw || '').trim();
-    if (!/^\d{6}-\d+$/.test(s)) return [{ code: s, extraQty: '', shift: '' }];
-
-    const mm = s.match(/^(\d{6})-(\d+)$/);
-    if (!mm) return [{ code: s, extraQty: '', shift: '' }];
-
-    const base = mm[1];
-    const digits = mm[2];
-    const opts = [];
-
-    for (const suffixLen of [1, 2]) {
-      if (digits.length <= suffixLen) continue;
-      const codeSuffix = digits.slice(0, suffixLen);
-      const rest = digits.slice(suffixLen);
-
-      for (const shiftLen of [0, 1, 2, 3]) {
-        if (rest.length <= shiftLen) continue;
-        const extraQty = rest.slice(0, rest.length - shiftLen);
-        const shift = rest.slice(rest.length - shiftLen);
-        if (!/^\d+$/.test(extraQty)) continue;
-        if (extraQty.length < 1) continue;
-        opts.push({ code: `${base}-${codeSuffix}`, extraQty, shift });
-      }
-    }
-
-    return opts.length ? opts : [{ code: s, extraQty: '', shift: '' }];
-  }
-
-  const rows = [];
   let m;
-
   while ((m = fallbackRowRe.exec(flat)) !== null) {
     const line_no = Number(m[1]);
     const raw_product_name = String(m[2] || '').trim();
     const ncm = String(m[3] || '').trim();
     const package_type = String(m[4] || '').trim();
-    const codeRaw = String(m[5] || '').trim();
+    const package_code = String(m[5] || '').trim();
     const tail = String(m[6] || '').trim();
     const lot_number = String(m[7] || '').trim();
 
@@ -698,67 +637,37 @@ function parsePackWeightListText(text) {
     if (nums.length < 2) continue;
 
     const grossStr = nums[nums.length - 1];
+    const netStr = nums[nums.length - 2];
     const grossVal = parseBrazilNumber(grossStr);
-    if (!grossVal) continue;
+    const netVal = parseBrazilNumber(netStr);
+    if (!grossVal || !netVal) continue;
 
-    const idxGross = tail.lastIndexOf(grossStr);
-    const qtyNetGlueBase = (idxGross >= 0 ? tail.slice(0, idxGross) : tail).trim();
+    // qty = everything before netStr, digits only
+    const idxNet = tail.lastIndexOf(netStr);
+    const qtyPart = (idxNet >= 0 ? tail.slice(0, idxNet) : '').replace(/[^\d]/g, '');
+    const qty = qtyPart ? Number(qtyPart) : null;
+    if (!qty || !Number.isFinite(qty)) continue;
 
-    let best = null;
-
-    for (const opt of codeSplitOptions(codeRaw)) {
-      const package_code = opt.code;
-      const qtyNetGlue = (opt.shift ? (opt.shift + qtyNetGlueBase) : qtyNetGlueBase);
-
-      for (let k = 0; k < qtyNetGlue.length; k++) {
-        const netStr = qtyNetGlue.slice(k).trim();
-        if (!brFullRe.test(netStr)) continue;
-
-        const prefix = qtyNetGlue.slice(0, k);
-        const prefixDigits = prefix.replace(/[^\d]/g, '');
-        const qtyDigits = (opt.extraQty || '') + prefixDigits;
-
-        const qty = qtyDigits ? Number(qtyDigits) : null;
-        if (!qty) continue;
-
-        const netVal = parseBrazilNumber(netStr);
-        if (!netVal) continue;
-
-        let penalty = 0;
-
-        if (netVal > grossVal + 0.01) penalty += 10000;
-        if (netVal > 200000) penalty += 10000;
-        if (qty > 20000) penalty += 2000;
-        if (qty > 5000) penalty += 500;
-        if (qty <= 2) penalty += 100;
-
-        const lead = String(netStr).split(/[.,]/)[0];
-        if (lead.length > 1 && lead.startsWith('0')) penalty += 5000;
-
-        const closeness = Math.abs(grossVal - netVal) / Math.max(1, grossVal);
-        let score = penalty + closeness * 100;
-        score += kgPenalty({ name: raw_product_name, package_type, qty, netVal });
-
-        if (!best || score < best.score || (score === best.score && qty > best.qty)) {
-          best = { package_code, qty, netVal, score };
-        }
-      }
-    }
-
-    if (!best) continue;
-
-    rows.push({
+    fallbackRows.push({
       line_no,
       raw_product_name,
       ncm,
       package_type,
-      package_code: best.package_code,
-      qty_packages: best.qty,
-      net_kg: best.netVal,
+      package_code,
+      qty_packages: qty,
+      net_kg: netVal,
       gross_kg: grossVal,
       lot_number
     });
   }
+
+  // =========================================================
+  // PICK BEST RESULT (do NOT short-circuit on strict=1)
+  // =========================================================
+  const rows =
+    (fallbackRows.length > strictRows.length)
+      ? fallbackRows
+      : strictRows;
 
   return { doc_date, container_no, rows };
 }
