@@ -323,7 +323,7 @@ app.post('/inventory/inbound/:id/create-lots', requireConnected, (req, res) => {
       created++;
     }
 
-    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent(`Created/updated organic lots: ${created} (skipped ${skipped}).`)}`);
+   return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent('Saved edits + created organic lots.')}`);
   } catch (e) {
     return res.status(500).send(`Create lots failed: ${e?.message || e}`);
   }
@@ -760,40 +760,11 @@ app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
 
  
 
-app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), async (req, res) => {
-  try {
-    if (!req.file) throw new Error('Missing PDF file');
-
-    const parsed = await pdfParse(req.file.buffer);
-    const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
-
-    console.log('[inbound] parsed:', { file: req.file?.originalname, doc_date, container_no, rows_len: rows.length });
-    if (rows?.length) console.log('[inbound] first_row:', rows[0]);
-
-    const inboundDocId = db.createInboundDoc({
-      doc_date,
-      container_no,
-      source_filename: req.file.originalname,
-      notes: `parsed_rows=${rows.length}`
-    });
-
-    for (const r of rows) {
-      const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);
-      db.addInboundDocLine(inboundDocId, { ...r, sku_id: skuId });
-    }
-
-    res.redirect(`/inventory/inbound/${inboundDocId}`);
-  } catch (e) {
-    const docs = db.listInboundDocs();
-    res.status(400).render('inventory_inbound', { docs, msg: e?.message || String(e) });
-  }
-});
-
 app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
   const doc = db.getInboundDoc(req.params.id);
   const lines = db.listInboundDocLines(req.params.id);
   const skus = db.sqlite.prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`).all();
-  res.render('inventory_inbound_review', { doc, lines, skus, msg: null });
+  res.render('inventory_inbound_review', { doc, lines, skus, msg: String(req.query.msg || '') || null });
 });
 
 // ✅ Save mappings + auto-create lots + auto-save aliases
@@ -835,12 +806,6 @@ for (let i = 0; i < lineIds.length; i++) {
   });
 }
 
-    // 1) Save line->SKU mappings
-    for (let i = 0; i < lineIds.length; i++) {
-      const lineId = Number(lineIds[i]);
-      const skuId = skuIds[i] ? Number(skuIds[i]) : null;
-      db.setInboundLineSku(lineId, skuId);
-    }
 
     // 2) Reload lines to get raw names + lot numbers
     const lines = db.listInboundDocLines(docId);
@@ -856,7 +821,9 @@ for (let i = 0; i < lineIds.length; i++) {
     for (const ln of lines) {
       if (!ln.sku_id) continue;
       if (!ln.lot_number) continue;
-      db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
+      const sku = db.sqlite.prepare(`SELECT is_organic FROM skus WHERE id=?`).get(Number(ln.sku_id));
+if (!sku || !sku.is_organic) continue;
+db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
     }
 
     const updatedLines = db.listInboundDocLines(docId);
