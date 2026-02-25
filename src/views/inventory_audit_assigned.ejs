@@ -53,6 +53,49 @@
 </div>
 
 <div class="card">
+
+  <!-- ✅ SPLIT UI (2-lot split) -->
+  <div class="row" style="justify-content:space-between;">
+    <div class="row">
+      <b>Split one allocation into 2 lots</b>
+      <span class="muted">Use when an invoice line (e.g., 105 tubs) actually came from two lots.</span>
+    </div>
+  </div>
+
+  <form method="post" action="/inventory/audit/assigned/split" class="row" style="margin-top:10px;">
+    <input type="hidden" name="sku_id" value="<%= sku?.id %>"/>
+    <input type="hidden" name="start_date" value="<%= startDate || '' %>"/>
+    <input type="hidden" name="end_date" value="<%= endDate || '' %>"/>
+
+    <label class="muted"><b>Allocation ID</b></label>
+    <input name="allocation_id" placeholder="e.g. 12345" style="width:140px;" required>
+
+    <select name="lot_a_id">
+      <option value="">(UNKNOWN LOT)</option>
+      <% (lots || []).forEach(l => { %>
+        <option value="<%= l.id %>"><%= l.lot_number %></option>
+      <% }) %>
+    </select>
+    <input name="qty_a" placeholder="qty A" style="width:110px;" required>
+
+    <select name="lot_b_id">
+      <option value="">(UNKNOWN LOT)</option>
+      <% (lots || []).forEach(l => { %>
+        <option value="<%= l.id %>"><%= l.lot_number %></option>
+      <% }) %>
+    </select>
+    <input name="qty_b" placeholder="qty B" style="width:110px;" required>
+
+    <button type="submit" onclick="return confirm('Split this allocation into two lots? qtyA + qtyB must equal the original qty.');">
+      Split
+    </button>
+
+    <span class="muted">Tip: use the ID column in the table below.</span>
+  </form>
+
+  <hr style="border:none; border-top:1px solid #eee; margin:14px 0;"/>
+
+  <!-- Bulk actions (reassign/delete) -->
   <form id="bulkForm" method="post">
     <input type="hidden" name="sku_id" value="<%= sku?.id %>"/>
     <input type="hidden" name="start_date" value="<%= startDate || '' %>"/>
@@ -94,6 +137,7 @@
       <thead>
         <tr>
           <th style="width:34px;"><input type="checkbox" onclick="toggleHeader(this)"/></th>
+          <th style="width:90px;">ID</th>
           <th>Date</th>
           <th>Invoice</th>
           <th>Customer</th>
@@ -105,7 +149,7 @@
       </thead>
       <tbody>
         <% if (!rows || rows.length === 0) { %>
-          <tr><td colspan="8" class="muted">No assigned allocations found for this SKU/date range.</td></tr>
+          <tr><td colspan="9" class="muted">No assigned allocations found for this SKU/date range.</td></tr>
         <% } else { %>
           <% rows.forEach(r => { %>
             <tr>
@@ -116,6 +160,7 @@
                        value="<%= r.id %>"
                        onchange="updateCount()"/>
               </td>
+              <td class="q"><%= r.id %></td>
               <td class="q"><%= r.txn_date || '' %></td>
               <td class="q"><%= r.doc_number || r.qbo_invoice_id %></td>
               <td><%= r.customer_name || '' %></td>

@@ -901,6 +901,98 @@ app.post('/inventory/audit/assigned/reassign', requireConnected, (req, res) => {
   }
 });
 
+app.post('/inventory/audit/assigned/split', requireConnected, (req, res) => {
+  try {
+    const skuId = Number(req.body.sku_id);
+    const startDate = String(req.body.start_date || '').trim();
+    const endDate = String(req.body.end_date || '').trim() || '';
+
+    const allocationId = Number(req.body.allocation_id);
+    if (!skuId) throw new Error('Missing sku_id');
+    if (!allocationId) throw new Error('Missing allocation_id');
+
+    const lotAIdRaw = String(req.body.lot_a_id ?? '').trim();
+    const lotBIdRaw = String(req.body.lot_b_id ?? '').trim();
+    const lotAId = lotAIdRaw ? Number(lotAIdRaw) : null; // null = UNKNOWN LOT
+    const lotBId = lotBIdRaw ? Number(lotBIdRaw) : null;
+
+    const qtyA = Number(req.body.qty_a);
+    const qtyB = Number(req.body.qty_b);
+
+    if (!Number.isFinite(qtyA) || qtyA <= 0) throw new Error('qty_a must be > 0');
+    if (!Number.isFinite(qtyB) || qtyB <= 0) throw new Error('qty_b must be > 0');
+
+    const original = db.getAuditAllocationById(allocationId);
+    if (!original) throw new Error('Allocation not found');
+    if (Number(original.sku_id) !== skuId) throw new Error('Allocation sku_id mismatch');
+
+    const originalQty = Number(original.qty_units || 0);
+    const sum = qtyA + qtyB;
+    if (Math.abs(sum - originalQty) > 0.000001) {
+      throw new Error(`Split qty mismatch. Original=${originalQty}, qty_a+qty_b=${sum}`);
+    }
+
+    // Guard each target lot (if not UNKNOWN)
+    const excludeIds = [allocationId];
+
+    function guardLot(lotId, addQty) {
+      if (!lotId) return; // UNKNOWN lot has no capacity check
+      const inbound = db.getInboundUnitsForSkuLotId({ skuId, lotId });
+      const allocatedExcluding = db.getAllocatedUnitsForSkuLotId({
+        skuId,
+        lotId,
+        excludeAllocationIds: excludeIds
+      });
+      if (allocatedExcluding + addQty > inbound) {
+        throw new Error(`Over-allocation blocked for lotId=${lotId}. Inbound=${inbound}, allocated=${allocatedExcluding}, trying to add=${addQty}`);
+      }
+    }
+
+    guardLot(lotAId, qtyA);
+    guardLot(lotBId, qtyB);
+
+    // Apply split atomically
+    const tx = db.sqlite.transaction(() => {
+      db.deleteAuditAllocationById(allocationId);
+
+      db.insertAuditAllocationRow({
+        invoiceId: original.qbo_invoice_id,
+        txnDate: original.txn_date,
+        customerName: original.customer_name,
+        skuId,
+        lotId: lotAId,
+        qtyUnits: qtyA,
+        method: 'MANUAL',
+        note: `Split from allocation #${allocationId}`
+      });
+
+      db.insertAuditAllocationRow({
+        invoiceId: original.qbo_invoice_id,
+        txnDate: original.txn_date,
+        customerName: original.customer_name,
+        skuId,
+        lotId: lotBId,
+        qtyUnits: qtyB,
+        method: 'MANUAL',
+        note: `Split from allocation #${allocationId}`
+      });
+    });
+
+    tx();
+
+    return res.redirect(
+      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent('Split applied.')}`
+    );
+  } catch (e) {
+    const skuId = Number(req.body.sku_id || 0);
+    const startDate = String(req.body.start_date || '').trim();
+    const endDate = String(req.body.end_date || '').trim() || '';
+    return res.redirect(
+      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Split failed: ${e?.message || e}`)}`
+    );
+  }
+});
+
 app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
   try {
     const skuId = Number(req.body.sku_id);

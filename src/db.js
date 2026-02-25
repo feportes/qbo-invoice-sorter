@@ -12,6 +12,36 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+getAuditAllocationById(id) {
+  return sqlite.prepare(`
+    SELECT *
+    FROM invoice_lot_audit_allocations
+    WHERE id=?
+  `).get(Number(id));
+},
+
+deleteAuditAllocationById(id) {
+  const r = sqlite.prepare(`DELETE FROM invoice_lot_audit_allocations WHERE id=?`).run(Number(id));
+  return r.changes || 0;
+},
+
+insertAuditAllocationRow({ invoiceId, txnDate, customerName, skuId, lotId, qtyUnits, method, note }) {
+  sqlite.prepare(`
+    INSERT INTO invoice_lot_audit_allocations
+      (qbo_invoice_id, txn_date, customer_name, sku_id, lot_id, qty_units, method, note)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(invoiceId),
+    txnDate ? String(txnDate) : null,
+    customerName ? String(customerName) : null,
+    Number(skuId),
+    lotId ? Number(lotId) : null,
+    Number(qtyUnits),
+    String(method || 'MANUAL'),
+    note ? String(note) : null
+  );
+},
+
 getInboundUnitsForSkuLotId({ skuId, lotId }) {
   const lot = sqlite.prepare(`SELECT lot_number FROM lots WHERE id=? AND sku_id=?`).get(Number(lotId), Number(skuId));
   if (!lot?.lot_number) return 0;
