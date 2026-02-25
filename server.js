@@ -713,6 +713,13 @@ const oauthClient = fresh.oauthClient;
       start += pageSize;
     }
 
+// 🔒 Prevent timeouts / 502s on massive ranges
+if (metas.length > 2000) {
+  throw new Error(
+    `Too many invoices in range (${metas.length}). Narrow the date range (try 30–60 days).`
+  );
+}
+
     const targetItemId = String(sku.qbo_item_id);
     let indexed = 0;
 
