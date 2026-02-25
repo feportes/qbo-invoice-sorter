@@ -60,6 +60,100 @@ getAuditAllocationsByIds(ids) {
   `).all(...arr);
 },
 
+getAuditAllocationsByIds(ids) {
+  const arr = (ids || []).map(Number).filter(Boolean);
+  if (arr.length === 0) return [];
+  const placeholders = arr.map(() => '?').join(',');
+  return sqlite.prepare(`
+    SELECT *
+    FROM invoice_lot_audit_allocations
+    WHERE id IN (${placeholders})
+  `).all(...arr);
+},
+
+deleteAuditAllocationsByIds(ids) {
+  const arr = (ids || []).map(Number).filter(Boolean);
+  if (arr.length === 0) return 0;
+  const placeholders = arr.map(() => '?').join(',');
+  const r = sqlite.prepare(`
+    DELETE FROM invoice_lot_audit_allocations
+    WHERE id IN (${placeholders})
+  `).run(...arr);
+  return r.changes || 0;
+},
+
+updateAllocationLotByIds({ ids, newLotId }) {
+  const arr = (ids || []).map(Number).filter(Boolean);
+  if (arr.length === 0) return 0;
+  const placeholders = arr.map(() => '?').join(',');
+  const r = sqlite.prepare(`
+    UPDATE invoice_lot_audit_allocations
+    SET lot_id=?, method='MANUAL'
+    WHERE id IN (${placeholders})
+  `).run(newLotId ? Number(newLotId) : null, ...arr);
+  return r.changes || 0;
+},
+
+getInboundUnitsForSkuLotId({ skuId, lotId }) {
+  const lot = sqlite.prepare(`SELECT lot_number FROM lots WHERE id=? AND sku_id=?`)
+    .get(Number(lotId), Number(skuId));
+  if (!lot?.lot_number) return 0;
+
+  const r = sqlite.prepare(`
+    SELECT SUM(COALESCE(il.qty_packages,0)) AS inbound_units
+    FROM inbound_doc_lines il
+    WHERE il.sku_id = ?
+      AND il.lot_number = ?
+  `).get(Number(skuId), String(lot.lot_number));
+
+  return Number(r?.inbound_units || 0);
+},
+
+getAllocatedUnitsForSkuLotId({ skuId, lotId, excludeAllocationIds = [] }) {
+  const exclude = (excludeAllocationIds || []).map(Number).filter(Boolean);
+
+  if (exclude.length === 0) {
+    const r = sqlite.prepare(`
+      SELECT SUM(COALESCE(qty_units,0)) AS allocated
+      FROM invoice_lot_audit_allocations
+      WHERE sku_id=? AND lot_id=?
+    `).get(Number(skuId), Number(lotId));
+    return Number(r?.allocated || 0);
+  }
+
+  const placeholders = exclude.map(() => '?').join(',');
+  const r = sqlite.prepare(`
+    SELECT SUM(COALESCE(qty_units,0)) AS allocated
+    FROM invoice_lot_audit_allocations
+    WHERE sku_id=? AND lot_id=?
+      AND id NOT IN (${placeholders})
+  `).get(Number(skuId), Number(lotId), ...exclude);
+
+  return Number(r?.allocated || 0);
+},
+
+insertAuditAllocationRow({ invoiceId, txnDate, customerName, skuId, lotId, qtyUnits, method, note }) {
+  sqlite.prepare(`
+    INSERT INTO invoice_lot_audit_allocations
+      (qbo_invoice_id, txn_date, customer_name, sku_id, lot_id, qty_units, method, note)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(invoiceId),
+    txnDate ? String(txnDate) : null,
+    customerName ? String(customerName) : null,
+    Number(skuId),
+    lotId ? Number(lotId) : null,
+    Number(qtyUnits),
+    String(method || 'MANUAL'),
+    note ? String(note) : null
+  );
+},
+
+deleteAuditAllocationById(id) {
+  const r = sqlite.prepare(`DELETE FROM invoice_lot_audit_allocations WHERE id=?`).run(Number(id));
+  return r.changes || 0;
+},
+
 deleteAuditAllocationsByIds(ids) {
   const arr = (ids || []).map(Number).filter(Boolean);
   if (arr.length === 0) return 0;
