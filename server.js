@@ -1,3 +1,4 @@
+import { getOAuthClient, authStart, authCallback, requireConnected, withFreshClient } from './src/oauth.js';
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -478,13 +479,12 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
   res.status(200).send('OK');
 
   try {
-    const conn = db.getConnection();
+    const { conn, oauthClient } = await withFreshClient();
     if (!conn) {
       console.log('[webhook] skip: no connection');
       return;
     }
 
-    const oauthClient = getOAuthClient(conn);
     const payload = req.body;
 
     const notifications = payload?.eventNotifications || [];
