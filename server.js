@@ -1175,62 +1175,91 @@ app.post('/inventory/audit/auto-assign-all', requireConnected, (req, res) => {
     `).all();
 
     let totalSkus = skus.length;
-    let totalAssigned = 0;
-    let totalUnknown = 0;
+    let totalInvoicesAssigned = 0;
+    let totalSplitInvoices = 0;
+    let totalUnknownQty = 0;
     let totalSkipped = 0;
 
     for (const sku of skus) {
       const skuId = Number(sku.id);
 
-      const invs = db.sqlite.prepare(`
-        SELECT
-          qbo_invoice_id,
-          MAX(txn_date) AS txn_date,
-          MAX(customer_name) AS customer_name,
-          SUM(qty_units) AS qty_units
-        FROM invoice_sku_lines
-        WHERE sku_id=?
-          AND (? IS NULL OR txn_date >= ?)
-          AND (? IS NULL OR txn_date <= ?)
-        GROUP BY qbo_invoice_id
-        ORDER BY txn_date ASC
-      `).all(
-        skuId,
-        startDate || null, startDate || null,
-        endDate || null, endDate || null
-      );
+      // Lots with remaining (FIFO by inbound date)
+      const lots = db.listLotAvailabilityForSku(skuId)
+        .map(l => ({ ...l, remaining_units: Number(l.remaining_units || 0) }))
+        .filter(l => l.remaining_units > 0);
+
+      // Only invoices that are NOT already allocated for this SKU
+      const invs = db.listUnassignedInvoicesForSku({ skuId, startDate, endDate });
+
+      if (!invs.length) {
+        totalSkipped++;
+        continue;
+      }
+
+      let lotIdx = 0;
 
       for (const inv of invs) {
-        const invoiceId = String(inv.qbo_invoice_id);
-        const txnDate = inv.txn_date ? String(inv.txn_date) : null;
+        let need = Number(inv.qty_units || 0);
+        if (need <= 0) continue;
 
-        if (db.hasAuditAllocationForInvoiceSku(invoiceId, skuId)) {
-          totalSkipped++;
-          continue;
+        const rows = [];
+
+        while (need > 0 && lotIdx < lots.length) {
+          const cur = lots[lotIdx];
+          const avail = cur.remaining_units;
+
+          if (avail <= 0) { lotIdx++; continue; }
+
+          const take = Math.min(need, avail);
+
+          rows.push({
+            sku_id: skuId,
+            lot_id: Number(cur.lot_id),
+            qty_units: take,
+            method: 'AUTO_SUGGEST',
+            note: `Auto FIFO (${cur.inbound_date || 'unknown'})`
+          });
+
+          cur.remaining_units -= take;
+          need -= take;
+
+          if (cur.remaining_units <= 0) lotIdx++;
         }
 
-        const lotId = txnDate ? db.getSuggestedLotForSkuOnDate(skuId, txnDate) : null;
-        if (!lotId) totalUnknown++;
+        if (need > 0) {
+          totalUnknownQty += need;
+          rows.push({
+            sku_id: skuId,
+            lot_id: null,
+            qty_units: need,
+            method: 'AUTO_SUGGEST',
+            note: 'Auto FIFO: insufficient inbound balance (UNKNOWN LOT)'
+          });
+        }
 
         db.replaceAuditAllocations({
-          invoiceId,
-          txnDate,
+          invoiceId: String(inv.qbo_invoice_id),
+          txnDate: inv.txn_date || null,
           customerName: inv.customer_name || null,
-          rows: [{
-            sku_id: skuId,
-            lot_id: lotId,
-            qty_units: Number(inv.qty_units || 0),
-            method: 'AUTO_SUGGEST',
-            note: lotId ? 'Auto-suggested by date' : 'Auto-suggest failed: UNKNOWN LOT'
-          }]
+          rows
         });
 
-        totalAssigned++;
+        totalInvoicesAssigned++;
+        if (rows.length > 1) totalSplitInvoices++;
       }
     }
 
-    const msg = `Auto-assign ALL complete: skus=${totalSkus}, assigned=${totalAssigned}, unknown=${totalUnknown}, skipped(existing)=${totalSkipped}.`;
-    return res.redirect(`/inventory/audit/search?start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(msg)}`);
+    const msg =
+      `Auto-assign ALL (qty-safe) complete: skus=${totalSkus}, ` +
+      `invoices_assigned=${totalInvoicesAssigned}, split_invoices=${totalSplitInvoices}, ` +
+      `unknownQty=${totalUnknownQty}, skus_skipped(no_unassigned)=${totalSkipped}.`;
+
+    return res.redirect(
+      `/inventory/audit/search?start=${encodeURIComponent(startDate)}` +
+      `${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}` +
+      `&msg=${encodeURIComponent(msg)}`
+    );
+
   } catch (e) {
     return res.redirect(`/inventory/audit/search?msg=${encodeURIComponent(`Auto-assign ALL failed: ${e?.message || e}`)}`);
   }
