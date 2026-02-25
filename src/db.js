@@ -12,6 +12,56 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+listAssignedAllocationsForSku({ skuId, startDate, endDate }) {
+  return sqlite.prepare(`
+    SELECT
+      a.qbo_invoice_id,
+      a.txn_date,
+      a.customer_name,
+      a.qty_units,
+      a.method,
+      a.note,
+      lo.lot_number,
+      lo.id AS lot_id
+    FROM invoice_lot_audit_allocations a
+    LEFT JOIN lots lo ON lo.id = a.lot_id
+    WHERE a.sku_id = ?
+      AND (? IS NULL OR a.txn_date >= ?)
+      AND (? IS NULL OR a.txn_date <= ?)
+    ORDER BY a.txn_date ASC, a.qbo_invoice_id ASC, a.id ASC
+  `).all(
+    Number(skuId),
+    startDate || null, startDate || null,
+    endDate || null, endDate || null
+  );
+},
+
+listUnassignedInvoicesContainingSku({ skuId, startDate, endDate }) {
+  return sqlite.prepare(`
+    SELECT
+      l.qbo_invoice_id,
+      MAX(l.txn_date) AS txn_date,
+      MAX(l.doc_number) AS doc_number,
+      MAX(l.customer_name) AS customer_name,
+      SUM(l.qty_units) AS qty_units,
+      SUM(COALESCE(l.amount, 0)) AS amount
+    FROM invoice_sku_lines l
+    LEFT JOIN invoice_lot_audit_allocations a
+      ON a.qbo_invoice_id = l.qbo_invoice_id
+     AND a.sku_id = l.sku_id
+    WHERE l.sku_id = ?
+      AND a.id IS NULL
+      AND (? IS NULL OR l.txn_date >= ?)
+      AND (? IS NULL OR l.txn_date <= ?)
+    GROUP BY l.qbo_invoice_id
+    ORDER BY txn_date ASC
+  `).all(
+    Number(skuId),
+    startDate || null, startDate || null,
+    endDate || null, endDate || null
+  );
+},
+
 listUnassignedInvoicesForSku({ skuId, startDate, endDate }) {
   return sqlite.prepare(`
     SELECT

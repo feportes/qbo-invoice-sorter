@@ -696,7 +696,7 @@ app.get('/inventory/audit/search', requireConnected, (req, res) => {
   let lots = [];
   let lotAvailability = [];
   if (selectedSkuId) {
-  invoices = db.listInvoicesContainingSku({ skuId: Number(selectedSkuId), startDate, endDate });
+  invoices = db.listUnassignedInvoicesContainingSku({ skuId: Number(selectedSkuId), startDate, endDate });
   lots = db.listLotsForSku(Number(selectedSkuId));
   lotAvailability = db.listLotAvailabilityForSku(Number(selectedSkuId));
   }
@@ -806,6 +806,19 @@ if (metas.length > 2000) {
       `/inventory/audit/search?sku=${encodeURIComponent(req.body.sku_id || '')}&start=${encodeURIComponent(req.body.start_date || '')}&end=${encodeURIComponent(req.body.end_date || '')}&msg=${encodeURIComponent(`Scan failed: ${e?.message || e}`)}`
     );
   }
+});
+
+app.get('/inventory/audit/assigned', requireConnected, (req, res) => {
+  const skuId = Number(req.query.sku);
+  const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
+  const endDate = String(req.query.end || '').trim() || null;
+
+  if (!skuId) return res.redirect('/inventory/audit/search?msg=' + encodeURIComponent('Pick a SKU first.'));
+
+  const sku = db.sqlite.prepare(`SELECT id, name FROM skus WHERE id=?`).get(skuId);
+  const rows = db.listAssignedAllocationsForSku({ skuId, startDate, endDate });
+
+  res.render('inventory_audit_assigned', { sku, startDate, endDate: endDate || '', rows, msg: null });
 });
 
 app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
