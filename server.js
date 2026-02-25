@@ -49,8 +49,11 @@ app.use(express.urlencoded({ extended: true }));
 // ==========================================================
 // Helper: retry processInvoice on "Invoice not found"
 // ==========================================================
-async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 6 }) {
+async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 12 }) {
   let lastErr = null;
+
+  // ~2–3 minutes total worst-case. Good for bursts.
+  const delays = [1500, 2500, 4000, 6500, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000];
 
   for (let i = 0; i < retries; i++) {
     try {
@@ -58,12 +61,17 @@ async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source
     } catch (e) {
       lastErr = e;
       const msg = String(e?.message || e).toLowerCase();
-      const isNotFound = msg.includes('invoice not found') || msg.includes('not found') || msg.includes('404');
+
+      // Only retry the “eventual consistency” / availability cases
+      const isNotFound =
+        msg.includes('invoice not found') ||
+        msg.includes('not found') ||
+        msg.includes('404');
 
       if (!isNotFound) throw e;
 
-      const delays = [1000, 2000, 3000, 5000, 8000, 12000];
       const delay = delays[Math.min(i, delays.length - 1)];
+      console.log(`[webhook] invoiceId=${invoiceId} not readable yet (attempt ${i + 1}/${retries}), retrying in ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
