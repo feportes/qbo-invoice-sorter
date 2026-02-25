@@ -15,6 +15,7 @@
     th { background:#fafafa; position: sticky; top: 0; }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
+    .right { text-align:right; }
   </style>
 </head>
 <body>
@@ -31,18 +32,18 @@
 <div class="card">
   <% if (msg) { %><div class="muted"><b><%= msg %></b></div><% } %>
 
-<form method="POST" action="/inventory/audit/auto-assign-all" style="display:inline-block; margin-left:8px;">
-  <input type="hidden" name="start_date" value="<%= startDate %>"/>
-  <input type="hidden" name="end_date" value="<%= endDate %>"/>
-  <button type="submit" onclick="return confirm('Auto-assign lots for ALL organic SKUs in this date range?')">
-    Auto Assign ALL Organic SKUs
-  </button>
-</form>
+  <form method="POST" action="/inventory/audit/auto-assign-all" style="display:inline-block; margin-left:8px;">
+    <input type="hidden" name="start_date" value="<%= startDate %>"/>
+    <input type="hidden" name="end_date" value="<%= endDate %>"/>
+    <button type="submit" onclick="return confirm('Auto-assign lots for ALL organic SKUs in this date range?')">
+      Auto Assign ALL Organic SKUs
+    </button>
+  </form>
 
-
-  <form method="get" action="/inventory/audit/search" class="row" style="margin-top:10px;">
+  <!-- Search (local) -->
+  <form id="searchForm" method="get" action="/inventory/audit/search" class="row" style="margin-top:10px;">
     <label class="muted"><b>Organic SKU</b></label>
-    <select name="sku" required>
+    <select id="skuSelect" name="sku" required>
       <option value="">Select…</option>
       <% organicSkus.forEach(s => { %>
         <option value="<%= s.id %>" <%= String(selectedSkuId)===String(s.id) ? 'selected' : '' %>><%= s.name %></option>
@@ -50,18 +51,21 @@
     </select>
 
     <label class="muted"><b>From</b></label>
-    <input name="start" value="<%= startDate %>" placeholder="2025-01-01">
+    <input id="startInput" name="start" value="<%= startDate %>" placeholder="2025-01-01">
 
     <label class="muted"><b>To</b></label>
-    <input name="end" value="<%= endDate %>" placeholder="(optional)">
+    <input id="endInput" name="end" value="<%= endDate %>" placeholder="(optional)">
 
     <button type="submit">Search (local)</button>
   </form>
 
-  <form method="post" action="/inventory/audit/scan" class="row" style="margin-top:10px;">
-    <input type="hidden" name="sku_id" value="<%= selectedSkuId %>">
-    <input type="hidden" name="start_date" value="<%= startDate %>">
-    <input type="hidden" name="end_date" value="<%= endDate %>">
+  <!-- Scan QBO -->
+  <form id="scanForm" method="post" action="/inventory/audit/scan" class="row" style="margin-top:10px;">
+    <!-- These will be filled from the dropdown/inputs by JS so Scan works even if you didn't click Search first -->
+    <input type="hidden" id="skuIdHidden" name="sku_id" value="<%= selectedSkuId %>">
+    <input type="hidden" id="startHidden" name="start_date" value="<%= startDate %>">
+    <input type="hidden" id="endHidden" name="end_date" value="<%= endDate %>">
+
     <button type="submit">Scan QBO + Index Lines (date range)</button>
     <span class="muted">Run this once per date range to populate search results.</span>
   </form>
@@ -137,6 +141,36 @@
     </form>
   </div>
 <% } %>
+
+<script>
+  (function() {
+    const skuSelect = document.getElementById('skuSelect');
+    const startInput = document.getElementById('startInput');
+    const endInput = document.getElementById('endInput');
+
+    const skuIdHidden = document.getElementById('skuIdHidden');
+    const startHidden = document.getElementById('startHidden');
+    const endHidden = document.getElementById('endHidden');
+
+    const scanForm = document.getElementById('scanForm');
+
+    scanForm.addEventListener('submit', (e) => {
+      const sku = (skuSelect && skuSelect.value) ? skuSelect.value : '';
+      const start = (startInput && startInput.value) ? startInput.value : '';
+      const end = (endInput && endInput.value) ? endInput.value : '';
+
+      if (!sku) {
+        e.preventDefault();
+        alert('Select an Organic SKU first, then click Scan.');
+        return;
+      }
+
+      skuIdHidden.value = sku;
+      startHidden.value = start;
+      endHidden.value = end;
+    });
+  })();
+</script>
 
 </body>
 </html>
