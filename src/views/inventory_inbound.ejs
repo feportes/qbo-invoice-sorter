@@ -33,6 +33,21 @@
     </div>
   </div>
 
+  <div class="card">
+    <h3>Upload Pack & Weight List (XLSX)</h3>
+    <form method="POST" action="/inventory/inbound/upload-xlsx" enctype="multipart/form-data">
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <input type="file" name="xlsx" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+        <input type="date" name="doc_date" placeholder="Doc date" />
+        <input type="text" name="container_no" placeholder="Container #" />
+        <button type="submit">Import XLSX</button>
+      </div>
+    </form>
+    <div class="muted" style="margin-top:8px;">
+      Recommended for inspection: spreadsheet import is stable and avoids PDF parsing issues.
+    </div>
+  </div>
+
   <h3 style="margin-top:18px;">Uploaded</h3>
   <table>
     <thead>
