@@ -997,47 +997,47 @@ app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
     const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
     if (!sku || !sku.is_organic) throw new Error('Selected SKU is not organic.');
 
-    // 1) Load lots with remaining
+    // Lots with remaining (FIFO by inbound date)
     const lots = db.listLotAvailabilityForSku(skuId)
-      .filter(l => Number(l.remaining_units || 0) > 0);
+      .map(l => ({ ...l, remaining_units: Number(l.remaining_units || 0) }))
+      .filter(l => l.remaining_units > 0);
 
-    // 2) Load unassigned invoices for this SKU
+    // Unassigned invoices only (so we don't keep redoing old work)
     const invs = db.listUnassignedInvoicesForSku({ skuId, startDate, endDate });
 
     let lotIdx = 0;
     let assignedInvoices = 0;
-    let splitAllocations = 0;
+    let splitCount = 0;
     let unknownQty = 0;
 
     for (const inv of invs) {
       let need = Number(inv.qty_units || 0);
-      if (!need || need <= 0) continue;
+      if (need <= 0) continue;
 
       const rows = [];
 
       while (need > 0 && lotIdx < lots.length) {
         const cur = lots[lotIdx];
-        const remaining = Number(cur.remaining_units || 0);
+        const avail = cur.remaining_units;
 
-        if (remaining <= 0) { lotIdx++; continue; }
+        if (avail <= 0) { lotIdx++; continue; }
 
-        const take = Math.min(need, remaining);
+        const take = Math.min(need, avail);
 
         rows.push({
           sku_id: skuId,
           lot_id: Number(cur.lot_id),
           qty_units: take,
           method: 'AUTO_SUGGEST',
-          note: `Auto FIFO by inbound date (${cur.inbound_date || 'unknown'})`
+          note: `Auto FIFO (${cur.inbound_date || 'unknown'})`
         });
 
-        cur.remaining_units = remaining - take;
+        cur.remaining_units -= take;
         need -= take;
 
         if (cur.remaining_units <= 0) lotIdx++;
       }
 
-      // If we ran out of lots, any leftover becomes UNKNOWN LOT
       if (need > 0) {
         unknownQty += need;
         rows.push({
@@ -1045,11 +1045,11 @@ app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
           lot_id: null,
           qty_units: need,
           method: 'AUTO_SUGGEST',
-          note: 'Auto-assign: insufficient inbound lot balance (UNKNOWN LOT)'
+          note: 'Auto FIFO: insufficient inbound balance (UNKNOWN LOT)'
         });
       }
 
-      // Write allocations (can include multiple rows => split across lots)
+      // Write allocations (can be multiple rows => split)
       db.replaceAuditAllocations({
         invoiceId: String(inv.qbo_invoice_id),
         txnDate: inv.txn_date || null,
@@ -1058,12 +1058,12 @@ app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
       });
 
       assignedInvoices++;
-      if (rows.length > 1) splitAllocations++;
+      if (rows.length > 1) splitCount++;
     }
 
-    const msg = `Auto-assign (qty-safe) done. Invoices assigned=${assignedInvoices}, splitAcrossLots=${splitAllocations}, unknownQty=${unknownQty.toFixed(2).replace(/\.00$/,'')}`;
-    return res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(msg)}`);
-
+    return res.redirect(
+      `/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Auto-assign done. invoices=${assignedInvoices}, split=${splitCount}, unknownQty=${unknownQty}`)}`
+    );
   } catch (e) {
     return res.redirect(`/inventory/audit/search?msg=${encodeURIComponent(`Auto-assign failed: ${e?.message || e}`)}`);
   }
