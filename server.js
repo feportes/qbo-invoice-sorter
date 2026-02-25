@@ -214,21 +214,38 @@ app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
 
 // Force reprocess: clears processed lock for current SyncToken and runs again
 app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
-  const { invoice_id } = req.body;
-  const conn = db.getConnectionOrThrow();
-  const oauthClient = getOAuthClient(conn);
+  const { conn, oauthClient } = await withFreshClient();
 
-  try {
-    if (!invoice_id) throw new Error('Missing invoice id');
+const resolvedId = await resolveInvoiceId(oauthClient, conn.realm_id, invoice_id);
 
     db.clearProcessed(String(invoice_id));
+
+async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
+  const raw = String(invoiceIdOrDocNumber || '').trim();
+  if (!raw) throw new Error('Missing invoice id');
+
+  // 1) Try as QBO Id first
+  try {
+    await qboReadInvoiceWithRetry(oauthClient, realmId, raw, 2);
+    return raw;
+  } catch {}
+
+  // 2) Try as DocNumber
+  const safe = raw.replace(/'/g, "\\'");
+  const q = `select Id, DocNumber from Invoice where DocNumber='${safe}' maxresults 1`;
+  const r = await qboQuery(oauthClient, realmId, q);
+  const inv = r?.QueryResponse?.Invoice?.[0];
+  if (inv?.Id) return String(inv.Id);
+
+  throw new Error(`Invoice not found by Id or DocNumber: ${raw}`);
+}
 
     const result = await processInvoiceWithRetry({
       oauthClient,
       realmId: conn.realm_id,
-      invoiceId: String(invoice_id),
+      invoiceId: String(resolveId),
       source: 'manual_force',
-      retries: 6
+      retries: 12
     });
 
     res.render('process_result', { result });
