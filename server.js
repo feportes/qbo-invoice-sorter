@@ -212,7 +212,6 @@ app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
   try {
     if (!invoice_id) throw new Error('Missing invoice id');
 
-    // ✅ key fix
     db.clearProcessed(String(invoice_id));
 
     const result = await processInvoiceWithRetry({
@@ -230,7 +229,7 @@ app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
 });
 
 // ==========================================================
-// Inbound Docs: upload pack/weight list (organic lot evidence)
+// Inbound Docs
 // ==========================================================
 app.get('/inventory/inbound', requireConnected, (req, res) => {
   const docs = db.listInboundDocs();
@@ -242,7 +241,6 @@ app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
   const doc = db.getInboundDoc(docId);
   const lines = db.listInboundDocLines(docId);
 
-  // Keep this simple and stable for inspection: always show SKU list for mapping
   const skus = db.sqlite
     .prepare(`SELECT id, name FROM skus ORDER BY name COLLATE NOCASE`)
     .all();
@@ -253,35 +251,6 @@ app.get('/inventory/inbound/:id', requireConnected, (req, res) => {
     skus,
     msg: String(req.query.msg || '') || null
   });
-});
-
-app.post('/inventory/inbound/:id/reload', requireConnected, (req, res) => {
-  try {
-    const docId = Number(req.params.id);
-    const doc = db.getInboundDoc(docId);
-    if (!doc) throw new Error('Inbound doc not found');
-
-    const rawText = db.getInboundDocRawText(docId);
-    if (!rawText) throw new Error('No stored extracted text for this doc. Re-upload the PDF once.');
-
-    const { doc_date, container_no, rows } = parsePackWeightListText(rawText);
-
-    // Replace all lines for this doc with freshly parsed rows
-    db.replaceInboundDocLines(docId, rows);
-
-    // Update header if parser found date/container
-    if (doc_date || container_no) {
-      db.updateInboundDocHeader({
-        id: docId,
-        doc_date: doc_date || doc.doc_date,
-        container_no: container_no || doc.container_no
-      });
-    }
-
-    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent('Reloaded from PDF text.')}`);
-  } catch (e) {
-    return res.status(500).send(`Reload from PDF failed: ${e?.message || e}`);
-  }
 });
 
 app.post('/inventory/inbound/:id/save-only', requireConnected, (req, res) => {
@@ -342,7 +311,7 @@ app.post('/inventory/inbound/:id/create-lots', requireConnected, (req, res) => {
       created++;
     }
 
-   return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent('Saved edits + created organic lots.')}`);
+    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent('Saved edits + created organic lots.')}`);
   } catch (e) {
     return res.status(500).send(`Create lots failed: ${e?.message || e}`);
   }
@@ -357,59 +326,7 @@ app.post('/inventory/inbound/:id/delete', requireConnected, (req, res) => {
   }
 });
 
-app.post('/inventory/inbound/upload', requireConnected, upload.single('pdf'), async (req, res) => {
-  try {
-    if (!req.file) throw new Error('Missing PDF file');
-
-    const parsed = await pdfParse(req.file.buffer);
-    const { doc_date, container_no, rows } = parsePackWeightListText(parsed.text);
-
-    // minimal debug (keep for now)
-    console.log('[inbound] parsed:', {
-      file: req.file?.originalname,
-      doc_date,
-      container_no,
-      rows_len: rows.length
-    });
-    if (rows?.length) console.log('[inbound] first_row:', rows[0]);
-
-    const inboundDocId = db.createInboundDoc({
-      doc_date,
-      container_no,
-      source_filename: req.file.originalname,
-      notes: `parsed_rows=${rows.length}`
-    });
-
-// ✅ STORE extracted text for "Reload from PDF"
-db.updateInboundDocRawText(inboundDocId, parsed.text);
-
-    for (const r of rows) {
-      const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);
-      db.addInboundDocLine(inboundDocId, { ...r, sku_id: skuId });
-    }
-
-    res.redirect(`/inventory/inbound/${inboundDocId}`);
-  } catch (e) {
-    const docs = db.listInboundDocs();
-    res.status(400).render('inventory_inbound', { docs, msg: e?.message || String(e) });
-  }
-});
-
-function normalizeHeader(h) {
-  return String(h || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .replace(/[^\w]/g, '');
-}
-
-function numOrNull(x) {
-  if (x === '' || x === null || x === undefined) return null;
-  const n = Number(String(x).replace(/,/g, '').trim());
-  return Number.isFinite(n) ? n : null;
-}
-
-// Upload XLSX (inspection-safe) -> inserts inbound_doc + inbound_doc_lines
+// XLSX Import (inspection-safe)
 app.post('/inventory/inbound/upload-xlsx', requireConnected, upload.single('xlsx'), async (req, res) => {
   try {
     if (!req.file) throw new Error('Missing XLSX file');
@@ -436,30 +353,17 @@ app.post('/inventory/inbound/upload-xlsx', requireConnected, upload.single('xlsx
       return Number.isFinite(n) ? n : null;
     }
 
-    // Normalize rows
     const rows = rawRows.map(r => {
       const out = {};
       for (const k of Object.keys(r)) out[normalizeHeader(k)] = r[k];
       return out;
     });
 
-    // -------------------------------------------
-    // NEW: Auto-detect Doc_Date & Container_No
-    // -------------------------------------------
-
     const firstRow = rows[0] || {};
 
-    const sheetDocDate =
-      firstRow.doc_date ||
-      firstRow.docdate ||
-      null;
+    const sheetDocDate = firstRow.doc_date || firstRow.docdate || null;
+    const sheetContainer = firstRow.container_no || firstRow.containerno || null;
 
-    const sheetContainer =
-      firstRow.container_no ||
-      firstRow.containerno ||
-      null;
-
-    // Form values override sheet
     const finalDocDate =
       (req.body.doc_date && req.body.doc_date.trim()) ||
       sheetDocDate ||
@@ -470,12 +374,7 @@ app.post('/inventory/inbound/upload-xlsx', requireConnected, upload.single('xlsx
       sheetContainer ||
       null;
 
-    // -------------------------------------------
-    // Build parsed rows
-    // -------------------------------------------
-
     const parsedRows = [];
-
     for (const r of rows) {
       const product = String(r.product || r.raw_product_name || '').trim();
       if (!product) continue;
@@ -493,9 +392,7 @@ app.post('/inventory/inbound/upload-xlsx', requireConnected, upload.single('xlsx
       });
     }
 
-    if (!parsedRows.length) {
-      throw new Error('No usable rows found (check headers like Product / Packages / Net_kg / Batch).');
-    }
+    if (!parsedRows.length) throw new Error('No usable rows found.');
 
     const inboundDocId = db.createInboundDoc({
       doc_date: finalDocDate,
@@ -504,15 +401,10 @@ app.post('/inventory/inbound/upload-xlsx', requireConnected, upload.single('xlsx
       notes: `xlsx_rows=${parsedRows.length}`
     });
 
-    // Store import payload for inspection traceability
     if (typeof db.updateInboundDocRawText === 'function') {
       db.updateInboundDocRawText(
         inboundDocId,
-        JSON.stringify({
-          source: 'XLSX_IMPORT',
-          sheet: firstSheetName,
-          rows: parsedRows
-        })
+        JSON.stringify({ source: 'XLSX_IMPORT', sheet: firstSheetName, rows: parsedRows })
       );
     }
 
@@ -525,656 +417,6 @@ app.post('/inventory/inbound/upload-xlsx', requireConnected, upload.single('xlsx
   } catch (e) {
     const docs = db.listInboundDocs();
     return res.status(400).render('inventory_inbound', { docs, msg: e?.message || String(e) });
-  }
-});
-
-// Save edits + mappings + auto-save aliases + create ORGANIC lots only
-app.post('/inventory/inbound/:id/apply', requireConnected, (req, res) => {
-  try {
-    const docId = Number(req.params.id);
-    const doc = db.getInboundDoc(docId);
-    if (!doc) throw new Error('Inbound doc not found');
-
-    const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
-
-    const lineIds = toArr(req.body.line_id);
-    const skuIds  = toArr(req.body.sku_id);
-
-    const nameArr  = toArr(req.body.raw_product_name);
-    const qtyArr   = toArr(req.body.qty_packages);
-    const netArr   = toArr(req.body.net_kg);
-    const grossArr = toArr(req.body.gross_kg);
-    const lotArr   = toArr(req.body.lot_number);
-
-    // 1) Save edited fields + sku mapping (ONE loop)
-    for (let i = 0; i < lineIds.length; i++) {
-      const lineId = Number(lineIds[i]);
-      if (!lineId) continue;
-
-      const skuId = skuIds[i] ? Number(skuIds[i]) : null;
-      db.setInboundLineSku(lineId, skuId);
-
-      db.updateInboundLineAllFields({
-        line_id: lineId,
-        raw_product_name: nameArr[i],
-        ncm: null,
-        package_type: null,
-        package_code: null,
-        qty_packages: qtyArr[i],
-        net_kg: netArr[i],
-        gross_kg: grossArr[i],
-        lot_number: lotArr[i]
-      });
-    }
-
-    // 2) Reload updated lines
-    const lines = db.listInboundDocLines(docId);
-
-    // 3) Auto-save aliases for mapped lines
-    for (const ln of lines) {
-      if (!ln.sku_id) continue;
-      if (!ln.raw_product_name) continue;
-      db.addSkuAlias({ sku_id: ln.sku_id, alias: ln.raw_product_name });
-    }
-
-    // 4) Create lots for ORGANIC SKUs only
-    let created = 0;
-    let skipped = 0;
-
-    for (const ln of lines) {
-      if (!ln.sku_id || !ln.lot_number) { skipped++; continue; }
-
-      const sku = db.sqlite.prepare(`SELECT is_organic FROM skus WHERE id=?`).get(Number(ln.sku_id));
-      if (!sku || !sku.is_organic) { skipped++; continue; }
-
-      db.upsertLotForSku({ sku_id: ln.sku_id, lot_number: ln.lot_number });
-      created++;
-    }
-
-    // 5) Redirect back so refresh shows saved state + message
-    return res.redirect(`/inventory/inbound/${docId}?msg=${encodeURIComponent(`Saved. Organic lots created/updated: ${created} (skipped ${skipped}).`)}`);
-
-  } catch (e) {
-    return res.status(500).send(`Apply inbound failed: ${e?.message || e}`);
-  }
-});
-// ==========================================================
-// Helpers: Brazil number
-// ==========================================================
-function parseBrazilNumber(x) {
-  // "12.960,00" -> 12960.00
-  const s = String(x || '').trim();
-  if (!s) return null;
-  const norm = s.replace(/\./g, '').replace(',', '.');
-  const n = Number(norm);
-  return Number.isFinite(n) ? n : null;
-}
-
-// ==========================================================
-// Pack & Weight List parser (2-pass: strict then fallback)
-// ==========================================================
-function parsePackWeightListText(text) {
-  const raw = String(text || '');
-  const flat = raw.replace(/\s+/g, ' ').trim();
-
-  // Split lines
-  let lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
-
-  // ----------------------------------------------------------
-  // NEW: Merge wrapped rows (continuation lines)
-  // If a line starts with "NN " and next line does NOT start with "NN ",
-  // and next line is not just "08" "09" etc, merge it.
-  // ----------------------------------------------------------
-  const merged = [];
-  for (let i = 0; i < lines.length; i++) {
-    let cur = lines[i];
-
-    const curIsRow = /^\d{2}\s+/.test(cur);
-    if (curIsRow) {
-      while (i + 1 < lines.length) {
-        const next = lines[i + 1];
-
-        if (/^\d{2}\s+/.test(next)) break;     // new row
-        if (/^\d{2}$/.test(next)) break;       // placeholder "08" etc
-
-        cur = `${cur} ${next}`.replace(/\s+/g, ' ').trim();
-        i++;
-      }
-    }
-
-    merged.push(cur);
-  }
-  lines = merged;
-
-  // DATE
-  let doc_date = null;
-  const mDate = flat.match(/DATE:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
-  if (mDate) doc_date = `${mDate[3]}-${mDate[2]}-${mDate[1]}`;
-
-  // CONTAINER
-  let container_no = null;
-  const mContAny = flat.match(/\b([A-Z]{4}\d{7})\b/);
-  if (mContAny) container_no = mContAny[1];
-  if (!container_no) {
-    const mSplit = flat.match(/\b([A-Z]{4})\s+(\d{7})\b/);
-    if (mSplit) container_no = `${mSplit[1]}${mSplit[2]}`;
-  }
-  if (!container_no) {
-    const mAfter = flat.match(/CONTAINER\s+([A-Z]{4}\d{7})/i);
-    if (mAfter) container_no = mAfter[1];
-  }
-
-  const brFullRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
-  const brAnywhereRe = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
-
-  const ncmTokenRe = /^(\d{8}|\d{4}(?:\.\d+)+)$/;
-  const brNumTokenRe = /^\d{1,3}(?:\.\d{3})*,\d{2}$/;
-
-  function normalizeCodeToken(s) {
-    return String(s || '').trim().replace(/\s+/g, '').replace(/-+/g, '-');
-  }
-
-  // =========================================================
-  // PASS 1 (STRICT)
-  // =========================================================
-  const strictRows = [];
-
-  for (const line of lines) {
-    if (!/^\d{2}\s+/.test(line)) continue;
-
-    let tokens = line.split(/\s+/).filter(Boolean);
-    if (tokens.length < 6) continue;
-
-    // Strip glued placeholder row numbers ("08" "09" "10") from the end if present
-    while (tokens.length && /^\d{2}$/.test(tokens[tokens.length - 1])) {
-      tokens.pop();
-    }
-    if (tokens.length < 6) continue;
-
-    // last token should be lot (6+ digits)
-    let lot = tokens[tokens.length - 1];
-    if (!/^\d{6,}$/.test(lot)) continue;
-
-    const grossStr = tokens[tokens.length - 2];
-    const netStr = tokens[tokens.length - 3];
-    if (!brNumTokenRe.test(netStr) || !brNumTokenRe.test(grossStr)) continue;
-
-    const grossVal = parseBrazilNumber(grossStr);
-    const netVal = parseBrazilNumber(netStr);
-    if (!grossVal || !netVal) continue;
-
-    const qtyRaw = tokens[tokens.length - 4].replace(/\./g, '');
-    const qty = Number(qtyRaw);
-    if (!Number.isFinite(qty) || qty <= 0) continue;
-
-    const lineNo = Number(tokens[0]);
-    const left = tokens.slice(1, tokens.length - 4);
-
-    let idxNcm = -1;
-    for (let i = 0; i < left.length; i++) {
-      if (ncmTokenRe.test(left[i])) { idxNcm = i; break; }
-    }
-    if (idxNcm === -1) continue;
-
-    const productName = left.slice(0, idxNcm).join(' ').trim();
-    const ncm = left[idxNcm];
-
-    const mid = left.slice(idxNcm + 1);
-    if (mid.length < 1) continue;
-
-    let package_type = mid[0];
-    let startCodeIdx = 1;
-
-    if (mid.length >= 2 && mid[0].toUpperCase() === 'RD') {
-      package_type = `${mid[0]} ${mid[1]}`;
-      startCodeIdx = 2;
-    }
-
-    let code = null;
-    if (mid.length > startCodeIdx) {
-      code = normalizeCodeToken(mid.slice(startCodeIdx).join(' '));
-      if (!/[A-Z0-9]/i.test(code)) code = null;
-    }
-
-    strictRows.push({
-      line_no: lineNo,
-      raw_product_name: productName,
-      ncm,
-      package_type,
-      package_code: code,
-      qty_packages: qty,
-      net_kg: netVal,
-      gross_kg: grossVal,
-      lot_number: lot
-    });
-  }
-
-  // =========================================================
-  // PASS 2 (FALLBACK) — keep it simple but tolerant
-  // =========================================================
-  const fallbackRows = [];
-  const fallbackRowRe =
-    /(\d{2})\s*([A-ZÀ-ÿ0-9%\/' .\-]+?)\s*(\d{8}|\d{4}(?:\.\d+)+)\s*([A-Z]{2,10})\s*([A-Z0-9\-]+)\s*([0-9\., ]+?)\s*(\d{6,})/gi;
-
-  let m;
-  while ((m = fallbackRowRe.exec(flat)) !== null) {
-    const line_no = Number(m[1]);
-    const raw_product_name = String(m[2] || '').trim();
-    const ncm = String(m[3] || '').trim();
-    const package_type = String(m[4] || '').trim();
-    const package_code = String(m[5] || '').trim();
-    const tail = String(m[6] || '').trim();
-    const lot_number = String(m[7] || '').trim();
-
-    const nums = tail.match(brAnywhereRe) || [];
-    if (nums.length < 2) continue;
-
-    const grossStr = nums[nums.length - 1];
-    const netStr = nums[nums.length - 2];
-    const grossVal = parseBrazilNumber(grossStr);
-    const netVal = parseBrazilNumber(netStr);
-    if (!grossVal || !netVal) continue;
-
-    // qty = everything before netStr, digits only
-    const idxNet = tail.lastIndexOf(netStr);
-    const qtyPart = (idxNet >= 0 ? tail.slice(0, idxNet) : '').replace(/[^\d]/g, '');
-    const qty = qtyPart ? Number(qtyPart) : null;
-    if (!qty || !Number.isFinite(qty)) continue;
-
-    fallbackRows.push({
-      line_no,
-      raw_product_name,
-      ncm,
-      package_type,
-      package_code,
-      qty_packages: qty,
-      net_kg: netVal,
-      gross_kg: grossVal,
-      lot_number
-    });
-  }
-
-  // =========================================================
-  // PICK BEST RESULT (do NOT short-circuit on strict=1)
-  // =========================================================
-  const rows =
-    (fallbackRows.length > strictRows.length)
-      ? fallbackRows
-      : strictRows;
-
-  return { doc_date, container_no, rows };
-}
-
-
-// ==========================================================
-// INVENTORY: Container Settings
-// ==========================================================
-app.get('/inventory/settings/containers', requireConnected, (req, res) => {
-  const current = {};
-  for (let c = 1; c <= 7; c++) {
-    const modeKey = `container_mode_C${c}`;
-    const flipKey = `container_flip_C${c}`;
-    const modeDefault = (c === 1) ? '8-slot' : '18-slot';
-    const flipDefault = 'L_LONG';
-    const mode = db.getSetting(modeKey) || modeDefault;
-    const flip = db.getSetting(flipKey) || flipDefault;
-    const label = db.getContainerDepths(c).label;
-    current[`C${c}`] = { mode, flip, label };
-  }
-  res.render('inventory_container_settings', { current, msg: null });
-});
-
-app.post('/inventory/settings/containers', requireConnected, (req, res) => {
-  try {
-    const validC1 = new Set(['8-slot', '9-slot']);
-    const valid40 = new Set(['18-slot', '20-slot']);
-    const validFlip = new Set(['L_LONG', 'R_LONG']);
-
-    const modeC1 = req.body.mode_C1;
-    const flipC1 = req.body.flip_C1;
-    if (!validC1.has(modeC1)) throw new Error('Invalid mode for C1');
-    if (!validFlip.has(flipC1)) throw new Error('Invalid flip for C1');
-    db.setSetting('container_mode_C1', modeC1);
-    db.setSetting('container_flip_C1', flipC1);
-
-    for (let c = 2; c <= 7; c++) {
-      const mode = req.body[`mode_C${c}`];
-      const flip = req.body[`flip_C${c}`];
-      if (!valid40.has(mode)) throw new Error(`Invalid mode for C${c}`);
-      if (!validFlip.has(flip)) throw new Error(`Invalid flip for C${c}`);
-      db.setSetting(`container_mode_C${c}`, mode);
-      db.setSetting(`container_flip_C${c}`, flip);
-    }
-
-    const current = {};
-    for (let c = 1; c <= 7; c++) {
-      const label = db.getContainerDepths(c).label;
-      current[`C${c}`] = {
-        mode: db.getSetting(`container_mode_C${c}`),
-        flip: db.getSetting(`container_flip_C${c}`),
-        label
-      };
-    }
-
-    res.render('inventory_container_settings', { current, msg: 'Saved successfully.' });
-  } catch (e) {
-    const current = {};
-    for (let c = 1; c <= 7; c++) {
-      const label = db.getContainerDepths(c).label;
-      current[`C${c}`] = {
-        mode: db.getSetting(`container_mode_C${c}`) || ((c === 1) ? '8-slot' : '18-slot'),
-        flip: db.getSetting(`container_flip_C${c}`) || 'L_LONG',
-        label
-      };
-    }
-    res.status(400).render('inventory_container_settings', { current, msg: e?.message || String(e) });
-  }
-});
-
-// ==========================================================
-// Inventory: Pallet Configs UI
-// ==========================================================
-app.get('/inventory/settings/pallet-configs', requireConnected, (req, res) => {
-  try {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: null });
-  } catch (e) {
-    res.status(500).send(`Pallet configs failed: ${e?.message || e}`);
-  }
-});
-
-app.post('/inventory/settings/pallet-configs/add', requireConnected, (req, res) => {
-  try {
-    const sku_id = Number(req.body.sku_id);
-    const name = String(req.body.name || '').trim();
-    const units_per_pallet = Number(req.body.units_per_pallet);
-
-    if (!sku_id) throw new Error('SKU is required');
-    if (!name) throw new Error('Name is required');
-    if (!Number.isFinite(units_per_pallet) || units_per_pallet <= 0) throw new Error('Units per pallet must be > 0');
-
-    const ti = req.body.ti ? Number(req.body.ti) : null;
-    const hi = req.body.hi ? Number(req.body.hi) : null;
-    const is_default = req.body.is_default === 'on';
-    const notes = req.body.notes ? String(req.body.notes) : null;
-
-    db.addPalletConfig({ sku_id, name, ti, hi, units_per_pallet, is_default, notes });
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Added pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-app.post('/inventory/settings/pallet-configs/update', requireConnected, (req, res) => {
-  try {
-    const id = Number(req.body.id);
-    const sku_id = Number(req.body.sku_id);
-    const name = String(req.body.name || '').trim();
-    const units_per_pallet = Number(req.body.units_per_pallet);
-
-    if (!id) throw new Error('Missing config id');
-    if (!sku_id) throw new Error('SKU is required');
-    if (!name) throw new Error('Name is required');
-    if (!Number.isFinite(units_per_pallet) || units_per_pallet <= 0) throw new Error('Units per pallet must be > 0');
-
-    const ti = req.body.ti ? Number(req.body.ti) : null;
-    const hi = req.body.hi ? Number(req.body.hi) : null;
-    const is_default = req.body.is_default === 'on';
-    const notes = req.body.notes ? String(req.body.notes) : null;
-
-    db.updatePalletConfig({ id, sku_id, name, ti, hi, units_per_pallet, is_default, notes });
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Updated pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-app.post('/inventory/settings/pallet-configs/delete', requireConnected, (req, res) => {
-  try {
-    const id = Number(req.body.id);
-    if (!id) throw new Error('Missing config id');
-
-    db.deletePalletConfig(id);
-
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.render('inventory_pallet_configs', { skus, configs, msg: 'Deleted pallet config.' });
-  } catch (e) {
-    const skus = db.listSkusAllFiltered({ categoryId: 'all' });
-    const configs = db.listPalletConfigsAll();
-    res.status(400).render('inventory_pallet_configs', { skus, configs, msg: e?.message || String(e) });
-  }
-});
-
-// ==========================================================
-// Inventory: Walk-in (pallets + loose + exact slot occupancy)
-// ==========================================================
-app.get('/inventory/walkin', requireConnected, (req, res) => {
-  try {
-    const rows = db.listWalkinLoose();
-    const pallets = db.listPalletsInWalkin();
-
-    // Build exact slot groups (based on current container settings)
-    const slotGroups = [];
-    for (let c = 1; c <= 7; c++) {
-      const depths = db.getContainerDepths(c);
-      const validSlots = db.listValidSlotCodes(c);
-
-      const palletsInC = db.listPalletsInContainer(c);
-      const occMap = new Map();
-      for (const p of palletsInC) {
-        occMap.set(p.location_code, p);
-      }
-
-      const slots = validSlots.map(code => {
-        const occ = occMap.get(code);
-        return {
-          code,
-          occupied: !!occ,
-          pallet: occ || null
-        };
-      });
-
-      const occupiedCount = slots.reduce((n, s) => n + (s.occupied ? 1 : 0), 0);
-
-      slotGroups.push({
-        containerNo: c,
-        label: depths.label,
-        occupiedCount,
-        slots
-      });
-    }
-
-    res.render('inventory_walkin', { rows, pallets, slotGroups });
-  } catch (e) {
-    res.status(500).send(`Walk-in failed: ${e?.message || e}`);
-  }
-});
-
-// ==========================================================
-// Inventory: Add Pallet (manual receive) — compatible with BOTH add-pallet EJS versions
-// ==========================================================
-app.get('/inventory/add-pallet', requireConnected, (req, res) => {
-  try {
-    const containerNo = Number(req.query.c || 1);
-    const containers = db.listContainers();
-
-    // Visual slot arrays (for the older UI)
-    const depths = db.getContainerDepths(containerNo);
-    const left = [];
-    const right = [];
-    for (let d = 1; d <= depths.leftMax; d++) left.push({ code: `C${containerNo}-L${String(d).padStart(2,'0')}` });
-    for (let d = 1; d <= depths.rightMax; d++) right.push({ code: `C${containerNo}-R${String(d).padStart(2,'0')}` });
-
-    // Dropdown options (for the newer UI)
-    const slotOptions = db.listValidSlotCodes(containerNo);
-
-    // SKUs (support both templates)
-    const skus = (typeof db.listSkusAllFiltered === 'function')
-      ? db.listSkusAllFiltered({ categoryId: 'all' })
-      : db.listSkusActiveOnly();
-
-    res.render('inventory_add_pallet', {
-      msg: null,
-      containers,
-      containerNo,
-      left,
-      right,
-      slotOptions,
-      skus
-    });
-  } catch (e) {
-    res.status(500).send(`Add pallet page failed: ${e?.message || e}`);
-  }
-});
-
-// ==========================================================
-// Inventory: Map  (✅ merged WALKIN/RETURNS panel data added)
-// ==========================================================
-app.get('/inventory/map', requireConnected, (req, res) => {
-  const containerNo = Number(req.query.c || 1);
-  const containers = db.listContainers();
-
-  const pallets = db.listPalletsInContainer(containerNo);
-  const palletByLoc = new Map();
-  for (const p of pallets) palletByLoc.set(p.location_code, p);
-
-  const depths = db.getContainerDepths(containerNo);
-  const left = [];
-  const right = [];
-
-  for (let d = 1; d <= depths.leftMax; d++) {
-    const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
-    left.push({ code, pallet: palletByLoc.get(code) || null });
-  }
-  for (let d = 1; d <= depths.rightMax; d++) {
-    const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
-    right.push({ code, pallet: palletByLoc.get(code) || null });
-  }
-
-  const slotOptions = [...db.listValidSlotCodes(containerNo), 'WALKIN', 'RETURNS'];
-  const c1Mode = (containerNo === 1) ? (db.getSetting('container_mode_C1') || '8-slot') : null;
-
-  // For merged panels inside map
-  const walkinPallets = db.listPalletsInWalkin();
-  const walkinLoose = db.listWalkinLoose();
-  const returnsPallets = db.listPalletsInReturns();
-
-  res.render('inventory_map', {
-    containerNo,
-    containers,
-    left,
-    right,
-    containerLabel: depths.label,
-    slotOptions,
-    c1Mode,
-    walkinPallets,
-    walkinLoose,
-    returnsPallets
-  });
-});
-
-// ==========================================================
-// Inventory: Yard view (all containers)
-// ==========================================================
-app.get('/inventory/yard', requireConnected, (req, res) => {
-  try {
-    const containers = db.listContainers();
-
-    const yard = containers.map(containerNo => {
-      const pallets = db.listPalletsInContainer(containerNo);
-      const palletByLoc = new Map();
-      for (const p of pallets) palletByLoc.set(p.location_code, p);
-
-      const depths = db.getContainerDepths(containerNo);
-      const left = [];
-      const right = [];
-
-      for (let d = 1; d <= depths.leftMax; d++) {
-        const code = `C${containerNo}-L${String(d).padStart(2, '0')}`;
-        left.push({ code, pallet: palletByLoc.get(code) || null });
-      }
-      for (let d = 1; d <= depths.rightMax; d++) {
-        const code = `C${containerNo}-R${String(d).padStart(2, '0')}`;
-        right.push({ code, pallet: palletByLoc.get(code) || null });
-      }
-
-      return { containerNo, label: depths.label, left, right };
-    });
-
-    res.render('inventory_yard', { yard });
-  } catch (e) {
-    res.status(500).send(`Yard failed: ${e?.message || e}`);
-  }
-});
-
-// ==========================================================
-// Inventory: Move pallet (form + JSON)
-// ==========================================================
-app.post('/inventory/move', requireConnected, (req, res) => {
-  try {
-    const palletId = Number(req.body.pallet_id);
-    const toSlot = String(req.body.to_slot || '').trim();
-    const containerNo = Number(req.body.container_no || 1);
-
-    if (!palletId) throw new Error('Missing pallet_id');
-    if (!toSlot) throw new Error('Missing destination');
-
-    const loc = db.getLocationByCode(toSlot);
-    if (!loc) throw new Error(`Destination slot not found: ${toSlot}`);
-
-    db.movePallet(palletId, loc.id, 'user');
-    res.redirect(`/inventory/map?c=${containerNo}`);
-  } catch (e) {
-    res.status(500).send(`Move failed: ${e?.message || e}`);
-  }
-});
-
-// JSON move endpoint (used by drag/drop)
-app.post('/inventory/move-json', requireConnected, (req, res) => {
-  try {
-    const palletId = Number(req.body.pallet_id);
-    const toSlot = String(req.body.to_slot || '').trim();
-
-    if (!palletId) return res.status(400).json({ ok: false, error: 'Missing pallet_id' });
-    if (!toSlot) return res.status(400).json({ ok: false, error: 'Missing destination' });
-
-    const loc = db.getLocationByCode(toSlot);
-    if (!loc) return res.status(400).json({ ok: false, error: `Destination slot not found: ${toSlot}` });
-
-    db.movePallet(palletId, loc.id, 'user');
-    return res.json({ ok: true });
-  } catch (e) {
-    // Prefer 400 so UI shows the message cleanly (occupied slot, etc.)
-    return res.status(400).json({ ok: false, error: e?.message || String(e) });
-  }
-});
-
-// Break pallet -> loose in walkin
-app.post('/inventory/break-to-walkin', requireConnected, (req, res) => {
-  try {
-    const palletId = Number(req.body.pallet_id);
-    const qty = Number(req.body.qty);
-    const containerNo = Number(req.body.container_no || 1);
-
-    if (!palletId) throw new Error('Missing pallet_id');
-    if (!Number.isFinite(qty) || qty <= 0) throw new Error('Qty must be > 0');
-
-    db.breakPalletToWalkin({ palletId, qty, userName: 'user' });
-    res.redirect(`/inventory/map?c=${containerNo}`);
-  } catch (e) {
-    res.status(500).send(`Break failed: ${e?.message || e}`);
   }
 });
 
@@ -1230,7 +472,7 @@ app.post('/inventory/allocate/apply', async (req, res) => {
 });
 
 // ==========================================================
-// Webhook endpoint (invoice sorter/surcharge) + auto-allocation
+// Webhook endpoint
 // ==========================================================
 app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
   res.status(200).send('OK');
@@ -1283,49 +525,7 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
 });
 
 // ==========================================================
-// Inventory: RETURNS page (pallets in RETURNS)
-// ==========================================================
-app.get('/inventory/returns', requireConnected, (req, res) => {
-  try {
-    const pallets = db.listPalletsInReturns();
-    res.render('inventory_returns', { pallets });
-  } catch (e) {
-    res.status(500).send(`RETURNS failed: ${e?.message || e}`);
-  }
-});
-
-// ==========================================================
-// Inventory: Engine Settings (toggle + timezone)
-// ==========================================================
-app.get('/inventory/settings/engine', requireConnected, (req, res) => {
-  try {
-    const enabled = db.getAutoAllocateEnabled();
-    const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
-    res.render('inventory_engine_settings', { enabled, timezone, msg: null });
-  } catch (e) {
-    res.status(500).send(`Engine settings failed: ${e?.message || e}`);
-  }
-});
-
-app.post('/inventory/settings/engine', requireConnected, (req, res) => {
-  try {
-    const enabled = req.body.enabled === 'on';
-    db.setAutoAllocateEnabled(enabled);
-
-    const tz = String(req.body.timezone || '').trim() || 'America/Los_Angeles';
-    db.setSetting('inventory_timezone', tz);
-
-    const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
-    res.render('inventory_engine_settings', { enabled, timezone, msg: 'Saved.' });
-  } catch (e) {
-    const enabled = db.getAutoAllocateEnabled();
-    const timezone = db.getSetting('inventory_timezone') || 'America/Los_Angeles';
-    res.status(400).render('inventory_engine_settings', { enabled, timezone, msg: e?.message || String(e) });
-  }
-});
-
-// ==========================================================
-// Inventory: SKU Settings (category filter + bulk actions)
+// Inventory: SKU Settings sync + updates (unchanged)
 // ==========================================================
 app.get('/inventory/settings/skus', requireConnected, (req, res) => {
   try {
@@ -1338,7 +538,6 @@ app.get('/inventory/settings/skus', requireConnected, (req, res) => {
   }
 });
 
-// Save selected SKU rows (Active / Lot / Organic / Unit / Threshold)
 app.post('/inventory/settings/skus/bulk-save', requireConnected, (req, res) => {
   try {
     const selected = req.body.selected_sku_ids;
@@ -1378,68 +577,6 @@ app.post('/inventory/settings/skus/bulk-save', requireConnected, (req, res) => {
     res.render('inventory_sku_settings', {
       skus,
       msg: `Saved ${ids.length} selected SKU(s).`,
-      categories,
-      selectedCat
-    });
-  } catch (e) {
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const categories = db.listCategoriesOrdered();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-
-    res.status(400).render('inventory_sku_settings', {
-      skus,
-      msg: e?.message || String(e),
-      categories,
-      selectedCat
-    });
-  }
-});
-
-// Bulk update current filter (Active / Lot / Organic)
-app.post('/inventory/settings/skus/bulk', requireConnected, (req, res) => {
-  try {
-    const selectedCat = (req.body.selectedCat || 'all').toString();
-    const action = (req.body.action || '').toString();
-
-    // action format:
-    // active:on | active:off
-    // lot:on | lot:off
-    // organic:on | organic:off
-    // active:off_all  (ignores selectedCat, applies to all)
-    const [field, value] = action.split(':');
-    if (!field || !value) throw new Error('Invalid bulk action');
-
-    const applyAll = value === 'off_all';
-    const cat = applyAll ? 'all' : selectedCat;
-
-    const rows = db.listSkusAllFiltered({ categoryId: cat });
-
-    let updates = 0;
-    for (const sku of rows) {
-      const patch = {
-        sku_id: sku.id,
-        active: sku.active,
-        is_organic: sku.is_organic,
-        is_lot_tracked: sku.is_lot_tracked,
-        unit_type: sku.unit_type || 'unit',
-        pallet_pick_threshold: sku.pallet_pick_threshold
-      };
-
-      if (field === 'active') patch.active = (value === 'on') ? 1 : 0;
-      else if (field === 'lot') patch.is_lot_tracked = (value === 'on') ? 1 : 0;
-      else if (field === 'organic') patch.is_organic = (value === 'on') ? 1 : 0;
-      else throw new Error('Unknown bulk field');
-
-      db.updateSkuSettings(patch);
-      updates++;
-    }
-
-    const categories = db.listCategoriesOrdered();
-    const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-
-    res.render('inventory_sku_settings', {
-      skus,
-      msg: `Bulk update applied to ${updates} SKUs (${applyAll ? 'ALL categories' : selectedCat}).`,
       categories,
       selectedCat
     });
@@ -1501,197 +638,7 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
 });
 
 // ==========================================================
-// Inventory Audit: Assign lot numbers to previous sales (Organic only)
-// ==========================================================
-app.get('/inventory/audit', requireConnected, (req, res) => {
-  res.render('inventory_audit', {
-    msg: null,
-    invoiceId: '',
-    invoice: null,
-    organicLines: [],
-    lotsBySku: {},
-    existing: []
-  });
-});
-
-app.post('/inventory/audit/preview', requireConnected, async (req, res) => {
-  try {
-    const invoiceId = String(req.body.invoice_id || '').trim();
-    if (!invoiceId) throw new Error('Missing invoice id');
-
-    const conn = db.getConnectionOrThrow();
-    const oauthClient = getOAuthClient(conn);
-
-    const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
-    const invoice = invResp?.Invoice;
-    if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
-
-    // Build organic-only lines (based on SKU settings)
-    const lines = (invoice?.Line || [])
-      .filter(l => l?.DetailType === 'SalesItemLineDetail')
-      .map(l => {
-        const det = l.SalesItemLineDetail;
-        const qboItemId = det?.ItemRef?.value || null;
-        const qboName = det?.ItemRef?.name || null;
-        const qty = Number(det?.Qty || 0);
-        return { qboItemId, qboName, qty };
-      })
-      .filter(x => x.qboItemId && x.qty > 0);
-
-    const organicLines = [];
-    const lotsBySku = {};
-
-    for (const ln of lines) {
-      const sku = db.getSkuByQboItemId(ln.qboItemId);
-      if (!sku) continue;
-      if (!sku.is_organic) continue; // ✅ only organic SKUs
-
-      organicLines.push({
-        sku_id: sku.id,
-        sku_name: sku.name,
-        unit_type: sku.unit_type,
-        qboItemId: ln.qboItemId,
-        qboName: ln.qboName,
-        qty: ln.qty
-      });
-
-      if (!lotsBySku[String(sku.id)]) {
-        lotsBySku[String(sku.id)] = db.listLotsForSku(sku.id);
-      }
-    }
-
-    const existing = db.listAuditAllocations(invoiceId);
-
-    res.render('inventory_audit', {
-      msg: organicLines.length ? null : 'No organic SKUs found on this invoice (based on SKU settings).',
-      invoiceId,
-      invoice,
-      organicLines,
-      lotsBySku,
-      existing
-    });
-  } catch (e) {
-    res.status(400).render('inventory_audit', {
-      msg: e?.message || String(e),
-      invoiceId: '',
-      invoice: null,
-      organicLines: [],
-      lotsBySku: {},
-      existing: []
-    });
-  }
-});
-
-app.post('/inventory/audit/save', requireConnected, (req, res) => {
-  try {
-    const invoiceId = String(req.body.invoice_id || '').trim();
-    if (!invoiceId) throw new Error('Missing invoice id');
-
-    const txnDate = req.body.txn_date ? String(req.body.txn_date) : null;
-    const customerName = req.body.customer_name ? String(req.body.customer_name) : null;
-
-    const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
-    const skuArr = toArr(req.body.sku_id);
-    const lotArr = toArr(req.body.lot_id);
-    const qtyArr = toArr(req.body.qty_units);
-    const noteArr = toArr(req.body.note);
-
-    if (skuArr.length === 0) throw new Error('No rows submitted.');
-
-    const rows = [];
-    for (let i = 0; i < skuArr.length; i++) {
-      const sku_id = Number(skuArr[i]);
-      const lot_id_raw = lotArr[i];
-      const lot_id = (lot_id_raw === '' || lot_id_raw === null || lot_id_raw === undefined) ? null : Number(lot_id_raw);
-      const qty_units = Number(qtyArr[i]);
-
-      if (!sku_id) continue;
-      if (!Number.isFinite(qty_units) || qty_units <= 0) continue;
-
-      // ✅ safety: only allow organic SKUs
-      const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(sku_id);
-      if (!sku || !sku.is_organic) continue;
-
-      rows.push({
-        sku_id,
-        lot_id,
-        qty_units,
-        method: 'MANUAL',
-        note: noteArr[i] ? String(noteArr[i]) : null
-      });
-    }
-
-    db.replaceAuditAllocations({ invoiceId, txnDate, customerName, rows });
-
-    // Redirect back to the page
-    res.redirect('/inventory/audit');
-  } catch (e) {
-    res.status(500).send(`Audit save failed: ${e?.message || e}`);
-  }
-});
-
-
-
-// ==========================================================
-// Audit search results (uses local index)
-// ==========================================================
-app.get('/inventory/audit/search', requireConnected, (req, res) => {
-  const organicSkus = db.sqlite.prepare(`
-    SELECT id, name, unit_type
-    FROM skus
-    WHERE is_organic=1 AND active=1
-    ORDER BY name COLLATE NOCASE
-  `).all();
-
-  const selectedSkuId = String(req.query.sku || '').trim();
-  const startDate = String(req.query.start || '2025-01-01').trim();
-  const endDate = String(req.query.end || '').trim() || null;
-
-  let invoices = [];
-  let lots = [];
-  if (selectedSkuId) {
-    invoices = db.listInvoicesContainingSku({ skuId: Number(selectedSkuId), startDate, endDate });
-    lots = db.listLotsForSku(Number(selectedSkuId));
-  }
-
-  res.render('inventory_audit_search', {
-    msg: null,
-    organicSkus,
-    selectedSkuId,
-    startDate,
-    endDate: endDate || '',
-    invoices,
-    lots
-  });
-});
-
-
-// ==========================================================
-// Printable lot report (Lot -> invoice list)
-// ==========================================================
-app.get('/inventory/audit/lot-report', requireConnected, (req, res) => {
-  try {
-    const skuId = Number(req.query.sku);
-    const lotId = req.query.lot ? Number(req.query.lot) : null;
-    const startDate = String(req.query.start || '2025-01-01').trim();
-    const endDate = String(req.query.end || '').trim() || null;
-
-    if (!skuId) throw new Error('Missing sku');
-
-    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
-    const lot = lotId ? db.sqlite.prepare(`SELECT * FROM lots WHERE id=?`).get(lotId) : null;
-
-    const rows = db.listAuditLotReport({ skuId, lotId, startDate, endDate });
-    const total = rows.reduce((s, r) => s + Number(r.allocated_qty || 0), 0);
-
-    res.render('inventory_audit_lot_report', { sku, lot, rows, total, startDate, endDate: endDate || '' });
-  } catch (e) {
-    res.status(500).send(`Lot report failed: ${e?.message || e}`);
-  }
-});
-
-// ==========================================================
-// Organic Audit Search (SKU -> invoices -> lot assignment)
+// Organic Audit Search (single canonical set)
 // ==========================================================
 app.get('/inventory/audit/search', requireConnected, (req, res) => {
   const organicSkus = db.sqlite.prepare(`
@@ -1724,9 +671,6 @@ app.get('/inventory/audit/search', requireConnected, (req, res) => {
   });
 });
 
-// ==========================================================
-// Scan QBO invoices in date range and index lines for selected organic SKU
-// ==========================================================
 app.post('/inventory/audit/scan', requireConnected, async (req, res) => {
   const conn = db.getConnectionOrThrow();
   const oauthClient = getOAuthClient(conn);
@@ -1742,7 +686,6 @@ app.post('/inventory/audit/scan', requireConnected, async (req, res) => {
     if (!sku || !sku.is_organic) throw new Error('Selected SKU is not marked organic.');
     if (!sku.qbo_item_id) throw new Error('SKU has no qbo_item_id. Sync SKUs from QBO first.');
 
-    // Pull invoice headers (paged)
     let start = 1;
     const pageSize = 100;
     const metas = [];
@@ -1772,8 +715,7 @@ app.post('/inventory/audit/scan', requireConnected, async (req, res) => {
     const targetItemId = String(sku.qbo_item_id);
     let indexed = 0;
 
-console.log('[audit-scan] skuId=', skuId, 'targetItemId=', targetItemId, 'dateRange=', { startDate, endDate });
-console.log('[audit-scan] invoicesToRead=', metas.length);
+    console.log('[audit-scan]', { skuId, targetItemId, startDate, endDate, invoicesToRead: metas.length });
 
     for (const meta of metas) {
       const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, meta.id);
@@ -1803,17 +745,19 @@ console.log('[audit-scan] invoicesToRead=', metas.length);
         indexed++;
       }
     }
-console.log('[audit-scan] indexedLines=', indexed);
 
-    res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Scan complete. Indexed lines: ${indexed}`)}`);
+    console.log('[audit-scan] indexedLines=', indexed);
+
+    return res.redirect(
+      `/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Scan complete. Invoices checked: ${metas.length}. Indexed lines: ${indexed}.`)}`
+    );
   } catch (e) {
-    res.status(500).send(`Audit scan failed: ${e?.message || e}`);
+    return res.redirect(
+      `/inventory/audit/search?sku=${encodeURIComponent(req.body.sku_id || '')}&start=${encodeURIComponent(req.body.start_date || '')}&end=${encodeURIComponent(req.body.end_date || '')}&msg=${encodeURIComponent(`Scan failed: ${e?.message || e}`)}`
+    );
   }
 });
 
-// ==========================================================
-// Assign a LOT to selected invoices (audit-only)
-// ==========================================================
 app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
   try {
     const skuId = Number(req.body.sku_id);
@@ -1825,7 +769,6 @@ app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
     if (!skuId) throw new Error('Missing sku_id');
     if (ids.length === 0) throw new Error('No invoices selected.');
 
-    // safety: only organic
     const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
     if (!sku || !sku.is_organic) throw new Error('Selected SKU is not organic.');
 
@@ -1851,15 +794,35 @@ app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
       });
     }
 
-    res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent('Assigned lot to selected invoices.')}`);
+    return res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent('Assigned lot to selected invoices.')}`);
   } catch (e) {
-    res.status(500).send(`Assign lot failed: ${e?.message || e}`);
+    return res.redirect(`/inventory/audit/search?sku=${encodeURIComponent(req.body.sku_id || '')}&start=${encodeURIComponent(req.body.start_date || '')}&end=${encodeURIComponent(req.body.end_date || '')}&msg=${encodeURIComponent(`Assign failed: ${e?.message || e}`)}`);
   }
 });
 
-// ==========================================================
-// Auto-assign lots (unassigned only) using date-based suggestion
-// ==========================================================
+// Lot report
+app.get('/inventory/audit/lot-report', requireConnected, (req, res) => {
+  try {
+    const skuId = Number(req.query.sku);
+    const lotId = req.query.lot ? Number(req.query.lot) : null;
+    const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
+    const endDate = String(req.query.end || '').trim() || null;
+
+    if (!skuId) throw new Error('Missing sku');
+
+    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
+    const lot = lotId ? db.sqlite.prepare(`SELECT * FROM lots WHERE id=?`).get(lotId) : null;
+
+    const rows = db.listAuditLotReport({ skuId, lotId, startDate, endDate });
+    const total = rows.reduce((s, r) => s + Number(r.allocated_qty || 0), 0);
+
+    res.render('inventory_audit_lot_report', { sku, lot, rows, total, startDate, endDate: endDate || '' });
+  } catch (e) {
+    res.status(500).send(`Lot report failed: ${e?.message || e}`);
+  }
+});
+
+// Auto-assign per SKU
 app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
   try {
     const skuId = Number(req.body.sku_id);
@@ -1921,15 +884,13 @@ app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
       assigned++;
     }
 
-    res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Auto-assign complete: assigned=${assigned}, unknown=${unknown}, skipped(existing)=${skipped}`)}`);
+    return res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Auto-assign complete: assigned=${assigned}, unknown=${unknown}, skipped(existing)=${skipped}`)}`);
   } catch (e) {
-    res.status(500).send(`Auto-assign failed: ${e?.message || e}`);
+    return res.redirect(`/inventory/audit/search?msg=${encodeURIComponent(`Auto-assign failed: ${e?.message || e}`)}`);
   }
 });
 
-// ==========================================================
-// Auto-assign lots for ALL organic SKUs (unassigned only)
-// ==========================================================
+// Auto-assign ALL
 app.post('/inventory/audit/auto-assign-all', requireConnected, (req, res) => {
   try {
     const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
@@ -1972,7 +933,6 @@ app.post('/inventory/audit/auto-assign-all', requireConnected, (req, res) => {
         const invoiceId = String(inv.qbo_invoice_id);
         const txnDate = inv.txn_date ? String(inv.txn_date) : null;
 
-        // If already assigned for this invoice+SKU, skip.
         if (db.hasAuditAllocationForInvoiceSku(invoiceId, skuId)) {
           totalSkipped++;
           continue;
@@ -1998,19 +958,14 @@ app.post('/inventory/audit/auto-assign-all', requireConnected, (req, res) => {
       }
     }
 
-    // Send user back to search with a status message
     const msg = `Auto-assign ALL complete: skus=${totalSkus}, assigned=${totalAssigned}, unknown=${totalUnknown}, skipped(existing)=${totalSkipped}.`;
-    res.redirect(`/inventory/audit/search?start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(msg)}`);
-
+    return res.redirect(`/inventory/audit/search?start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(msg)}`);
   } catch (e) {
-    res.status(500).send(`Auto-assign ALL failed: ${e?.message || e}`);
+    return res.redirect(`/inventory/audit/search?msg=${encodeURIComponent(`Auto-assign ALL failed: ${e?.message || e}`)}`);
   }
 });
 
-
-// ==========================================================
-// Master printable report (ALL organic SKUs + lots)
-// ==========================================================
+// Master report
 app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
   try {
     const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
@@ -2070,13 +1025,10 @@ app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
       skuGroups,
       grandTotal
     });
-
   } catch (e) {
     res.status(500).send(`Master report failed: ${e?.message || e}`);
   }
 });
 
-
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
-
