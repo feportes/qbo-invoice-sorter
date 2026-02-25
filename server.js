@@ -10,7 +10,7 @@ import { createRequire } from 'module';
 
 import { db } from './src/db.js';
 import { ensureSchema, seedDefaults } from './src/schema.js';
-import { getOAuthClient, authStart, authCallback, requireConnected } from './src/oauth.js';
+import { getOAuthClient, authStart, authCallback, requireConnected, withFreshClient } from './src/oauth.js';
 import { qboReadItemByName, qboQuery, qboReadInvoiceWithRetry } from './src/qbo.js';
 import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
