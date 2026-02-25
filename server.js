@@ -419,78 +419,109 @@ app.post('/inventory/inbound/upload-xlsx', requireConnected, upload.single('xlsx
     if (!firstSheetName) throw new Error('XLSX has no sheets');
 
     const ws = wb.Sheets[firstSheetName];
-
-    // Read rows as objects (headers from first row)
     const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
     if (!rawRows.length) throw new Error('XLSX sheet has no data rows');
 
-    // Normalize keys
+    function normalizeHeader(h) {
+      return String(h || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^\w]/g, '');
+    }
+
+    function numOrNull(x) {
+      if (x === '' || x === null || x === undefined) return null;
+      const n = Number(String(x).replace(/,/g, '').trim());
+      return Number.isFinite(n) ? n : null;
+    }
+
+    // Normalize rows
     const rows = rawRows.map(r => {
       const out = {};
       for (const k of Object.keys(r)) out[normalizeHeader(k)] = r[k];
       return out;
     });
 
-    // Expected columns (case-insensitive via normalizeHeader):
-    // line | product | ncm | package | code | packages | net_kg | gross_kg | batch
-    // (gross_kg optional)
+    // -------------------------------------------
+    // NEW: Auto-detect Doc_Date & Container_No
+    // -------------------------------------------
+
+    const firstRow = rows[0] || {};
+
+    const sheetDocDate =
+      firstRow.doc_date ||
+      firstRow.docdate ||
+      null;
+
+    const sheetContainer =
+      firstRow.container_no ||
+      firstRow.containerno ||
+      null;
+
+    // Form values override sheet
+    const finalDocDate =
+      (req.body.doc_date && req.body.doc_date.trim()) ||
+      sheetDocDate ||
+      null;
+
+    const finalContainerNo =
+      (req.body.container_no && req.body.container_no.trim()) ||
+      sheetContainer ||
+      null;
+
+    // -------------------------------------------
+    // Build parsed rows
+    // -------------------------------------------
+
     const parsedRows = [];
+
     for (const r of rows) {
       const product = String(r.product || r.raw_product_name || '').trim();
-      if (!product) continue; // skip blank lines
-
-      const line_no = numOrNull(r.line ?? r.line_no);
-      const ncm = String(r.ncm || '').trim() || null;
-      const package_type = String(r.package || r.package_type || '').trim() || null;
-      const package_code = String(r.code || r.package_code || '').trim() || null;
-
-      const qty_packages = numOrNull(r.packages ?? r.qty_packages);
-      const net_kg = numOrNull(r.net_kg ?? r.netkg ?? r.net);
-      const gross_kg = numOrNull(r.gross_kg ?? r.grosskg ?? r.gross); // optional
-      const lot_number = String(r.batch || r.lot_number || r.lot || '').trim() || null;
+      if (!product) continue;
 
       parsedRows.push({
-        line_no,
+        line_no: numOrNull(r.line ?? r.line_no),
         raw_product_name: product,
-        ncm,
-        package_type,
-        package_code,
-        qty_packages,
-        net_kg,
-        gross_kg,
-        lot_number
+        ncm: String(r.ncm || '').trim() || null,
+        package_type: String(r.package || r.package_type || '').trim() || null,
+        package_code: String(r.code || r.package_code || '').trim() || null,
+        qty_packages: numOrNull(r.packages ?? r.qty_packages),
+        net_kg: numOrNull(r.net_kg ?? r.netkg ?? r.net),
+        gross_kg: numOrNull(r.gross_kg ?? r.grosskg ?? r.gross),
+        lot_number: String(r.batch || r.lot_number || r.lot || '').trim() || null
       });
     }
 
-    if (!parsedRows.length) throw new Error('No usable rows found (check headers like Product/Packages/Net_kg/Batch).');
-
-    // Doc header can come from optional form fields
-    const doc_date = req.body.doc_date ? String(req.body.doc_date).trim() : null;
-    const container_no = req.body.container_no ? String(req.body.container_no).trim() : null;
+    if (!parsedRows.length) {
+      throw new Error('No usable rows found (check headers like Product / Packages / Net_kg / Batch).');
+    }
 
     const inboundDocId = db.createInboundDoc({
-      doc_date,
-      container_no,
+      doc_date: finalDocDate,
+      container_no: finalContainerNo,
       source_filename: req.file.originalname,
       notes: `xlsx_rows=${parsedRows.length}`
     });
 
-    // Optional: store the import payload into raw_text (helps inspection/debug)
+    // Store import payload for inspection traceability
     if (typeof db.updateInboundDocRawText === 'function') {
-      db.updateInboundDocRawText(inboundDocId, JSON.stringify({
-        source: 'XLSX_IMPORT',
-        sheet: firstSheetName,
-        rows: parsedRows
-      }));
+      db.updateInboundDocRawText(
+        inboundDocId,
+        JSON.stringify({
+          source: 'XLSX_IMPORT',
+          sheet: firstSheetName,
+          rows: parsedRows
+        })
+      );
     }
 
-    // Insert lines (+ best-effort auto-map SKU by alias/name)
     for (const r of parsedRows) {
       const skuId = db.findSkuIdByAliasOrName(r.raw_product_name);
       db.addInboundDocLine(inboundDocId, { ...r, sku_id: skuId });
     }
 
-    return res.redirect(`/inventory/inbound/${inboundDocId}?msg=${encodeURIComponent('Imported from XLSX.')}`);
+    return res.redirect(`/inventory/inbound/${inboundDocId}?msg=${encodeURIComponent('Imported from XLSX (auto header detected).')}`);
   } catch (e) {
     const docs = db.listInboundDocs();
     return res.status(400).render('inventory_inbound', { docs, msg: e?.message || String(e) });
