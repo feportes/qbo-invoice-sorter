@@ -479,12 +479,6 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
   res.status(200).send('OK');
 
   try {
-    const { conn, oauthClient } = await withFreshClient();
-    if (!conn) {
-      console.log('[webhook] skip: no connection');
-      return;
-    }
-
     const payload = req.body;
 
     const notifications = payload?.eventNotifications || [];
@@ -499,30 +493,44 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
 
     console.log(`[webhook] received invoices=${invoiceIds.length} ids=${invoiceIds.slice(0, 20).join(',')}`);
 
+    // ✅ Sequential processing = fewer rate limit / propagation issues
     for (const invoiceId of invoiceIds) {
-      processInvoiceWithRetry({ oauthClient, realmId: conn.realm_id, invoiceId, source: 'webhook', retries: 6 })
-        .then(async () => {
-          console.log(`[webhook] processed ok invoiceId=${invoiceId}`);
+      try {
+        const { conn, oauthClient } = await withFreshClient();
 
-          if (db.getAutoAllocateEnabled()) {
-            try {
-              const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
-              const invoice = invResp?.Invoice;
-              if (invoice) {
-                await runAutoAllocateForInvoice({ invoice, invoiceId });
-                console.log(`[inv_engine] ok invoiceId=${invoiceId}`);
-              }
-            } catch (e) {
-              console.log(`[inv_engine] error invoiceId=${invoiceId} err=${e?.message || e}`);
+        await processInvoiceWithRetry({
+          oauthClient,
+          realmId: conn.realm_id,
+          invoiceId,
+          source: 'webhook',
+          retries: 10 // 👈 give QBO time to “settle”
+        });
+
+        console.log(`[webhook] processed ok invoiceId=${invoiceId}`);
+
+        if (db.getAutoAllocateEnabled()) {
+          try {
+            const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, invoiceId);
+            const invoice = invResp?.Invoice;
+            if (invoice) {
+              await runAutoAllocateForInvoice({ invoice, invoiceId });
+              console.log(`[inv_engine] ok invoiceId=${invoiceId}`);
             }
+          } catch (e) {
+            console.log(`[inv_engine] error invoiceId=${invoiceId} err=${e?.message || e}`);
           }
-        })
-        .catch(err => console.log(`[webhook] processed error invoiceId=${invoiceId} err=${err?.message || err}`));
+        }
+
+      } catch (err) {
+        console.log(`[webhook] processed error invoiceId=${invoiceId} err=${err?.message || err}`);
+      }
     }
+
   } catch (e) {
     console.log('[webhook] fatal error', e?.message || e);
   }
 });
+
 
 // ==========================================================
 // Inventory: SKU Settings sync + updates (unchanged)
