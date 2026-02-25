@@ -655,9 +655,11 @@ app.get('/inventory/audit/search', requireConnected, (req, res) => {
 
   let invoices = [];
   let lots = [];
+  let lotAvailability = [];
   if (selectedSkuId) {
-    invoices = db.listInvoicesContainingSku({ skuId: Number(selectedSkuId), startDate, endDate });
-    lots = db.listLotsForSku(Number(selectedSkuId));
+  invoices = db.listInvoicesContainingSku({ skuId: Number(selectedSkuId), startDate, endDate });
+  lots = db.listLotsForSku(Number(selectedSkuId));
+  lotAvailability = db.listLotAvailabilityForSku(Number(selectedSkuId));
   }
 
   res.render('inventory_audit_search', {
@@ -667,7 +669,8 @@ app.get('/inventory/audit/search', requireConnected, (req, res) => {
     startDate,
     endDate: endDate || '',
     invoices,
-    lots
+    lots,
+    lotAvailability
   });
 });
 
@@ -842,57 +845,73 @@ app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
     const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
     if (!sku || !sku.is_organic) throw new Error('Selected SKU is not organic.');
 
-    const invs = db.sqlite.prepare(`
-      SELECT
-        qbo_invoice_id,
-        MAX(txn_date) AS txn_date,
-        MAX(customer_name) AS customer_name,
-        SUM(qty_units) AS qty_units
-      FROM invoice_sku_lines
-      WHERE sku_id=?
-        AND (? IS NULL OR txn_date >= ?)
-        AND (? IS NULL OR txn_date <= ?)
-      GROUP BY qbo_invoice_id
-      ORDER BY txn_date ASC
-    `).all(
-      Number(skuId),
-      startDate || null, startDate || null,
-      endDate || null, endDate || null
-    );
+    // 1) Load lots with remaining
+    const lots = db.listLotAvailabilityForSku(skuId)
+      .filter(l => Number(l.remaining_units || 0) > 0);
 
-    let assigned = 0;
-    let unknown = 0;
-    let skipped = 0;
+    // 2) Load unassigned invoices for this SKU
+    const invs = db.listUnassignedInvoicesForSku({ skuId, startDate, endDate });
+
+    let lotIdx = 0;
+    let assignedInvoices = 0;
+    let splitAllocations = 0;
+    let unknownQty = 0;
 
     for (const inv of invs) {
-      const invoiceId = String(inv.qbo_invoice_id);
-      const txnDate = inv.txn_date ? String(inv.txn_date) : null;
+      let need = Number(inv.qty_units || 0);
+      if (!need || need <= 0) continue;
 
-      if (db.hasAuditAllocationForInvoiceSku(invoiceId, skuId)) {
-        skipped++;
-        continue;
+      const rows = [];
+
+      while (need > 0 && lotIdx < lots.length) {
+        const cur = lots[lotIdx];
+        const remaining = Number(cur.remaining_units || 0);
+
+        if (remaining <= 0) { lotIdx++; continue; }
+
+        const take = Math.min(need, remaining);
+
+        rows.push({
+          sku_id: skuId,
+          lot_id: Number(cur.lot_id),
+          qty_units: take,
+          method: 'AUTO_SUGGEST',
+          note: `Auto FIFO by inbound date (${cur.inbound_date || 'unknown'})`
+        });
+
+        cur.remaining_units = remaining - take;
+        need -= take;
+
+        if (cur.remaining_units <= 0) lotIdx++;
       }
 
-      const lotId = txnDate ? db.getSuggestedLotForSkuOnDate(skuId, txnDate) : null;
-      if (!lotId) unknown++;
-
-      db.replaceAuditAllocations({
-        invoiceId,
-        txnDate,
-        customerName: inv.customer_name || null,
-        rows: [{
+      // If we ran out of lots, any leftover becomes UNKNOWN LOT
+      if (need > 0) {
+        unknownQty += need;
+        rows.push({
           sku_id: skuId,
-          lot_id: lotId,
-          qty_units: Number(inv.qty_units || 0),
+          lot_id: null,
+          qty_units: need,
           method: 'AUTO_SUGGEST',
-          note: lotId ? 'Auto-suggested by date' : 'Auto-suggest failed: UNKNOWN LOT'
-        }]
+          note: 'Auto-assign: insufficient inbound lot balance (UNKNOWN LOT)'
+        });
+      }
+
+      // Write allocations (can include multiple rows => split across lots)
+      db.replaceAuditAllocations({
+        invoiceId: String(inv.qbo_invoice_id),
+        txnDate: inv.txn_date || null,
+        customerName: inv.customer_name || null,
+        rows
       });
 
-      assigned++;
+      assignedInvoices++;
+      if (rows.length > 1) splitAllocations++;
     }
 
-    return res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Auto-assign complete: assigned=${assigned}, unknown=${unknown}, skipped(existing)=${skipped}`)}`);
+    const msg = `Auto-assign (qty-safe) done. Invoices assigned=${assignedInvoices}, splitAcrossLots=${splitAllocations}, unknownQty=${unknownQty.toFixed(2).replace(/\.00$/,'')}`;
+    return res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(msg)}`);
+
   } catch (e) {
     return res.redirect(`/inventory/audit/search?msg=${encodeURIComponent(`Auto-assign failed: ${e?.message || e}`)}`);
   }

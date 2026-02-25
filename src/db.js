@@ -12,6 +12,68 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+listUnassignedInvoicesForSku({ skuId, startDate, endDate }) {
+  return sqlite.prepare(`
+    SELECT
+      l.qbo_invoice_id,
+      MAX(l.txn_date) AS txn_date,
+      MAX(l.doc_number) AS doc_number,
+      MAX(l.customer_name) AS customer_name,
+      SUM(l.qty_units) AS qty_units,
+      SUM(COALESCE(l.amount, 0)) AS amount
+    FROM invoice_sku_lines l
+    LEFT JOIN invoice_lot_audit_allocations a
+      ON a.qbo_invoice_id = l.qbo_invoice_id
+     AND a.sku_id = l.sku_id
+    WHERE l.sku_id = ?
+      AND a.id IS NULL
+      AND (? IS NULL OR l.txn_date >= ?)
+      AND (? IS NULL OR l.txn_date <= ?)
+    GROUP BY l.qbo_invoice_id
+    ORDER BY txn_date ASC, l.qbo_invoice_id ASC
+  `).all(
+    Number(skuId),
+    startDate || null, startDate || null,
+    endDate || null, endDate || null
+  ).map(r => ({
+    ...r,
+    qty_units: Number(r.qty_units || 0),
+    amount: Number(r.amount || 0)
+  }));
+},
+
+listLotAvailabilityForSku(skuId) {
+  return sqlite.prepare(`
+    SELECT
+      lo.id AS lot_id,
+      lo.lot_number,
+      MIN(d.doc_date) AS inbound_date,
+      SUM(COALESCE(il.qty_packages, 0)) AS inbound_units,
+      SUM(COALESCE(il.net_kg, 0)) AS inbound_net_kg,
+      COALESCE((
+        SELECT SUM(a.qty_units)
+        FROM invoice_lot_audit_allocations a
+        WHERE a.sku_id = ?
+          AND a.lot_id = lo.id
+      ), 0) AS allocated_units
+    FROM lots lo
+    JOIN inbound_doc_lines il
+      ON il.sku_id = lo.sku_id
+     AND il.lot_number = lo.lot_number
+    JOIN inbound_docs d
+      ON d.id = il.inbound_doc_id
+    WHERE lo.sku_id = ?
+    GROUP BY lo.id, lo.lot_number
+    ORDER BY inbound_date ASC, lo.lot_number COLLATE NOCASE ASC
+  `).all(Number(skuId), Number(skuId))
+  .map(r => ({
+    ...r,
+    inbound_units: Number(r.inbound_units || 0),
+    allocated_units: Number(r.allocated_units || 0),
+    remaining_units: Number(r.inbound_units || 0) - Number(r.allocated_units || 0)
+  }));
+},
+
 updateInboundDocHeader({ id, doc_date, container_no }) {
   sqlite.prepare(`
     UPDATE inbound_docs

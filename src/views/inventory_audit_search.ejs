@@ -110,6 +110,35 @@
         <span class="muted">This writes audit allocations (does not change inventory).</span>
       </div>
 
+<% if (lotAvailability && lotAvailability.length) { %>
+  <div class="card">
+    <b>Lot availability (units)</b>
+    <div class="muted">Inbound = sum of qty_packages from inbound docs. Allocated = audit allocations. Remaining = inbound - allocated.</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Lot</th>
+          <th>Inbound Date</th>
+          <th class="right">Inbound</th>
+          <th class="right">Allocated</th>
+          <th class="right">Remaining</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% lotAvailability.forEach(l => { %>
+          <tr>
+            <td class="q"><%= l.lot_number %></td>
+            <td class="q"><%= l.inbound_date || '' %></td>
+            <td class="right"><%= Number(l.inbound_units || 0).toFixed(2).replace(/\.00$/,'') %></td>
+            <td class="right"><%= Number(l.allocated_units || 0).toFixed(2).replace(/\.00$/,'') %></td>
+            <td class="right"><%= Number(l.remaining_units || 0).toFixed(2).replace(/\.00$/,'') %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+<% } %>
+
       <table>
         <thead>
           <tr>
