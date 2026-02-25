@@ -831,6 +831,26 @@ app.get('/inventory/audit/assigned', requireConnected, (req, res) => {
   });
 });
 
+app.post('/inventory/audit/assigned/delete', requireConnected, (req, res) => {
+  try {
+    const skuId = Number(req.body.sku_id);
+    const startDate = String(req.body.start_date || '').trim();
+    const endDate = String(req.body.end_date || '').trim() || '';
+
+    const ids = Array.isArray(req.body.allocation_ids)
+      ? req.body.allocation_ids
+      : (req.body.allocation_ids ? [req.body.allocation_ids] : []);
+
+    const deleted = db.deleteAuditAllocationsByIds(ids);
+
+    return res.redirect(
+      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Deleted ${deleted} allocation(s).`)}`
+    );
+  } catch (e) {
+    return res.status(500).send(`Delete allocations failed: ${e?.message || e}`);
+  }
+});
+
 app.post('/inventory/audit/assigned/reassign', requireConnected, (req, res) => {
   try {
     const skuId = Number(req.body.sku_id);
@@ -847,11 +867,9 @@ app.post('/inventory/audit/assigned/reassign', requireConnected, (req, res) => {
     if (!skuId) throw new Error('Missing sku_id');
     if (ids.length === 0) throw new Error('No allocations selected.');
 
-    // If reassigning to a real lot, guard it
+    // Guard only if assigning to a real lot
     if (newLotId) {
       const allocs = db.getAuditAllocationsByIds(ids);
-
-      // Total qty being moved to the new lot
       const movingQty = allocs
         .filter(a => Number(a.sku_id) === skuId)
         .reduce((s, a) => s + Number(a.qty_units || 0), 0);
@@ -863,13 +881,12 @@ app.post('/inventory/audit/assigned/reassign', requireConnected, (req, res) => {
         excludeAllocationIds: ids
       });
 
-      const wouldBe = allocatedExcluding + movingQty;
-      if (wouldBe > inbound) {
-        throw new Error(`Over-allocation blocked. Lot inbound=${inbound}, currently allocated=${allocatedExcluding}, trying to add=${movingQty}.`);
+      if (allocatedExcluding + movingQty > inbound) {
+        throw new Error(`Over-allocation blocked. Inbound=${inbound}, allocated=${allocatedExcluding}, trying to add=${movingQty}.`);
       }
     }
 
-    const changed = db.reassignAuditAllocationsByIds({ ids, newLotId });
+    const changed = db.updateAllocationLotByIds({ ids, newLotId });
 
     return res.redirect(
       `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Reassigned ${changed} allocation(s).`)}`
@@ -892,6 +909,26 @@ app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
     const endDate = String(req.body.end_date || '').trim() || null;
 
     const ids = Array.isArray(req.body.invoice_ids) ? req.body.invoice_ids : (req.body.invoice_ids ? [req.body.invoice_ids] : []);
+// Guard: block overfill when lot_id is provided
+if (lotId) {
+  const inbound = db.getInboundUnitsForSkuLotId({ skuId, lotId });
+  const alreadyAllocated = db.getAllocatedUnitsForSkuLotId({ skuId, lotId });
+
+  // sum qty on selected invoices for this sku
+  let selectedQty = 0;
+  for (const invoiceId of ids) {
+    const inv = db.sqlite.prepare(`
+      SELECT SUM(qty_units) AS qty_units
+      FROM invoice_sku_lines
+      WHERE qbo_invoice_id=? AND sku_id=?
+    `).get(String(invoiceId), Number(skuId));
+    selectedQty += Number(inv?.qty_units || 0);
+  }
+
+  if (alreadyAllocated + selectedQty > inbound) {
+    throw new Error(`Over-allocation blocked. Inbound=${inbound}, allocated=${alreadyAllocated}, trying to add=${selectedQty}.`);
+  }
+}
     if (!skuId) throw new Error('Missing sku_id');
     if (ids.length === 0) throw new Error('No invoices selected.');
 
