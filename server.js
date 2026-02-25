@@ -46,6 +46,26 @@ app.use(morgan('dev'));
 app.use(express.json({ verify: rawBodySaver, limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
+  const raw = String(invoiceIdOrDocNumber || '').trim();
+  if (!raw) throw new Error('Missing invoice id');
+
+  // 1) Try as QBO Id first
+  try {
+    await qboReadInvoiceWithRetry(oauthClient, realmId, raw, 2);
+    return raw;
+  } catch {}
+
+  // 2) Try as DocNumber
+  const safe = raw.replace(/'/g, "\\'");
+  const q = `select Id, DocNumber from Invoice where DocNumber='${safe}' maxresults 1`;
+  const r = await qboQuery(oauthClient, realmId, q);
+  const inv = r?.QueryResponse?.Invoice?.[0];
+  if (inv?.Id) return String(inv.Id);
+
+  throw new Error(`Invoice not found by Id or DocNumber: ${raw}`);
+}
+
 // ==========================================================
 // Helper: retry processInvoice on "Invoice not found"
 // ==========================================================
@@ -212,38 +232,24 @@ app.get('/admin/qbo-items-check', requireConnected, async (req, res) => {
   }
 });
 
-// Force reprocess: clears processed lock for current SyncToken and runs again
+// Force reprocess: clears processed lock and runs again (accepts QBO Id OR DocNumber)
 app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
-  const { conn, oauthClient } = await withFreshClient();
-
-const resolvedId = await resolveInvoiceId(oauthClient, conn.realm_id, invoice_id);
-
-    db.clearProcessed(String(invoice_id));
-
-async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
-  const raw = String(invoiceIdOrDocNumber || '').trim();
-  if (!raw) throw new Error('Missing invoice id');
-
-  // 1) Try as QBO Id first
   try {
-    await qboReadInvoiceWithRetry(oauthClient, realmId, raw, 2);
-    return raw;
-  } catch {}
+    const invoice_id = String(req.body.invoice_id || '').trim();
+    if (!invoice_id) throw new Error('Missing invoice id');
 
-  // 2) Try as DocNumber
-  const safe = raw.replace(/'/g, "\\'");
-  const q = `select Id, DocNumber from Invoice where DocNumber='${safe}' maxresults 1`;
-  const r = await qboQuery(oauthClient, realmId, q);
-  const inv = r?.QueryResponse?.Invoice?.[0];
-  if (inv?.Id) return String(inv.Id);
+    const { conn, oauthClient } = await withFreshClient();
 
-  throw new Error(`Invoice not found by Id or DocNumber: ${raw}`);
-}
+    // ✅ Resolve DocNumber -> Id (or keep Id if already valid)
+    const resolvedId = await resolveInvoiceId(oauthClient, conn.realm_id, invoice_id);
+
+    // ✅ Clear processed lock for the REAL QBO Id
+    db.clearProcessed(String(resolvedId));
 
     const result = await processInvoiceWithRetry({
       oauthClient,
       realmId: conn.realm_id,
-      invoiceId: String(resolveId),
+      invoiceId: String(resolvedId),
       source: 'manual_force',
       retries: 12
     });
