@@ -672,8 +672,9 @@ app.get('/inventory/audit/search', requireConnected, (req, res) => {
 });
 
 app.post('/inventory/audit/scan', requireConnected, async (req, res) => {
-  const conn = db.getConnectionOrThrow();
-  const oauthClient = getOAuthClient(conn);
+const fresh = await withFreshClient();
+const conn = fresh.conn;
+const oauthClient = fresh.oauthClient;
 
   try {
     const skuId = Number(req.body.sku_id);
