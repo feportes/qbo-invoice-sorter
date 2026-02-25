@@ -12,9 +12,80 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+getInboundUnitsForSkuLotId({ skuId, lotId }) {
+  const lot = sqlite.prepare(`SELECT lot_number FROM lots WHERE id=? AND sku_id=?`).get(Number(lotId), Number(skuId));
+  if (!lot?.lot_number) return 0;
+
+  const r = sqlite.prepare(`
+    SELECT SUM(COALESCE(il.qty_packages,0)) AS inbound_units
+    FROM inbound_doc_lines il
+    WHERE il.sku_id = ?
+      AND il.lot_number = ?
+  `).get(Number(skuId), String(lot.lot_number));
+
+  return Number(r?.inbound_units || 0);
+},
+
+getAllocatedUnitsForSkuLotId({ skuId, lotId, excludeAllocationIds = [] }) {
+  const exclude = (excludeAllocationIds || []).map(Number).filter(Boolean);
+
+  if (exclude.length === 0) {
+    const r = sqlite.prepare(`
+      SELECT SUM(COALESCE(qty_units,0)) AS allocated
+      FROM invoice_lot_audit_allocations
+      WHERE sku_id=? AND lot_id=?
+    `).get(Number(skuId), Number(lotId));
+    return Number(r?.allocated || 0);
+  }
+
+  const placeholders = exclude.map(() => '?').join(',');
+  const r = sqlite.prepare(`
+    SELECT SUM(COALESCE(qty_units,0)) AS allocated
+    FROM invoice_lot_audit_allocations
+    WHERE sku_id=? AND lot_id=?
+      AND id NOT IN (${placeholders})
+  `).get(Number(skuId), Number(lotId), ...exclude);
+
+  return Number(r?.allocated || 0);
+},
+
+getAuditAllocationsByIds(ids) {
+  const arr = (ids || []).map(Number).filter(Boolean);
+  if (arr.length === 0) return [];
+  const placeholders = arr.map(() => '?').join(',');
+  return sqlite.prepare(`
+    SELECT *
+    FROM invoice_lot_audit_allocations
+    WHERE id IN (${placeholders})
+  `).all(...arr);
+},
+
+deleteAuditAllocationsByIds(ids) {
+  const arr = (ids || []).map(Number).filter(Boolean);
+  if (arr.length === 0) return 0;
+  const placeholders = arr.map(() => '?').join(',');
+  const r = sqlite.prepare(`DELETE FROM invoice_lot_audit_allocations WHERE id IN (${placeholders})`).run(...arr);
+  return r.changes || 0;
+},
+
+reassignAuditAllocationsByIds({ ids, newLotId }) {
+  const arr = (ids || []).map(Number).filter(Boolean);
+  if (arr.length === 0) return 0;
+  const placeholders = arr.map(() => '?').join(',');
+
+  const r = sqlite.prepare(`
+    UPDATE invoice_lot_audit_allocations
+    SET lot_id = ?, method='MANUAL'
+    WHERE id IN (${placeholders})
+  `).run(newLotId ? Number(newLotId) : null, ...arr);
+
+  return r.changes || 0;
+},
+
 listAssignedAllocationsForSku({ skuId, startDate, endDate }) {
   return sqlite.prepare(`
     SELECT
+      a.id,
       a.qbo_invoice_id,
       a.txn_date,
       a.customer_name,
@@ -22,12 +93,17 @@ listAssignedAllocationsForSku({ skuId, startDate, endDate }) {
       a.method,
       a.note,
       lo.lot_number,
-      lo.id AS lot_id
+      lo.id AS lot_id,
+      MAX(l.doc_number) AS doc_number
     FROM invoice_lot_audit_allocations a
     LEFT JOIN lots lo ON lo.id = a.lot_id
+    LEFT JOIN invoice_sku_lines l
+      ON l.qbo_invoice_id = a.qbo_invoice_id
+     AND l.sku_id = a.sku_id
     WHERE a.sku_id = ?
       AND (? IS NULL OR a.txn_date >= ?)
       AND (? IS NULL OR a.txn_date <= ?)
+    GROUP BY a.id
     ORDER BY a.txn_date ASC, a.qbo_invoice_id ASC, a.id ASC
   `).all(
     Number(skuId),
@@ -35,6 +111,7 @@ listAssignedAllocationsForSku({ skuId, startDate, endDate }) {
     endDate || null, endDate || null
   );
 },
+
 
 listUnassignedInvoicesContainingSku({ skuId, startDate, endDate }) {
   return sqlite.prepare(`

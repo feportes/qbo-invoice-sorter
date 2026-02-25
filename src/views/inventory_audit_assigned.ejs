@@ -4,47 +4,155 @@
   <meta charset="utf-8"/>
   <title>Assigned Allocations</title>
   <style>
-    body { font-family: system-ui; margin:24px; max-width:1200px; }
-    table { width:100%; border-collapse:collapse; margin-top:12px; }
-    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; }
-    th { background:#fafafa; }
-    .right { text-align:right; }
+    body { font-family: system-ui; margin:24px; max-width:1400px; }
     .muted { color:#666; font-size:13px; }
+    a { color:#111; text-decoration:none; }
+    .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    select,input { padding:10px 12px; border:1px solid #ddd; border-radius:10px; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; cursor:pointer; }
+    button.danger { background:#b00020; border-color:#b00020; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; vertical-align: top; }
+    th { background:#fafafa; position: sticky; top:0; z-index:2; }
+    .right { text-align:right; }
+    .q { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333; }
   </style>
 </head>
 <body>
 
-<h1>Assigned Allocations – <%= sku.name %></h1>
-<div class="muted">Review or reassign lots if needed.</div>
+<div class="row" style="justify-content:space-between;">
+  <div>
+    <h1 style="margin:0;">Assigned Allocations</h1>
+    <div class="muted" style="margin-top:6px;">
+      SKU: <b><%= sku?.name || '' %></b>
+    </div>
+  </div>
 
-<table>
-  <thead>
-    <tr>
-      <th>Date</th>
-      <th>Invoice</th>
-      <th>Customer</th>
-      <th>Lot</th>
-      <th class="right">Qty</th>
-      <th>Method</th>
-    </tr>
-  </thead>
-  <tbody>
-    <% if (!rows || rows.length === 0) { %>
-      <tr><td colspan="6" class="muted">No assigned allocations.</td></tr>
-    <% } else { %>
-      <% rows.forEach(r => { %>
+  <div class="row">
+    <a class="muted" href="/inventory/audit/search?sku=<%= sku?.id %>&start=<%= encodeURIComponent(startDate || '') %>&end=<%= encodeURIComponent(endDate || '') %>">← Back to Search</a>
+  </div>
+</div>
+
+<div class="card">
+  <% if (msg) { %>
+    <div class="muted"><b><%= msg %></b></div>
+  <% } %>
+
+  <div class="row" style="margin-top:10px;">
+    <div class="muted">Date range:</div>
+    <div class="q"><%= startDate || '' %></div>
+    <div class="muted">to</div>
+    <div class="q"><%= endDate || '' %></div>
+  </div>
+
+  <div class="muted" style="margin-top:10px;">
+    This page shows allocations already written to <span class="q">invoice_lot_audit_allocations</span>.  
+    Use it to reverse mistakes or reassign lots later (audit only — no inventory changes).
+  </div>
+</div>
+
+<div class="card">
+  <form id="bulkForm" method="post">
+    <input type="hidden" name="sku_id" value="<%= sku?.id %>"/>
+    <input type="hidden" name="start_date" value="<%= startDate || '' %>"/>
+    <input type="hidden" name="end_date" value="<%= endDate || '' %>"/>
+
+    <div class="row" style="justify-content:space-between;">
+      <div class="row">
+        <button type="button" onclick="toggleAll(true)">Select all</button>
+        <button type="button" onclick="toggleAll(false)">Clear</button>
+        <span class="muted" id="selCount">0 selected</span>
+      </div>
+
+      <div class="row">
+        <select name="new_lot_id" id="newLotSelect">
+          <option value="">(UNKNOWN LOT)</option>
+          <% (lots || []).forEach(l => { %>
+            <option value="<%= l.id %>"><%= l.lot_number %></option>
+          <% }) %>
+        </select>
+
+        <!-- Reassign selected -->
+        <button type="submit"
+                formaction="/inventory/audit/assigned/reassign"
+                onclick="return confirm('Reassign selected allocations to the chosen lot?');">
+          Reassign selected
+        </button>
+
+        <!-- Delete selected -->
+        <button type="submit"
+                class="danger"
+                formaction="/inventory/audit/assigned/delete"
+                onclick="return confirm('Delete selected allocations? This will unassign those invoices/rows.');">
+          Delete selected
+        </button>
+      </div>
+    </div>
+
+    <table>
+      <thead>
         <tr>
-          <td><%= r.txn_date || '' %></td>
-          <td><%= r.qbo_invoice_id %></td>
-          <td><%= r.customer_name || '' %></td>
-          <td><%= r.lot_number || 'UNKNOWN LOT' %></td>
-          <td class="right"><%= Number(r.qty_units || 0).toFixed(2).replace(/\.00$/,'') %></td>
-          <td><%= r.method %></td>
+          <th style="width:34px;"><input type="checkbox" onclick="toggleHeader(this)"/></th>
+          <th>Date</th>
+          <th>Invoice</th>
+          <th>Customer</th>
+          <th>Lot</th>
+          <th class="right">Qty</th>
+          <th>Method</th>
+          <th>Note</th>
         </tr>
-      <% }) %>
-    <% } %>
-  </tbody>
-</table>
+      </thead>
+      <tbody>
+        <% if (!rows || rows.length === 0) { %>
+          <tr><td colspan="8" class="muted">No assigned allocations found for this SKU/date range.</td></tr>
+        <% } else { %>
+          <% rows.forEach(r => { %>
+            <tr>
+              <td>
+                <input type="checkbox"
+                       class="rowChk"
+                       name="allocation_ids"
+                       value="<%= r.id %>"
+                       onchange="updateCount()"/>
+              </td>
+              <td class="q"><%= r.txn_date || '' %></td>
+              <td class="q"><%= r.doc_number || r.qbo_invoice_id %></td>
+              <td><%= r.customer_name || '' %></td>
+              <td class="q"><%= r.lot_number || 'UNKNOWN LOT' %></td>
+              <td class="right"><%= Number(r.qty_units || 0).toFixed(2).replace(/\.00$/,'') %></td>
+              <td class="q"><%= r.method || '' %></td>
+              <td class="muted"><%= r.note || '' %></td>
+            </tr>
+          <% }) %>
+        <% } %>
+      </tbody>
+    </table>
+  </form>
+</div>
+
+<script>
+  function getChecks() {
+    return Array.from(document.querySelectorAll('.rowChk'));
+  }
+
+  function updateCount() {
+    const n = getChecks().filter(x => x.checked).length;
+    const el = document.getElementById('selCount');
+    if (el) el.textContent = `${n} selected`;
+  }
+
+  function toggleAll(on) {
+    getChecks().forEach(c => c.checked = !!on);
+    updateCount();
+  }
+
+  function toggleHeader(cb) {
+    toggleAll(cb.checked);
+  }
+
+  updateCount();
+</script>
 
 </body>
 </html>

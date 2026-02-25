@@ -813,12 +813,75 @@ app.get('/inventory/audit/assigned', requireConnected, (req, res) => {
   const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
   const endDate = String(req.query.end || '').trim() || null;
 
-  if (!skuId) return res.redirect('/inventory/audit/search?msg=' + encodeURIComponent('Pick a SKU first.'));
+  if (!skuId) {
+    return res.redirect('/inventory/audit/search?msg=' + encodeURIComponent('Select a SKU first.'));
+  }
 
   const sku = db.sqlite.prepare(`SELECT id, name FROM skus WHERE id=?`).get(skuId);
   const rows = db.listAssignedAllocationsForSku({ skuId, startDate, endDate });
+  const lots = db.listLotsForSku(skuId);
 
-  res.render('inventory_audit_assigned', { sku, startDate, endDate: endDate || '', rows, msg: null });
+  res.render('inventory_audit_assigned', {
+    sku,
+    rows,
+    lots,
+    startDate,
+    endDate: endDate || '',
+    msg: String(req.query.msg || '') || null
+  });
+});
+
+app.post('/inventory/audit/assigned/reassign', requireConnected, (req, res) => {
+  try {
+    const skuId = Number(req.body.sku_id);
+    const startDate = String(req.body.start_date || '').trim();
+    const endDate = String(req.body.end_date || '').trim() || '';
+
+    const ids = Array.isArray(req.body.allocation_ids)
+      ? req.body.allocation_ids
+      : (req.body.allocation_ids ? [req.body.allocation_ids] : []);
+
+    const newLotIdRaw = String(req.body.new_lot_id ?? '').trim();
+    const newLotId = newLotIdRaw ? Number(newLotIdRaw) : null; // null = UNKNOWN LOT
+
+    if (!skuId) throw new Error('Missing sku_id');
+    if (ids.length === 0) throw new Error('No allocations selected.');
+
+    // If reassigning to a real lot, guard it
+    if (newLotId) {
+      const allocs = db.getAuditAllocationsByIds(ids);
+
+      // Total qty being moved to the new lot
+      const movingQty = allocs
+        .filter(a => Number(a.sku_id) === skuId)
+        .reduce((s, a) => s + Number(a.qty_units || 0), 0);
+
+      const inbound = db.getInboundUnitsForSkuLotId({ skuId, lotId: newLotId });
+      const allocatedExcluding = db.getAllocatedUnitsForSkuLotId({
+        skuId,
+        lotId: newLotId,
+        excludeAllocationIds: ids
+      });
+
+      const wouldBe = allocatedExcluding + movingQty;
+      if (wouldBe > inbound) {
+        throw new Error(`Over-allocation blocked. Lot inbound=${inbound}, currently allocated=${allocatedExcluding}, trying to add=${movingQty}.`);
+      }
+    }
+
+    const changed = db.reassignAuditAllocationsByIds({ ids, newLotId });
+
+    return res.redirect(
+      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Reassigned ${changed} allocation(s).`)}`
+    );
+  } catch (e) {
+    const skuId = Number(req.body.sku_id || 0);
+    const startDate = String(req.body.start_date || '').trim();
+    const endDate = String(req.body.end_date || '').trim() || '';
+    return res.redirect(
+      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Reassign failed: ${e?.message || e}`)}`
+    );
+  }
 });
 
 app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
