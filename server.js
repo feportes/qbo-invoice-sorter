@@ -1137,7 +1137,7 @@ app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
           lot_id: null,
           qty_units: need,
           method: 'AUTO_SUGGEST',
-          note: 'Auto FIFO: insufficient inbound balance (UNKNOWN LOT)'
+          note: 'Auto FIFO: insufficient inbound balance (Local Production / Non-Organic)'
         });
       }
 
@@ -1233,7 +1233,7 @@ app.post('/inventory/audit/auto-assign-all', requireConnected, (req, res) => {
             lot_id: null,
             qty_units: need,
             method: 'AUTO_SUGGEST',
-            note: 'Auto FIFO: insufficient inbound balance (UNKNOWN LOT)'
+            note: 'Auto FIFO: insufficient inbound balance (Local Production / Non-Organic)'
           });
         }
 

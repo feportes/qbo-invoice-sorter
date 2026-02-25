@@ -87,7 +87,7 @@
         <input type="hidden" name="start" value="<%= startDate %>">
         <input type="hidden" name="end" value="<%= endDate %>">
         <select name="lot">
-          <option value="">(UNKNOWN LOT)</option>
+          <option value="">(Local Production / Non-Organic)</option>
           <% (lots || []).forEach(l => { %>
             <option value="<%= l.id %>"><%= l.lot_number %></option>
           <% }) %>
@@ -104,7 +104,7 @@
       <div class="row" style="margin-top:10px;">
         <label class="muted"><b>Assign Lot</b></label>
         <select name="lot_id">
-          <option value="">(UNKNOWN LOT)</option>
+          <option value="">(Local Production / Non-Organic)</option>
           <% (lots || []).forEach(l => { %>
             <option value="<%= l.id %>"><%= l.lot_number %></option>
           <% }) %>
