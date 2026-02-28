@@ -33,6 +33,13 @@ export async function qboReadInvoice(oauthClient, realmId, invoiceId) {
   return qboFetchJson(oauthClient, { url });
 }
 
+export async function qboSendInvoice(oauthClient, realmId, invoiceId) {
+  // Common QBO send endpoint
+  const url = `${BASE(realmId)}/invoice/${invoiceId}/send?minorversion=75`;
+  // Intuit uses POST for send actions
+  return qboFetchJson(oauthClient, { url, method: 'POST' });
+}
+
 /**
  * QBO sometimes fires a webhook before the Invoice is immediately readable via the Read endpoint.
  * This retries on "not found" responses with exponential-ish backoff.

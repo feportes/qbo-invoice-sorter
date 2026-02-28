@@ -260,6 +260,122 @@ app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
   }
 });
 
+function requireJobKey(req, res, next) {
+  const expected = process.env.JOB_KEY;
+  if (!expected) return res.status(500).send('JOB_KEY not configured');
+  if (req.header('X-JOB-KEY') !== expected) return res.status(403).send('Forbidden');
+  next();
+}
+
+function daysBetween(a, b) {
+  // a,b are YYYY-MM-DD
+  const da = new Date(a + 'T00:00:00Z');
+  const dbb = new Date(b + 'T00:00:00Z');
+  return Math.round((dbb - da) / (1000 * 60 * 60 * 24));
+}
+
+function todayISO() {
+  const now = new Date();
+  // Use UTC date for consistency (cron runs UTC)
+  return now.toISOString().slice(0, 10);
+}
+
+// IMPORTANT: uses withFreshClient so token is always valid
+app.post('/jobs/qbo-email', requireJobKey, async (req, res) => {
+  res.status(200).send('OK');
+
+  try {
+    const { conn, oauthClient } = await withFreshClient();
+
+    const tdy = todayISO();
+    const startDate = req.body?.startDate || '2025-01-01'; // optional override
+    const pageSize = 100;
+
+    let start = 1;
+    let scanned = 0;
+    let sentInvoices = 0;
+    let sentReminders = 0;
+    let failed = 0;
+
+    while (true) {
+      // Pull a batch of invoices. Keep query simple; filter in code.
+      const q = `select Id, DocNumber, TxnDate, DueDate, Balance, CustomerRef, EmailStatus from Invoice where TxnDate >= '${startDate}' startposition ${start} maxresults ${pageSize}`;
+      const r = await qboQuery(oauthClient, conn.realm_id, q);
+      const invs = r?.QueryResponse?.Invoice || [];
+      scanned += invs.length;
+
+      for (const inv of invs) {
+        const invoiceId = String(inv.Id);
+        const customerId = String(inv?.CustomerRef?.value || '');
+
+        const settings = db.getEmailCustomerSettings(customerId) || {
+          enabled_send_invoice: 0,
+          enabled_reminder: 0,
+          reminder_days_before_due: 3
+        };
+
+        const balance = Number(inv.Balance || 0);
+        if (!(balance > 0)) continue; // paid / zero balance, skip both
+
+        // ----------------------
+        // A) Auto-send invoice (EmailStatus-only)
+        // ----------------------
+        // QBO EmailStatus is usually "EmailSent" after any send.
+        const emailStatus = String(inv.EmailStatus || '');
+        const shouldSendInvoice =
+          settings.enabled_send_invoice &&
+          emailStatus.toLowerCase() !== 'emailsent';
+
+        if (shouldSendInvoice) {
+          try {
+            await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
+            sentInvoices++;
+          } catch (e) {
+            failed++;
+            console.log(`[email-job] send invoice failed id=${invoiceId} err=${e?.message || e}`);
+          }
+        }
+
+        // ----------------------
+        // B) Reminder (local log + due date window)
+        // ----------------------
+        if (settings.enabled_reminder) {
+          const due = inv.DueDate ? String(inv.DueDate) : null;
+          if (!due) continue;
+
+          // Never send reminders on/after due date
+          if (daysBetween(tdy, due) <= 0) continue;
+
+          const daysBefore = Number(settings.reminder_days_before_due || 3);
+          const delta = daysBetween(tdy, due); // days until due
+
+          if (delta === daysBefore) {
+            // Only one reminder per invoice
+            if (db.hasReminderBeenSent(invoiceId)) continue;
+
+            try {
+              await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
+              db.logReminderSent({ invoiceId, status: 'SENT' });
+              sentReminders++;
+            } catch (e) {
+              db.logReminderSent({ invoiceId, status: 'FAILED', error: e?.message || String(e) });
+              failed++;
+              console.log(`[email-job] reminder failed id=${invoiceId} err=${e?.message || e}`);
+            }
+          }
+        }
+      }
+
+      if (invs.length < pageSize) break;
+      start += pageSize;
+    }
+
+    console.log(`[email-job] done scanned=${scanned} sentInvoices=${sentInvoices} sentReminders=${sentReminders} failed=${failed}`);
+  } catch (e) {
+    console.log('[email-job] fatal', e?.message || e);
+  }
+});
+
 // ==========================================================
 // Inbound Docs
 // ==========================================================
@@ -1329,6 +1445,60 @@ app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
     res.status(500).send(`Master report failed: ${e?.message || e}`);
   }
 });
+
+app.get('/admin/email-automation', requireConnected, (req, res) => {
+  const customers = db.listCustomers(); // already alphabetical in your db.js
+  const settings = db.listEmailCustomerSettings();
+
+  const map = new Map();
+  for (const s of settings) map.set(String(s.customer_id), s);
+
+  // Merge rows
+  const rows = customers.map(c => {
+    const s = map.get(String(c.id)) || {
+      enabled_send_invoice: 0,
+      enabled_reminder: 0,
+      reminder_days_before_due: 3
+    };
+    return {
+      customer_id: c.id,
+      display_name: c.display_name,
+      enabled_send_invoice: Number(s.enabled_send_invoice || 0),
+      enabled_reminder: Number(s.enabled_reminder || 0),
+      reminder_days_before_due: Number(s.reminder_days_before_due || 3)
+    };
+  });
+
+  // Active setup list (enabled either invoice or reminder)
+  const active = rows.filter(r => r.enabled_send_invoice || r.enabled_reminder);
+
+  res.render('admin_email_automation', { rows, active, msg: String(req.query.msg || '') || null });
+});
+
+app.post('/admin/email-automation/save', requireConnected, (req, res) => {
+  try {
+    const toArr = (x) => Array.isArray(x) ? x : (x !== undefined ? [x] : []);
+    const customerIds = toArr(req.body.customer_id);
+
+    for (const id of customerIds) {
+      const enabled_send_invoice = req.body[`enabled_send_invoice_${id}`] === 'on';
+      const enabled_reminder = req.body[`enabled_reminder_${id}`] === 'on';
+      const days = Number(req.body[`reminder_days_before_due_${id}`] || 3);
+
+      db.upsertEmailCustomerSettings({
+        customer_id: id,
+        enabled_send_invoice,
+        enabled_reminder,
+        reminder_days_before_due: days
+      });
+    }
+
+    return res.redirect('/admin/email-automation?msg=' + encodeURIComponent('Saved email automation settings.'));
+  } catch (e) {
+    return res.redirect('/admin/email-automation?msg=' + encodeURIComponent('Save failed: ' + (e?.message || e)));
+  }
+});
+
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));

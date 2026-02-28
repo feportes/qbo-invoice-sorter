@@ -220,9 +220,55 @@ CREATE TABLE IF NOT EXISTS sku_aliases (
     CREATE INDEX IF NOT EXISTS idx_movements_time ON inventory_movements(created_at);
   `);
 
+// ✅ Email automation tables
+try {
+  s.exec(`
+    CREATE TABLE IF NOT EXISTS email_customer_settings (
+      customer_id TEXT PRIMARY KEY,
+      enabled_send_invoice INTEGER NOT NULL DEFAULT 0,
+      enabled_reminder INTEGER NOT NULL DEFAULT 0,
+      reminder_days_before_due INTEGER NOT NULL DEFAULT 3,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS invoice_email_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      qbo_invoice_id TEXT NOT NULL,
+      type TEXT NOT NULL, -- REMINDER
+      sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      status TEXT NOT NULL, -- SENT | FAILED
+      error TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invoice_email_log_invoice ON invoice_email_log(qbo_invoice_id, type);
+  `);
+} catch {}
+
   // ✅ Safe migrations
   try { s.exec(`ALTER TABLE skus ADD COLUMN qbo_category_id TEXT;`); } catch {}
   try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_qbo_category_id ON skus(qbo_category_id);`); } catch {}
+try {
+  s.exec(`
+    CREATE TABLE IF NOT EXISTS email_customer_settings (
+      customer_id TEXT PRIMARY KEY,
+      enabled_send_invoice INTEGER NOT NULL DEFAULT 0,
+      enabled_reminder INTEGER NOT NULL DEFAULT 0,
+      reminder_days_before_due INTEGER NOT NULL DEFAULT 3,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS invoice_email_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      qbo_invoice_id TEXT NOT NULL,
+      type TEXT NOT NULL, -- REMINDER
+      sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      status TEXT NOT NULL, -- SENT | FAILED
+      error TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invoice_email_log_invoice ON invoice_email_log(qbo_invoice_id, type);
+  `);
+} catch {}
 
   // ✅ Inbound docs: store extracted PDF text for reload/debug/inspection
   try { s.exec(`ALTER TABLE inbound_docs ADD COLUMN raw_text TEXT;`); } catch {}

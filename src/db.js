@@ -12,6 +12,98 @@ sqlite.pragma('journal_mode = WAL');
 export const db = {
   sqlite,
 
+listEmailCustomerSettings() {
+  return sqlite.prepare(`
+    SELECT *
+    FROM email_customer_settings
+    ORDER BY customer_id ASC
+  `).all();
+},
+
+getEmailCustomerSettings(customerId) {
+  return sqlite.prepare(`
+    SELECT *
+    FROM email_customer_settings
+    WHERE customer_id=?
+  `).get(String(customerId));
+},
+
+upsertEmailCustomerSettings({ customer_id, enabled_send_invoice, enabled_reminder, reminder_days_before_due }) {
+  sqlite.prepare(`
+    INSERT INTO email_customer_settings (customer_id, enabled_send_invoice, enabled_reminder, reminder_days_before_due, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(customer_id) DO UPDATE SET
+      enabled_send_invoice=excluded.enabled_send_invoice,
+      enabled_reminder=excluded.enabled_reminder,
+      reminder_days_before_due=excluded.reminder_days_before_due,
+      updated_at=CURRENT_TIMESTAMP
+  `).run(
+    String(customer_id),
+    enabled_send_invoice ? 1 : 0,
+    enabled_reminder ? 1 : 0,
+    Number(reminder_days_before_due || 3)
+  );
+},
+
+hasReminderBeenSent(invoiceId) {
+  const r = sqlite.prepare(`
+    SELECT 1
+    FROM invoice_email_log
+    WHERE qbo_invoice_id=? AND type='REMINDER' AND status='SENT'
+    LIMIT 1
+  `).get(String(invoiceId));
+  return !!r;
+},
+
+logReminder({ invoiceId, status, error = null }) {
+  sqlite.prepare(`
+    INSERT INTO invoice_email_log (qbo_invoice_id, type, status, error)
+    VALUES (?, 'REMINDER', ?, ?)
+  `).run(String(invoiceId), String(status), error ? String(error) : null);
+},
+
+getEmailCustomerSettings(customerId) {
+  return sqlite.prepare(`
+    SELECT *
+    FROM email_customer_settings
+    WHERE customer_id=?
+  `).get(String(customerId));
+},
+
+upsertEmailCustomerSettings(row) {
+  sqlite.prepare(`
+    INSERT INTO email_customer_settings (customer_id, enabled_send_invoice, enabled_reminder, reminder_days_before_due, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(customer_id) DO UPDATE SET
+      enabled_send_invoice=excluded.enabled_send_invoice,
+      enabled_reminder=excluded.enabled_reminder,
+      reminder_days_before_due=excluded.reminder_days_before_due,
+      updated_at=CURRENT_TIMESTAMP
+  `).run(
+    String(row.customer_id),
+    row.enabled_send_invoice ? 1 : 0,
+    row.enabled_reminder ? 1 : 0,
+    Number(row.reminder_days_before_due || 3)
+  );
+},
+
+hasReminderBeenSent(invoiceId) {
+  const r = sqlite.prepare(`
+    SELECT 1
+    FROM invoice_email_log
+    WHERE qbo_invoice_id=? AND type='REMINDER' AND status='SENT'
+    LIMIT 1
+  `).get(String(invoiceId));
+  return !!r;
+},
+
+logReminderSent({ invoiceId, status, error = null }) {
+  sqlite.prepare(`
+    INSERT INTO invoice_email_log (qbo_invoice_id, type, status, error)
+    VALUES (?, 'REMINDER', ?, ?)
+  `).run(String(invoiceId), String(status), error ? String(error) : null);
+},
+
 getAuditAllocationById(id) {
   return sqlite.prepare(`
     SELECT *
