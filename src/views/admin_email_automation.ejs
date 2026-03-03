@@ -25,6 +25,25 @@
 </div>
 
 <div class="card">
+  <h3 style="margin-top:0;">Run Now (testing)</h3>
+
+  <form method="post" action="/admin/email-automation/run-now" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+    <label class="muted"><b>Start date</b></label>
+    <input name="startDate" value="2025-01-01" />
+
+    <label class="muted"><b>Max invoices</b></label>
+    <input name="maxInvoices" value="2000" style="width:90px;" />
+
+    <button type="submit" name="dry" value="1">Dry run (no emails)</button>
+    <button type="submit" name="dry" value="0" onclick="return confirm('Send real emails now?')">Send now</button>
+  </form>
+
+  <div class="muted" style="margin-top:8px;">
+    Dry run computes what would be emailed. “Send now” uses QuickBooks email.
+  </div>
+</div>
+
+<div class="card">
   <% if (msg) { %><div class="muted"><b><%= msg %></b></div><% } %>
 
   <h3 style="margin-top:0;">Customers with automation enabled</h3>
