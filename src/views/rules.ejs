@@ -5,15 +5,21 @@
   <title>Surcharge Rules</title>
   <style>
     body{font-family:system-ui;margin:24px;}
-    .wrap{max-width:1100px;}
+    .wrap{max-width:1200px;}
     table{border-collapse:collapse;width:100%;}
     th,td{border-bottom:1px solid #eee;padding:10px;text-align:left;vertical-align:top;}
-    th{background:#fafafa;}
+    th{background:#fafafa; position: sticky; top: 0; z-index: 2;}
     .hint{color:#666;font-size:13px;}
     select,input{padding:8px;border:1px solid #ddd;border-radius:10px;}
-    button{padding:10px 14px;border-radius:10px;border:1px solid #333;background:#111;color:#fff;}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #333;background:#111;color:#fff;cursor:pointer;}
     .row{display:flex; gap:12px; flex-wrap:wrap; align-items:end;}
-    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin-bottom:16px;}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin-bottom:16px;background:#fff;}
+    .danger{background:#b00020;border-color:#b00020;}
+    .smallbtn{padding:8px 10px;border-radius:10px;}
+    .pill{display:inline-block;padding:6px 10px;border:1px solid #ddd;border-radius:999px;background:#fff;}
+    .muted{color:#666;font-size:13px;}
+    .right{text-align:right;}
+    .q{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; color:#333;}
   </style>
 </head>
 <body>
@@ -25,8 +31,11 @@
   </p>
 
   <div class="card">
-    <h3>Add / Update Rule</h3>
-    <form method="post" action="/admin/rules/upsert">
+    <h3 style="margin-top:0;">Add / Update Rule</h3>
+
+    <form method="post" action="/admin/rules/upsert" id="ruleForm">
+      <input type="hidden" name="rule_id" id="rule_id" value="">
+
       <div class="row">
         <div>
           <div class="hint">Match Type</div>
@@ -38,7 +47,7 @@
 
         <div id="exact_block">
           <div class="hint">Customer</div>
-          <select name="customer_id">
+          <select name="customer_id" id="customer_id">
             <option value="">-- select --</option>
             <% customers.forEach(c => { %>
               <option value="<%= c.id %>"><%= c.display_name %></option>
@@ -48,7 +57,7 @@
 
         <div id="prefix_block" style="display:none;">
           <div class="hint">Prefix</div>
-          <input name="prefix" placeholder="Alohana" />
+          <input name="prefix" id="prefix" placeholder="Alohana" />
         </div>
 
         <div>
@@ -63,29 +72,56 @@
 
         <div id="threshold_block" style="display:none;">
           <div class="hint">Threshold</div>
-          <input name="threshold" type="number" step="0.01" placeholder="1000" />
+          <input name="threshold" id="threshold" type="number" step="0.01" placeholder="1000" />
         </div>
 
         <div id="amount_block">
           <div class="hint">Amount</div>
-          <input name="amount" type="number" step="0.01" value="15" />
+          <input name="amount" id="amount" type="number" step="0.01" value="15" />
         </div>
 
         <div>
           <div class="hint">Enabled</div>
-          <input name="enabled" type="checkbox" checked />
+          <input name="enabled" id="enabled" type="checkbox" checked />
         </div>
 
         <div>
-          <button type="submit">Save rule</button>
+          <button type="submit" id="saveBtn">Save rule</button>
           &nbsp;<a href="/">Home</a>
+          &nbsp;<button type="button" class="smallbtn" onclick="resetForm()">Clear</button>
         </div>
+      </div>
+      <div class="muted" style="margin-top:10px;">
+        Tip: Click <span class="pill">Edit</span> on an existing rule to load it here.
       </div>
     </form>
   </div>
 
-  <h3>Existing rules</h3>
-  <table>
+  <div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <div>
+        <h3 style="margin:0;">Existing rules</h3>
+        <div class="muted"><span id="ruleCount"></span></div>
+      </div>
+
+      <div class="row">
+        <input id="searchBox" placeholder="Search customer/prefix (e.g., Sysco, Alohana)..." style="min-width:320px;" />
+
+        <select id="filterMatch">
+          <option value="all">All match types</option>
+          <option value="exact">Exact</option>
+          <option value="prefix">Prefix</option>
+        </select>
+
+        <label class="pill">
+          <input type="checkbox" id="onlyEnabled" checked style="margin-right:6px;" />
+          Enabled only
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <table id="rulesTable">
     <thead>
       <tr>
         <th>Enabled</th>
@@ -94,30 +130,44 @@
         <th>Rule</th>
         <th>Threshold</th>
         <th>Amount</th>
-        <th>Delete</th>
+        <th class="right">Actions</th>
       </tr>
     </thead>
+
     <tbody>
       <% rules.forEach(r => { %>
-        <tr>
+        <% const cust = (r.match_type === "exact") ? customers.find(c => c.id === r.customer_id) : null; %>
+        <% const label = (r.match_type === "exact") ? (cust ? cust.display_name : "") : (r.prefix || ""); %>
+
+        <tr class="ruleRow"
+            data-enabled="<%= r.enabled ? '1' : '0' %>"
+            data-match="<%= r.match_type %>"
+            data-label="<%= (label || '').toLowerCase() %>"
+            data-ruleid="<%= r.id %>"
+            data-customerid="<%= r.customer_id || '' %>"
+            data-prefix="<%= r.prefix || '' %>"
+            data-ruletype="<%= r.rule_type %>"
+            data-threshold="<%= r.threshold ?? '' %>"
+            data-amount="<%= r.amount ?? '' %>">
           <td><%= r.enabled ? "Yes" : "No" %></td>
           <td><%= r.match_type %></td>
           <td>
             <% if (r.match_type === "exact") { %>
-              ID: <%= r.customer_id || "(not set)" %>
-              <% const cust = customers.find(c => c.id === r.customer_id); %>
+              <span class="q">ID: <%= r.customer_id || "(not set)" %></span>
               <div class="hint"><%= cust ? cust.display_name : "" %></div>
             <% } else { %>
-              <%= r.prefix %>
+              <span class="q"><%= r.prefix %></span>
             <% } %>
           </td>
-          <td><%= r.rule_type %></td>
+          <td class="q"><%= r.rule_type %></td>
           <td><%= r.threshold ?? "" %></td>
           <td><%= r.amount ?? "" %></td>
-          <td>
-            <form method="post" action="/admin/rules/delete" onsubmit="return confirm('Delete this rule?');">
+          <td class="right">
+            <button type="button" class="smallbtn" onclick="editRule(this)">Edit</button>
+
+            <form method="post" action="/admin/rules/delete" style="display:inline-block;" onsubmit="return confirm('Delete this rule?');">
               <input type="hidden" name="rule_id" value="<%= r.id %>" />
-              <button type="submit" style="background:#b00020;border-color:#b00020;">Delete</button>
+              <button type="submit" class="danger smallbtn">Delete</button>
             </form>
           </td>
         </tr>
@@ -148,6 +198,78 @@
   matchType.addEventListener('change', updateMatch);
   ruleType.addEventListener('change', updateRule);
   updateMatch(); updateRule();
+
+  // Filtering
+  const searchBox = document.getElementById('searchBox');
+  const filterMatch = document.getElementById('filterMatch');
+  const onlyEnabled = document.getElementById('onlyEnabled');
+  const rows = Array.from(document.querySelectorAll('.ruleRow'));
+  const ruleCount = document.getElementById('ruleCount');
+
+  function applyFilters() {
+    const q = (searchBox.value || '').trim().toLowerCase();
+    const m = filterMatch.value;
+    const enabledOnly = !!onlyEnabled.checked;
+
+    let visible = 0;
+
+    for (const tr of rows) {
+      const isEnabled = tr.dataset.enabled === '1';
+      const match = tr.dataset.match;
+      const label = tr.dataset.label || '';
+
+      let ok = true;
+      if (enabledOnly && !isEnabled) ok = false;
+      if (m !== 'all' && match !== m) ok = false;
+      if (q && !label.includes(q)) ok = false;
+
+      tr.style.display = ok ? '' : 'none';
+      if (ok) visible++;
+    }
+
+    ruleCount.textContent = `${visible} shown / ${rows.length} total`;
+  }
+
+  searchBox.addEventListener('input', applyFilters);
+  filterMatch.addEventListener('change', applyFilters);
+  onlyEnabled.addEventListener('change', applyFilters);
+  applyFilters();
+
+  // Edit rule -> load into form
+  function editRule(btn) {
+    const tr = btn.closest('tr');
+    document.getElementById('rule_id').value = tr.dataset.ruleid || '';
+
+    const mt = tr.dataset.match || 'exact';
+    document.getElementById('match_type').value = mt;
+
+    document.getElementById('customer_id').value = tr.dataset.customerid || '';
+    document.getElementById('prefix').value = tr.dataset.prefix || '';
+
+    document.getElementById('rule_type').value = tr.dataset.ruletype || 'always_15';
+    document.getElementById('threshold').value = tr.dataset.threshold || '';
+    document.getElementById('amount').value = tr.dataset.amount || '15';
+
+    document.getElementById('enabled').checked = (tr.dataset.enabled === '1');
+
+    updateMatch();
+    updateRule();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function resetForm() {
+    document.getElementById('rule_id').value = '';
+    document.getElementById('match_type').value = 'exact';
+    document.getElementById('customer_id').value = '';
+    document.getElementById('prefix').value = '';
+    document.getElementById('rule_type').value = 'always_15';
+    document.getElementById('threshold').value = '';
+    document.getElementById('amount').value = '15';
+    document.getElementById('enabled').checked = true;
+    updateMatch();
+    updateRule();
+  }
 </script>
+
 </body>
 </html>

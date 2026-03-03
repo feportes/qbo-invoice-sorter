@@ -155,7 +155,31 @@ app.post('/admin/categories/save', requireConnected, (req, res) => {
 app.get('/admin/rules', requireConnected, (req, res) => {
   const customers = db.listCustomers();
   const rules = db.listRules();
-  res.render('rules', { customers, rules });
+
+  const custMap = new Map(customers.map(c => [String(c.id), c.display_name]));
+
+  // Add display label and sort alphabetically (enabled first)
+  const rulesSorted = rules.map(r => {
+    const label = (r.match_type === 'exact')
+      ? (custMap.get(String(r.customer_id || '')) || '')
+      : (r.prefix || '');
+    return { ...r, customer_label: label };
+  }).sort((a, b) => {
+    // enabled first
+    const ea = a.enabled ? 0 : 1;
+    const eb = b.enabled ? 0 : 1;
+    if (ea !== eb) return ea - eb;
+
+    // exact before prefix (optional)
+    const ma = a.match_type === 'exact' ? 0 : 1;
+    const mb = b.match_type === 'exact' ? 0 : 1;
+    if (ma !== mb) return ma - mb;
+
+    // alphabetical label
+    return String(a.customer_label || '').localeCompare(String(b.customer_label || ''), undefined, { sensitivity: 'base' });
+  });
+
+  res.render('rules', { customers, rules: rulesSorted });
 });
 
 app.post('/admin/rules/upsert', requireConnected, (req, res) => {
