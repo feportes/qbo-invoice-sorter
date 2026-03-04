@@ -11,15 +11,18 @@
     th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; }
     th { background:#fafafa; position:sticky; top:0; }
     input[type="number"] { width:80px; padding:8px; border:1px solid #ddd; border-radius:10px; }
+    input[type="text"] { padding:8px; border:1px solid #ddd; border-radius:10px; }
     button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; cursor:pointer; }
   </style>
 </head>
 <body>
 
 <h1>Email Automation</h1>
+
 <div style="margin: 10px 0;">
   <a href="/">← Home</a>
 </div>
+
 <div class="muted">
   Uses QuickBooks to send invoice emails automatically based on QBO EmailStatus + reminder schedule.
 </div>
@@ -52,13 +55,15 @@
       <tr>
         <th>Customer</th>
         <th>Auto-send invoice</th>
-        <th>Reminder</th>
+        <th>Pre-due reminder</th>
         <th>Days before due</th>
+        <th>Post-due reminder</th>
+        <th>Days after due</th>
       </tr>
     </thead>
     <tbody>
       <% if (!active || active.length === 0) { %>
-        <tr><td colspan="4" class="muted">None enabled yet.</td></tr>
+        <tr><td colspan="6" class="muted">None enabled yet.</td></tr>
       <% } else { %>
         <% active.forEach(r => { %>
           <tr>
@@ -66,6 +71,8 @@
             <td><%= r.enabled_send_invoice ? 'Yes' : '' %></td>
             <td><%= r.enabled_reminder ? 'Yes' : '' %></td>
             <td><%= r.reminder_days_before_due %></td>
+            <td><%= r.enabled_post_due_reminder ? 'Yes' : '' %></td>
+            <td><%= r.post_due_days_after_due %></td>
           </tr>
         <% }) %>
       <% } %>
@@ -82,8 +89,10 @@
         <tr>
           <th>Customer</th>
           <th class="muted">Auto-send invoice</th>
-          <th class="muted">Reminder</th>
+          <th class="muted">Pre-due reminder</th>
           <th class="muted">Days before due</th>
+          <th class="muted">Post-due reminder</th>
+          <th class="muted">Days after due</th>
         </tr>
       </thead>
       <tbody>
@@ -93,14 +102,35 @@
               <%= r.display_name %>
               <input type="hidden" name="customer_id" value="<%= r.customer_id %>">
             </td>
+
             <td>
-              <input type="checkbox" name="enabled_send_invoice_<%= r.customer_id %>" <%= r.enabled_send_invoice ? 'checked' : '' %> />
+              <input type="checkbox"
+                     name="enabled_send_invoice_<%= r.customer_id %>"
+                     <%= r.enabled_send_invoice ? 'checked' : '' %> />
             </td>
+
             <td>
-              <input type="checkbox" name="enabled_reminder_<%= r.customer_id %>" <%= r.enabled_reminder ? 'checked' : '' %> />
+              <input type="checkbox"
+                     name="enabled_reminder_<%= r.customer_id %>"
+                     <%= r.enabled_reminder ? 'checked' : '' %> />
             </td>
+
             <td>
-              <input type="number" min="1" max="30" name="reminder_days_before_due_<%= r.customer_id %>" value="<%= r.reminder_days_before_due %>">
+              <input type="number" min="1" max="30"
+                     name="reminder_days_before_due_<%= r.customer_id %>"
+                     value="<%= r.reminder_days_before_due %>">
+            </td>
+
+            <td>
+              <input type="checkbox"
+                     name="enabled_post_due_reminder_<%= r.customer_id %>"
+                     <%= r.enabled_post_due_reminder ? 'checked' : '' %> />
+            </td>
+
+            <td>
+              <input type="number" min="1" max="60"
+                     name="post_due_days_after_due_<%= r.customer_id %>"
+                     value="<%= r.post_due_days_after_due %>">
             </td>
           </tr>
         <% }) %>

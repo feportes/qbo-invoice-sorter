@@ -28,20 +28,33 @@ getEmailCustomerSettings(customerId) {
   `).get(String(customerId));
 },
 
-upsertEmailCustomerSettings({ customer_id, enabled_send_invoice, enabled_reminder, reminder_days_before_due }) {
-  sqlite.prepare(`
-    INSERT INTO email_customer_settings (customer_id, enabled_send_invoice, enabled_reminder, reminder_days_before_due, updated_at)
-    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+upsertEmailCustomerSettings({ customer_id, enabled_send_invoice, enabled_reminder, reminder_days_before_due, enabled_post_due_reminder, post_due_days_after_due 
+}) {
+   sqlite.prepare(`
+    INSERT INTO email_customer_settings (
+      customer_id,
+      enabled_send_invoice,
+      enabled_reminder,
+      reminder_days_before_due,
+      enabled_post_due_reminder,
+      post_due_days_after_due,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(customer_id) DO UPDATE SET
       enabled_send_invoice=excluded.enabled_send_invoice,
       enabled_reminder=excluded.enabled_reminder,
       reminder_days_before_due=excluded.reminder_days_before_due,
+      enabled_post_due_reminder=excluded.enabled_post_due_reminder,
+      post_due_days_after_due=excluded.post_due_days_after_due,
       updated_at=CURRENT_TIMESTAMP
   `).run(
     String(customer_id),
     enabled_send_invoice ? 1 : 0,
     enabled_reminder ? 1 : 0,
-    Number(reminder_days_before_due || 3)
+    Number(reminder_days_before_due || 3),
+    enabled_post_due_reminder ? 1 : 0,
+    Number(post_due_days_after_due || 3)
   );
 },
 
@@ -97,11 +110,11 @@ hasReminderBeenSent(invoiceId) {
   return !!r;
 },
 
-logReminderSent({ invoiceId, status, error = null }) {
+logReminderSent({ invoiceId, type, status, error = null }) {
   sqlite.prepare(`
     INSERT INTO invoice_email_log (qbo_invoice_id, type, status, error)
-    VALUES (?, 'REMINDER', ?, ?)
-  `).run(String(invoiceId), String(status), error ? String(error) : null);
+    VALUES (?, ?, ?, ?)
+  `).run(String(invoiceId), String(type), String(status), error ? String(error) : null);
 },
 
 getAuditAllocationById(id) {

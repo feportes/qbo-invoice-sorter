@@ -304,6 +304,152 @@ function todayISO() {
   return now.toISOString().slice(0, 10);
 }
 
+async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000 } = {}) {
+  const { conn, oauthClient } = await withFreshClient();
+  const tdy = todayISO();
+
+  // Default: last 120 days (prevents hammering QBO)
+  if (!startDate) {
+    const d = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    startDate = d.toISOString().slice(0, 10);
+  }
+
+  const pageSize = 100;
+  let start = 1;
+
+  let scanned = 0;
+  let eligibleSendInvoice = 0;
+  let eligibleReminderPre = 0;
+  let eligibleReminderPost = 0;
+
+  let sentInvoices = 0;
+  let sentRemindersPre = 0;
+  let sentRemindersPost = 0;
+  let failed = 0;
+
+  console.log(`[email-job] start dry=${dry} startDate=${startDate} maxInvoices=${maxInvoices}`);
+
+  while (true) {
+    const q = `select Id, DocNumber, TxnDate, DueDate, Balance, CustomerRef, EmailStatus from Invoice where TxnDate >= '${startDate}' startposition ${start} maxresults ${pageSize}`;
+    const r = await qboQuery(oauthClient, conn.realm_id, q);
+    const invs = r?.QueryResponse?.Invoice || [];
+    scanned += invs.length;
+
+    for (const inv of invs) {
+      if (scanned >= maxInvoices) {
+        console.log(`[email-job] cap reached scanned=${scanned} maxInvoices=${maxInvoices} (stopping early)`);
+        return {
+          scanned, eligibleSendInvoice, eligibleReminderPre, eligibleReminderPost,
+          sentInvoices, sentRemindersPre, sentRemindersPost, failed,
+          capped: true, startDate
+        };
+      }
+
+      const invoiceId = String(inv.Id);
+      const customerId = String(inv?.CustomerRef?.value || '');
+
+      const settings = db.getEmailCustomerSettings(customerId) || {
+        enabled_send_invoice: 0,
+        enabled_reminder: 0,
+        reminder_days_before_due: 3,
+        enabled_post_due_reminder: 0,
+        post_due_days_after_due: 3
+      };
+
+      const balance = Number(inv.Balance || 0);
+      if (!(balance > 0)) continue;
+
+      const emailStatus = String(inv.EmailStatus || '').toLowerCase();
+      const emailAlreadySent = (emailStatus === 'emailsent');
+
+      // A) Auto-send invoice (STRICT EmailStatus)
+      const shouldSendInvoice =
+        settings.enabled_send_invoice &&
+        !emailAlreadySent;
+
+      if (shouldSendInvoice) {
+        eligibleSendInvoice++;
+        if (!dry) {
+          try {
+            await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
+            sentInvoices++;
+          } catch (e) {
+            failed++;
+            console.log(`[email-job] send invoice failed id=${invoiceId} err=${e?.message || e}`);
+          }
+        }
+      }
+
+      // Need due date for reminders
+      const due = inv.DueDate ? String(inv.DueDate) : null;
+      if (!due) continue;
+
+      // PRE-DUE reminder (one-time)
+      if (settings.enabled_reminder) {
+        if (daysBetween(tdy, due) > 0) { // only before due
+          if (emailAlreadySent) { // only if invoice was already emailed once
+            const daysBefore = Number(settings.reminder_days_before_due || 3);
+            const delta = daysBetween(tdy, due);
+
+            if (delta === daysBefore) {
+              if (!db.hasReminderBeenSent(invoiceId, 'REMINDER_PRE')) {
+                eligibleReminderPre++;
+                if (!dry) {
+                  try {
+                    await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
+                    db.logReminderSent({ invoiceId, type: 'REMINDER_PRE', status: 'SENT' });
+                    sentRemindersPre++;
+                  } catch (e) {
+                    db.logReminderSent({ invoiceId, type: 'REMINDER_PRE', status: 'FAILED', error: e?.message || String(e) });
+                    failed++;
+                    console.log(`[email-job] pre-due reminder failed id=${invoiceId} err=${e?.message || e}`);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // POST-DUE reminder (one-time, N days after due)
+      if (settings.enabled_post_due_reminder) {
+        if (emailAlreadySent) { // only if invoice was already emailed once
+          const daysAfterDue = daysBetween(due, tdy); // positive means overdue by X days
+          const targetAfter = Number(settings.post_due_days_after_due || 3);
+
+          if (daysAfterDue === targetAfter) {
+            if (!db.hasReminderBeenSent(invoiceId, 'REMINDER_POST')) {
+              eligibleReminderPost++;
+              if (!dry) {
+                try {
+                  await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
+                  db.logReminderSent({ invoiceId, type: 'REMINDER_POST', status: 'SENT' });
+                  sentRemindersPost++;
+                } catch (e) {
+                  db.logReminderSent({ invoiceId, type: 'REMINDER_POST', status: 'FAILED', error: e?.message || String(e) });
+                  failed++;
+                  console.log(`[email-job] post-due reminder failed id=${invoiceId} err=${e?.message || e}`);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (invs.length < pageSize) break;
+    start += pageSize;
+  }
+
+  console.log(`[email-job] done scanned=${scanned} eligibleSend=${eligibleSendInvoice} eligiblePre=${eligibleReminderPre} eligiblePost=${eligibleReminderPost} sentInvoices=${sentInvoices} sentPre=${sentRemindersPre} sentPost=${sentRemindersPost} failed=${failed}`);
+
+  return {
+    scanned, eligibleSendInvoice, eligibleReminderPre, eligibleReminderPost,
+    sentInvoices, sentRemindersPre, sentRemindersPost, failed,
+    capped: false, startDate
+  };
+}
+
 app.post('/jobs/qbo-email', requireJobKey, async (req, res) => {
   res.status(200).send('OK');
 
@@ -1564,9 +1710,9 @@ app.post('/admin/email-automation/run-now', requireConnected, async (req, res) =
     const summary = await runQboEmailJob({ dry, startDate, maxInvoices });
 
     const msg =
-      `${dry ? 'Dry run' : 'Sent'}: scanned=${summary.scanned}, ` +
-      `eligibleSend=${summary.eligibleSendInvoice}, eligibleReminder=${summary.eligibleReminder}, ` +
-      `sentInvoices=${summary.sentInvoices}, sentReminders=${summary.sentReminders}, failed=${summary.failed}` +
+      `${dry ? 'Dry run' : 'Sent'}: scanned=${summary.scanned}, eligibleSend=${summary.eligibleSendInvoice}, ` +
+      `eligiblePre=${summary.eligibleReminderPre}, eligiblePost=${summary.eligibleReminderPost}, ` +
+      `sentInvoices=${summary.sentInvoices}, sentPre=${summary.sentRemindersPre}, sentPost=${summary.sentRemindersPost}, failed=${summary.failed}` +
       (summary.capped ? ' (CAP HIT)' : '');
 
     return res.redirect('/admin/email-automation?msg=' + encodeURIComponent(msg));

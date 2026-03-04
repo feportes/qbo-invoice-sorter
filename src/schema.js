@@ -245,6 +245,9 @@ try {
 } catch {}
 
   // ✅ Safe migrations
+try { s.exec(`ALTER TABLE email_customer_settings ADD COLUMN enabled_post_due_reminder INTEGER NOT NULL DEFAULT 0;`); } catch {}
+try { s.exec(`ALTER TABLE email_customer_settings ADD COLUMN post_due_days_after_due INTEGER NOT NULL DEFAULT 3;`); } catch {}
+
   try { s.exec(`ALTER TABLE skus ADD COLUMN qbo_category_id TEXT;`); } catch {}
   try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_qbo_category_id ON skus(qbo_category_id);`); } catch {}
 try {
