@@ -12,7 +12,7 @@ import { createRequire } from 'module';
 import { db } from './src/db.js';
 import { ensureSchema, seedDefaults } from './src/schema.js';
 import { getOAuthClient, authStart, authCallback, requireConnected, withFreshClient } from './src/oauth.js';
-import { qboReadItemByName, qboQuery, qboReadInvoiceWithRetry } from './src/qbo.js';
+import { qboReadItemByName, qboQuery, qboReadInvoiceWithRetry, qboSendInvoice } from './src/qbo.js';
 import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
@@ -707,119 +707,7 @@ app.post('/inventory/allocate/apply', async (req, res) => {
 });
 
 
-async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000 } = {}) {
-  const { conn, oauthClient } = await withFreshClient();
 
-  const tdy = todayISO();
-
-  // Default: last 120 days (prevents hammering QBO)
-  if (!startDate) {
-    const d = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
-    startDate = d.toISOString().slice(0, 10);
-  }
-
-  const pageSize = 100;
-  let start = 1;
-
-  let scanned = 0;
-  let eligibleSendInvoice = 0;
-  let eligibleReminder = 0;
-
-  let sentInvoices = 0;
-  let sentReminders = 0;
-  let failed = 0;
-
-  console.log(`[email-job] start dry=${dry} startDate=${startDate} maxInvoices=${maxInvoices}`);
-
-  while (true) {
-    const q = `select Id, DocNumber, TxnDate, DueDate, Balance, CustomerRef, EmailStatus from Invoice where TxnDate >= '${startDate}' startposition ${start} maxresults ${pageSize}`;
-    const r = await qboQuery(oauthClient, conn.realm_id, q);
-    const invs = r?.QueryResponse?.Invoice || [];
-    scanned += invs.length;
-
-    for (const inv of invs) {
-      // Safety cap (stops huge runs)
-      if (scanned >= maxInvoices) {
-        console.log(`[email-job] cap reached scanned=${scanned} maxInvoices=${maxInvoices} (stopping early)`);
-        return { scanned, eligibleSendInvoice, eligibleReminder, sentInvoices, sentReminders, failed, capped: true, startDate };
-      }
-
-      const invoiceId = String(inv.Id);
-      const customerId = String(inv?.CustomerRef?.value || '');
-
-      const settings = db.getEmailCustomerSettings(customerId) || {
-        enabled_send_invoice: 0,
-        enabled_reminder: 0,
-        reminder_days_before_due: 3
-      };
-
-      const balance = Number(inv.Balance || 0);
-      if (!(balance > 0)) continue; // paid/zero balance → skip
-
-      const emailStatus = String(inv.EmailStatus || '').toLowerCase();
-      const emailAlreadySent = (emailStatus === 'emailsent');
-
-      // A) Auto-send invoice (STRICT QBO EmailStatus)
-      const shouldSendInvoice =
-        settings.enabled_send_invoice &&
-        !emailAlreadySent;
-
-      if (shouldSendInvoice) {
-        eligibleSendInvoice++;
-        if (!dry) {
-          try {
-            await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
-            sentInvoices++;
-          } catch (e) {
-            failed++;
-            console.log(`[email-job] send invoice failed id=${invoiceId} err=${e?.message || e}`);
-          }
-        }
-      }
-
-      // B) Reminder (no overdue, no repeats)
-      if (settings.enabled_reminder) {
-        const due = inv.DueDate ? String(inv.DueDate) : null;
-        if (!due) continue;
-
-        // Never after due date
-        if (daysBetween(tdy, due) <= 0) continue;
-
-        // Optional: only remind if invoice was already emailed at least once
-        // (reduces confusion and matches real workflow)
-        if (!emailAlreadySent) continue;
-
-        const daysBefore = Number(settings.reminder_days_before_due || 3);
-        const delta = daysBetween(tdy, due);
-
-        if (delta === daysBefore) {
-          if (db.hasReminderBeenSent(invoiceId)) continue;
-
-          eligibleReminder++;
-
-          if (!dry) {
-            try {
-              await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
-              db.logReminderSent({ invoiceId, status: 'SENT' });
-              sentReminders++;
-            } catch (e) {
-              db.logReminderSent({ invoiceId, status: 'FAILED', error: e?.message || String(e) });
-              failed++;
-              console.log(`[email-job] reminder failed id=${invoiceId} err=${e?.message || e}`);
-            }
-          }
-        }
-      }
-    }
-
-    if (invs.length < pageSize) break;
-    start += pageSize;
-  }
-
-  console.log(`[email-job] done scanned=${scanned} eligibleSend=${eligibleSendInvoice} eligibleReminder=${eligibleReminder} sentInvoices=${sentInvoices} sentReminders=${sentReminders} failed=${failed}`);
-
-  return { scanned, eligibleSendInvoice, eligibleReminder, sentInvoices, sentReminders, failed, capped: false, startDate };
-}
 
 // ==========================================================
 // Webhook endpoint
