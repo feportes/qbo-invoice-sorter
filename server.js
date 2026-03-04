@@ -929,6 +929,7 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
 // ==========================================================
 // Email Automation UI (GET/POST/Run-Now)
 // ==========================================================
+
 app.get('/admin/email-automation', requireConnected, (req, res) => {
   const customers = db.listCustomers();
   const settings = db.listEmailCustomerSettings();
@@ -960,7 +961,15 @@ app.get('/admin/email-automation', requireConnected, (req, res) => {
     r.enabled_send_invoice || r.enabled_reminder || r.enabled_post_due_reminder
   );
 
-  res.render('admin_email_automation', { rows, active, msg: String(req.query.msg || '') || null });
+  // IMPORTANT: always pass preview arrays so EJS never throws
+  res.render('admin_email_automation', {
+    rows,
+    active,
+    msg: String(req.query.msg || '') || null,
+    previewSend: [],
+    previewPre: [],
+    previewPost: []
+  });
 });
 
 app.post('/admin/email-automation/save', requireConnected, (req, res) => {
