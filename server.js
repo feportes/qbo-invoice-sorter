@@ -82,7 +82,6 @@ async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source
       lastErr = e;
       const msg = String(e?.message || e).toLowerCase();
 
-      // Only retry the “eventual consistency” / availability cases
       const isNotFound =
         msg.includes('invoice not found') ||
         msg.includes('not found') ||
@@ -123,7 +122,7 @@ app.get('/admin/sync', requireConnected, async (req, res) => {
   const oauthClient = getOAuthClient(conn);
   try {
     const customerCount = await syncCustomers(oauthClient, conn.realm_id);
-    const categoryCount = await syncCategories(oauthClient, conn.realm_id);
+    const categoryCount = await syncCategories(oauthClient, conn.realm_id,);
 
     const surchargeItemName = db.getSetting('surcharge_item_name');
     const surcharge = await qboReadItemByName(oauthClient, conn.realm_id, surchargeItemName);
@@ -158,24 +157,20 @@ app.get('/admin/rules', requireConnected, (req, res) => {
 
   const custMap = new Map(customers.map(c => [String(c.id), c.display_name]));
 
-  // Add display label and sort alphabetically (enabled first)
   const rulesSorted = rules.map(r => {
     const label = (r.match_type === 'exact')
       ? (custMap.get(String(r.customer_id || '')) || '')
       : (r.prefix || '');
     return { ...r, customer_label: label };
   }).sort((a, b) => {
-    // enabled first
     const ea = a.enabled ? 0 : 1;
     const eb = b.enabled ? 0 : 1;
     if (ea !== eb) return ea - eb;
 
-    // exact before prefix (optional)
     const ma = a.match_type === 'exact' ? 0 : 1;
     const mb = b.match_type === 'exact' ? 0 : 1;
     if (ma !== mb) return ma - mb;
 
-    // alphabetical label
     return String(a.customer_label || '').localeCompare(String(b.customer_label || ''), undefined, { sensitivity: 'base' });
   });
 
@@ -263,11 +258,8 @@ app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
     if (!invoice_id) throw new Error('Missing invoice id');
 
     const { conn, oauthClient } = await withFreshClient();
-
-    // ✅ Resolve DocNumber -> Id (or keep Id if already valid)
     const resolvedId = await resolveInvoiceId(oauthClient, conn.realm_id, invoice_id);
 
-    // ✅ Clear processed lock for the REAL QBO Id
     db.clearProcessed(String(resolvedId));
 
     const result = await processInvoiceWithRetry({
@@ -284,6 +276,9 @@ app.post('/admin/process-invoice-force', requireConnected, async (req, res) => {
   }
 });
 
+// ==========================================================
+// EMAIL JOB AUTH + DATE HELPERS
+// ==========================================================
 function requireJobKey(req, res, next) {
   const expected = process.env.JOB_KEY;
   if (!expected) return res.status(500).send('JOB_KEY not configured');
@@ -292,7 +287,6 @@ function requireJobKey(req, res, next) {
 }
 
 function daysBetween(a, b) {
-  // a,b are YYYY-MM-DD
   const da = new Date(a + 'T00:00:00Z');
   const dbb = new Date(b + 'T00:00:00Z');
   return Math.round((dbb - da) / (1000 * 60 * 60 * 24));
@@ -300,15 +294,17 @@ function daysBetween(a, b) {
 
 function todayISO() {
   const now = new Date();
-  // Use UTC date for consistency (cron runs UTC)
   return now.toISOString().slice(0, 10);
 }
 
+// ==========================================================
+// Shared Email Job Runner (used by cron + admin run-now)
+// ==========================================================
 async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000 } = {}) {
   const { conn, oauthClient } = await withFreshClient();
   const tdy = todayISO();
 
-  // Default: last 120 days (prevents hammering QBO)
+  // Default: last 120 days
   if (!startDate) {
     const d = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
     startDate = d.toISOString().slice(0, 10);
@@ -318,6 +314,7 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
   let start = 1;
 
   let scanned = 0;
+
   let eligibleSendInvoice = 0;
   let eligibleReminderPre = 0;
   let eligibleReminderPost = 0;
@@ -325,6 +322,7 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
   let sentInvoices = 0;
   let sentRemindersPre = 0;
   let sentRemindersPost = 0;
+
   let failed = 0;
 
   console.log(`[email-job] start dry=${dry} startDate=${startDate} maxInvoices=${maxInvoices}`);
@@ -333,6 +331,7 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
     const q = `select Id, DocNumber, TxnDate, DueDate, Balance, CustomerRef, EmailStatus from Invoice where TxnDate >= '${startDate}' startposition ${start} maxresults ${pageSize}`;
     const r = await qboQuery(oauthClient, conn.realm_id, q);
     const invs = r?.QueryResponse?.Invoice || [];
+
     scanned += invs.length;
 
     for (const inv of invs) {
@@ -363,9 +362,7 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
       const emailAlreadySent = (emailStatus === 'emailsent');
 
       // A) Auto-send invoice (STRICT EmailStatus)
-      const shouldSendInvoice =
-        settings.enabled_send_invoice &&
-        !emailAlreadySent;
+      const shouldSendInvoice = settings.enabled_send_invoice && !emailAlreadySent;
 
       if (shouldSendInvoice) {
         eligibleSendInvoice++;
@@ -384,26 +381,24 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
       const due = inv.DueDate ? String(inv.DueDate) : null;
       if (!due) continue;
 
-      // PRE-DUE reminder (one-time)
+      // PRE-DUE reminder (one-time, only before due, only if emailed at least once)
       if (settings.enabled_reminder) {
-        if (daysBetween(tdy, due) > 0) { // only before due
-          if (emailAlreadySent) { // only if invoice was already emailed once
-            const daysBefore = Number(settings.reminder_days_before_due || 3);
-            const delta = daysBetween(tdy, due);
+        if (daysBetween(tdy, due) > 0 && emailAlreadySent) {
+          const daysBefore = Number(settings.reminder_days_before_due || 3);
+          const delta = daysBetween(tdy, due);
 
-            if (delta === daysBefore) {
-              if (!db.hasReminderBeenSent(invoiceId, 'REMINDER_PRE')) {
-                eligibleReminderPre++;
-                if (!dry) {
-                  try {
-                    await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
-                    db.logReminderSent({ invoiceId, type: 'REMINDER_PRE', status: 'SENT' });
-                    sentRemindersPre++;
-                  } catch (e) {
-                    db.logReminderSent({ invoiceId, type: 'REMINDER_PRE', status: 'FAILED', error: e?.message || String(e) });
-                    failed++;
-                    console.log(`[email-job] pre-due reminder failed id=${invoiceId} err=${e?.message || e}`);
-                  }
+          if (delta === daysBefore) {
+            if (!db.hasReminderBeenSent(invoiceId, 'REMINDER_PRE')) {
+              eligibleReminderPre++;
+              if (!dry) {
+                try {
+                  await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
+                  db.logReminderSent({ invoiceId, type: 'REMINDER_PRE', status: 'SENT' });
+                  sentRemindersPre++;
+                } catch (e) {
+                  db.logReminderSent({ invoiceId, type: 'REMINDER_PRE', status: 'FAILED', error: e?.message || String(e) });
+                  failed++;
+                  console.log(`[email-job] pre-due reminder failed id=${invoiceId} err=${e?.message || e}`);
                 }
               }
             }
@@ -411,10 +406,10 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
         }
       }
 
-      // POST-DUE reminder (one-time, N days after due)
+      // POST-DUE reminder (one-time, exact day after due, only if emailed at least once)
       if (settings.enabled_post_due_reminder) {
-        if (emailAlreadySent) { // only if invoice was already emailed once
-          const daysAfterDue = daysBetween(due, tdy); // positive means overdue by X days
+        if (emailAlreadySent) {
+          const daysAfterDue = daysBetween(due, tdy); // overdue by X days if positive
           const targetAfter = Number(settings.post_due_days_after_due || 3);
 
           if (daysAfterDue === targetAfter) {
@@ -450,13 +445,12 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
   };
 }
 
+// Cron endpoint
 app.post('/jobs/qbo-email', requireJobKey, async (req, res) => {
   res.status(200).send('OK');
-
   try {
     const startDate = req.body?.startDate || null;
     const maxInvoices = req.body?.maxInvoices ? Number(req.body.maxInvoices) : 2000;
-
     await runQboEmailJob({ dry: false, startDate, maxInvoices });
   } catch (e) {
     console.log('[email-job] fatal', e?.message || e);
@@ -676,7 +670,6 @@ app.post('/inventory/allocate/preview', async (req, res) => {
     if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
 
     const plan = buildPlanFromInvoice(invoice);
-
     return res.render('inventory_allocate', { connected: true, msg: null, plan });
   } catch (e) {
     const conn = db.getConnection();
@@ -706,9 +699,6 @@ app.post('/inventory/allocate/apply', async (req, res) => {
   }
 });
 
-
-
-
 // ==========================================================
 // Webhook endpoint
 // ==========================================================
@@ -717,7 +707,6 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
 
   try {
     const payload = req.body;
-
     const notifications = payload?.eventNotifications || [];
     const invoiceIds = [];
 
@@ -730,7 +719,6 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
 
     console.log(`[webhook] received invoices=${invoiceIds.length} ids=${invoiceIds.slice(0, 20).join(',')}`);
 
-    // ✅ Sequential processing = fewer rate limit / propagation issues
     for (const invoiceId of invoiceIds) {
       try {
         const { conn, oauthClient } = await withFreshClient();
@@ -740,7 +728,7 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
           realmId: conn.realm_id,
           invoiceId,
           source: 'webhook',
-          retries: 10 // 👈 give QBO time to “settle”
+          retries: 10
         });
 
         console.log(`[webhook] processed ok invoiceId=${invoiceId}`);
@@ -757,20 +745,17 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
             console.log(`[inv_engine] error invoiceId=${invoiceId} err=${e?.message || e}`);
           }
         }
-
       } catch (err) {
         console.log(`[webhook] processed error invoiceId=${invoiceId} err=${err?.message || err}`);
       }
     }
-
   } catch (e) {
     console.log('[webhook] fatal error', e?.message || e);
   }
 });
 
-
 // ==========================================================
-// Inventory: SKU Settings sync + updates (unchanged)
+// Inventory: SKU Settings sync + updates
 // ==========================================================
 app.get('/inventory/settings/skus', requireConnected, (req, res) => {
   try {
@@ -839,7 +824,6 @@ app.post('/inventory/settings/skus/bulk-save', requireConnected, (req, res) => {
   }
 });
 
-// Sync SKUs from QBO (Items)
 app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => {
   const conn = db.getConnectionOrThrow();
   const oauthClient = getOAuthClient(conn);
@@ -883,684 +867,38 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
 });
 
 // ==========================================================
-// Organic Audit Search (single canonical set)
+// Email Automation UI (GET/POST/Run-Now)
 // ==========================================================
-app.get('/inventory/audit/search', requireConnected, (req, res) => {
-  const organicSkus = db.sqlite.prepare(`
-    SELECT id, name, unit_type, qbo_item_id
-    FROM skus
-    WHERE is_organic=1 AND active=1
-    ORDER BY name COLLATE NOCASE
-  `).all();
-
-  const selectedSkuId = String(req.query.sku || '').trim();
-  const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
-  const endDate = String(req.query.end || '').trim() || null;
-  const msg = String(req.query.msg || '') || null;
-
-  let invoices = [];
-  let lots = [];
-  let lotAvailability = [];
-  if (selectedSkuId) {
-  invoices = db.listUnassignedInvoicesContainingSku({ skuId: Number(selectedSkuId), startDate, endDate });
-  lots = db.listLotsForSku(Number(selectedSkuId));
-  lotAvailability = db.listLotAvailabilityForSku(Number(selectedSkuId));
-  }
-
-  res.render('inventory_audit_search', {
-    msg,
-    organicSkus,
-    selectedSkuId,
-    startDate,
-    endDate: endDate || '',
-    invoices,
-    lots,
-    lotAvailability
-  });
-});
-
-app.post('/inventory/audit/scan', requireConnected, async (req, res) => {
-const fresh = await withFreshClient();
-const conn = fresh.conn;
-const oauthClient = fresh.oauthClient;
-
-  try {
-    const skuId = Number(req.body.sku_id);
-    const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
-    const endDate = String(req.body.end_date || '').trim() || null;
-
-    if (!skuId) throw new Error('Missing sku_id');
-
-    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
-    if (!sku || !sku.is_organic) throw new Error('Selected SKU is not marked organic.');
-    if (!sku.qbo_item_id) throw new Error('SKU has no qbo_item_id. Sync SKUs from QBO first.');
-
-    let start = 1;
-    const pageSize = 100;
-    const metas = [];
-
-    while (true) {
-      const where = endDate
-        ? `TxnDate >= '${startDate}' AND TxnDate <= '${endDate}'`
-        : `TxnDate >= '${startDate}'`;
-
-      const q = `select Id, DocNumber, TxnDate, CustomerRef from Invoice where ${where} startposition ${start} maxresults ${pageSize}`;
-      const r = await qboQuery(oauthClient, conn.realm_id, q);
-      const invs = r?.QueryResponse?.Invoice || [];
-
-      for (const inv of invs) {
-        if (inv?.Id) metas.push({
-          id: String(inv.Id),
-          txnDate: inv.TxnDate ? String(inv.TxnDate) : null,
-          docNumber: inv.DocNumber ? String(inv.DocNumber) : null,
-          customerName: inv?.CustomerRef?.name ? String(inv.CustomerRef.name) : null
-        });
-      }
-
-      if (invs.length < pageSize) break;
-      start += pageSize;
-    }
-
-// 🔒 Prevent timeouts / 502s on massive ranges
-if (metas.length > 2000) {
-  throw new Error(
-    `Too many invoices in range (${metas.length}). Narrow the date range (try 30–60 days).`
-  );
-}
-
-    const targetItemId = String(sku.qbo_item_id);
-    let indexed = 0;
-
-    console.log('[audit-scan]', { skuId, targetItemId, startDate, endDate, invoicesToRead: metas.length });
-
-    for (const meta of metas) {
-      const invResp = await qboReadInvoiceWithRetry(oauthClient, conn.realm_id, meta.id);
-      const invoice = invResp?.Invoice;
-      if (!invoice?.Id) continue;
-
-      const lines = invoice.Line || [];
-      for (const line of lines) {
-        if (line?.DetailType !== 'SalesItemLineDetail') continue;
-        const det = line.SalesItemLineDetail;
-        const itemId = det?.ItemRef?.value ? String(det.ItemRef.value) : null;
-        if (!itemId || itemId !== targetItemId) continue;
-
-        const qty = Number(det?.Qty || 0);
-        if (!Number.isFinite(qty) || qty <= 0) continue;
-
-        db.upsertInvoiceSkuLine({
-          qbo_invoice_id: String(invoice.Id),
-          txn_date: invoice.TxnDate ? String(invoice.TxnDate) : meta.txnDate,
-          doc_number: invoice.DocNumber ? String(invoice.DocNumber) : meta.docNumber,
-          customer_name: invoice?.CustomerRef?.name ? String(invoice.CustomerRef.name) : meta.customerName,
-          sku_id: skuId,
-          qbo_item_id: itemId,
-          qty_units: qty,
-          amount: Number(line.Amount || 0)
-        });
-        indexed++;
-      }
-    }
-
-    console.log('[audit-scan] indexedLines=', indexed);
-
-    return res.redirect(
-      `/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Scan complete. Invoices checked: ${metas.length}. Indexed lines: ${indexed}.`)}`
-    );
-  } catch (e) {
-    return res.redirect(
-      `/inventory/audit/search?sku=${encodeURIComponent(req.body.sku_id || '')}&start=${encodeURIComponent(req.body.start_date || '')}&end=${encodeURIComponent(req.body.end_date || '')}&msg=${encodeURIComponent(`Scan failed: ${e?.message || e}`)}`
-    );
-  }
-});
-
-app.get('/inventory/audit/assigned', requireConnected, (req, res) => {
-  const skuId = Number(req.query.sku);
-  const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
-  const endDate = String(req.query.end || '').trim() || null;
-
-  if (!skuId) {
-    return res.redirect('/inventory/audit/search?msg=' + encodeURIComponent('Select a SKU first.'));
-  }
-
-  const sku = db.sqlite.prepare(`SELECT id, name FROM skus WHERE id=?`).get(skuId);
-  const rows = db.listAssignedAllocationsForSku({ skuId, startDate, endDate });
-  const lots = db.listLotsForSku(skuId);
-
-  res.render('inventory_audit_assigned', {
-    sku,
-    rows,
-    lots,
-    startDate,
-    endDate: endDate || '',
-    msg: String(req.query.msg || '') || null
-  });
-});
-
-app.post('/inventory/audit/assigned/delete', requireConnected, (req, res) => {
-  try {
-    const skuId = Number(req.body.sku_id);
-    const startDate = String(req.body.start_date || '').trim();
-    const endDate = String(req.body.end_date || '').trim() || '';
-
-    const ids = Array.isArray(req.body.allocation_ids)
-      ? req.body.allocation_ids
-      : (req.body.allocation_ids ? [req.body.allocation_ids] : []);
-
-    const deleted = db.deleteAuditAllocationsByIds(ids);
-
-    return res.redirect(
-      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Deleted ${deleted} allocation(s).`)}`
-    );
-  } catch (e) {
-    return res.status(500).send(`Delete allocations failed: ${e?.message || e}`);
-  }
-});
-
-app.post('/inventory/audit/assigned/reassign', requireConnected, (req, res) => {
-  try {
-    const skuId = Number(req.body.sku_id);
-    const startDate = String(req.body.start_date || '').trim();
-    const endDate = String(req.body.end_date || '').trim() || '';
-
-    const ids = Array.isArray(req.body.allocation_ids)
-      ? req.body.allocation_ids
-      : (req.body.allocation_ids ? [req.body.allocation_ids] : []);
-
-    const newLotIdRaw = String(req.body.new_lot_id ?? '').trim();
-    const newLotId = newLotIdRaw ? Number(newLotIdRaw) : null; // null = UNKNOWN LOT
-
-    if (!skuId) throw new Error('Missing sku_id');
-    if (ids.length === 0) throw new Error('No allocations selected.');
-
-    // Guard only if assigning to a real lot
-    if (newLotId) {
-      const allocs = db.getAuditAllocationsByIds(ids);
-      const movingQty = allocs
-        .filter(a => Number(a.sku_id) === skuId)
-        .reduce((s, a) => s + Number(a.qty_units || 0), 0);
-
-      const inbound = db.getInboundUnitsForSkuLotId({ skuId, lotId: newLotId });
-      const allocatedExcluding = db.getAllocatedUnitsForSkuLotId({
-        skuId,
-        lotId: newLotId,
-        excludeAllocationIds: ids
-      });
-
-      if (allocatedExcluding + movingQty > inbound) {
-        throw new Error(`Over-allocation blocked. Inbound=${inbound}, allocated=${allocatedExcluding}, trying to add=${movingQty}.`);
-      }
-    }
-
-    const changed = db.updateAllocationLotByIds({ ids, newLotId });
-
-    return res.redirect(
-      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Reassigned ${changed} allocation(s).`)}`
-    );
-  } catch (e) {
-    const skuId = Number(req.body.sku_id || 0);
-    const startDate = String(req.body.start_date || '').trim();
-    const endDate = String(req.body.end_date || '').trim() || '';
-    return res.redirect(
-      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Reassign failed: ${e?.message || e}`)}`
-    );
-  }
-});
-
-app.post('/inventory/audit/assigned/split', requireConnected, (req, res) => {
-  try {
-    const skuId = Number(req.body.sku_id);
-    const startDate = String(req.body.start_date || '').trim();
-    const endDate = String(req.body.end_date || '').trim() || '';
-
-    const allocationId = Number(req.body.allocation_id);
-    if (!skuId) throw new Error('Missing sku_id');
-    if (!allocationId) throw new Error('Missing allocation_id');
-
-    const lotAIdRaw = String(req.body.lot_a_id ?? '').trim();
-    const lotBIdRaw = String(req.body.lot_b_id ?? '').trim();
-    const lotAId = lotAIdRaw ? Number(lotAIdRaw) : null; // null = UNKNOWN LOT
-    const lotBId = lotBIdRaw ? Number(lotBIdRaw) : null;
-
-    const qtyA = Number(req.body.qty_a);
-    const qtyB = Number(req.body.qty_b);
-
-    if (!Number.isFinite(qtyA) || qtyA <= 0) throw new Error('qty_a must be > 0');
-    if (!Number.isFinite(qtyB) || qtyB <= 0) throw new Error('qty_b must be > 0');
-
-    const original = db.getAuditAllocationById(allocationId);
-    if (!original) throw new Error('Allocation not found');
-    if (Number(original.sku_id) !== skuId) throw new Error('Allocation sku_id mismatch');
-
-    const originalQty = Number(original.qty_units || 0);
-    const sum = qtyA + qtyB;
-    if (Math.abs(sum - originalQty) > 0.000001) {
-      throw new Error(`Split qty mismatch. Original=${originalQty}, qty_a+qty_b=${sum}`);
-    }
-
-    // Guard each target lot (if not UNKNOWN)
-    const excludeIds = [allocationId];
-
-    function guardLot(lotId, addQty) {
-      if (!lotId) return; // UNKNOWN lot has no capacity check
-      const inbound = db.getInboundUnitsForSkuLotId({ skuId, lotId });
-      const allocatedExcluding = db.getAllocatedUnitsForSkuLotId({
-        skuId,
-        lotId,
-        excludeAllocationIds: excludeIds
-      });
-      if (allocatedExcluding + addQty > inbound) {
-        throw new Error(`Over-allocation blocked for lotId=${lotId}. Inbound=${inbound}, allocated=${allocatedExcluding}, trying to add=${addQty}`);
-      }
-    }
-
-    guardLot(lotAId, qtyA);
-    guardLot(lotBId, qtyB);
-
-    // Apply split atomically
-    const tx = db.sqlite.transaction(() => {
-      db.deleteAuditAllocationById(allocationId);
-
-      db.insertAuditAllocationRow({
-        invoiceId: original.qbo_invoice_id,
-        txnDate: original.txn_date,
-        customerName: original.customer_name,
-        skuId,
-        lotId: lotAId,
-        qtyUnits: qtyA,
-        method: 'MANUAL',
-        note: `Split from allocation #${allocationId}`
-      });
-
-      db.insertAuditAllocationRow({
-        invoiceId: original.qbo_invoice_id,
-        txnDate: original.txn_date,
-        customerName: original.customer_name,
-        skuId,
-        lotId: lotBId,
-        qtyUnits: qtyB,
-        method: 'MANUAL',
-        note: `Split from allocation #${allocationId}`
-      });
-    });
-
-    tx();
-
-    return res.redirect(
-      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent('Split applied.')}`
-    );
-  } catch (e) {
-    const skuId = Number(req.body.sku_id || 0);
-    const startDate = String(req.body.start_date || '').trim();
-    const endDate = String(req.body.end_date || '').trim() || '';
-    return res.redirect(
-      `/inventory/audit/assigned?sku=${skuId}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&msg=${encodeURIComponent(`Split failed: ${e?.message || e}`)}`
-    );
-  }
-});
-
-app.post('/inventory/audit/assign-lot', requireConnected, (req, res) => {
-  try {
-    const skuId = Number(req.body.sku_id);
-    const lotId = req.body.lot_id ? Number(req.body.lot_id) : null;
-    const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
-    const endDate = String(req.body.end_date || '').trim() || null;
-
-    const ids = Array.isArray(req.body.invoice_ids) ? req.body.invoice_ids : (req.body.invoice_ids ? [req.body.invoice_ids] : []);
-// Guard: block overfill when lot_id is provided
-if (lotId) {
-  const inbound = db.getInboundUnitsForSkuLotId({ skuId, lotId });
-  const alreadyAllocated = db.getAllocatedUnitsForSkuLotId({ skuId, lotId });
-
-  // sum qty on selected invoices for this sku
-  let selectedQty = 0;
-  for (const invoiceId of ids) {
-    const inv = db.sqlite.prepare(`
-      SELECT SUM(qty_units) AS qty_units
-      FROM invoice_sku_lines
-      WHERE qbo_invoice_id=? AND sku_id=?
-    `).get(String(invoiceId), Number(skuId));
-    selectedQty += Number(inv?.qty_units || 0);
-  }
-
-  if (alreadyAllocated + selectedQty > inbound) {
-    throw new Error(`Over-allocation blocked. Inbound=${inbound}, allocated=${alreadyAllocated}, trying to add=${selectedQty}.`);
-  }
-}
-    if (!skuId) throw new Error('Missing sku_id');
-    if (ids.length === 0) throw new Error('No invoices selected.');
-
-    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
-    if (!sku || !sku.is_organic) throw new Error('Selected SKU is not organic.');
-
-    for (const invoiceId of ids) {
-      const inv = db.sqlite.prepare(`
-        SELECT qbo_invoice_id, MAX(txn_date) AS txn_date, MAX(customer_name) AS customer_name, SUM(qty_units) AS qty_units
-        FROM invoice_sku_lines
-        WHERE qbo_invoice_id=? AND sku_id=?
-      `).get(String(invoiceId), Number(skuId));
-      if (!inv) continue;
-
-      db.replaceAuditAllocations({
-        invoiceId: String(invoiceId),
-        txnDate: inv.txn_date || null,
-        customerName: inv.customer_name || null,
-        rows: [{
-          sku_id: skuId,
-          lot_id: lotId,
-          qty_units: Number(inv.qty_units || 0),
-          method: 'MANUAL',
-          note: lotId ? null : 'UNKNOWN LOT'
-        }]
-      });
-    }
-
-    return res.redirect(`/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent('Assigned lot to selected invoices.')}`);
-  } catch (e) {
-    return res.redirect(`/inventory/audit/search?sku=${encodeURIComponent(req.body.sku_id || '')}&start=${encodeURIComponent(req.body.start_date || '')}&end=${encodeURIComponent(req.body.end_date || '')}&msg=${encodeURIComponent(`Assign failed: ${e?.message || e}`)}`);
-  }
-});
-
-// Lot report
-app.get('/inventory/audit/lot-report', requireConnected, (req, res) => {
-  try {
-    const skuId = Number(req.query.sku);
-    const lotId = req.query.lot ? Number(req.query.lot) : null;
-    const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
-    const endDate = String(req.query.end || '').trim() || null;
-
-    if (!skuId) throw new Error('Missing sku');
-
-    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
-    const lot = lotId ? db.sqlite.prepare(`SELECT * FROM lots WHERE id=?`).get(lotId) : null;
-
-    const rows = db.listAuditLotReport({ skuId, lotId, startDate, endDate });
-    const total = rows.reduce((s, r) => s + Number(r.allocated_qty || 0), 0);
-
-    res.render('inventory_audit_lot_report', { sku, lot, rows, total, startDate, endDate: endDate || '' });
-  } catch (e) {
-    res.status(500).send(`Lot report failed: ${e?.message || e}`);
-  }
-});
-
-// Auto-assign per SKU
-app.post('/inventory/audit/auto-assign', requireConnected, (req, res) => {
-  try {
-    const skuId = Number(req.body.sku_id);
-    const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
-    const endDate = String(req.body.end_date || '').trim() || null;
-
-    if (!skuId) throw new Error('Missing sku_id');
-
-    const sku = db.sqlite.prepare(`SELECT * FROM skus WHERE id=?`).get(skuId);
-    if (!sku || !sku.is_organic) throw new Error('Selected SKU is not organic.');
-
-    // Lots with remaining (FIFO by inbound date)
-    const lots = db.listLotAvailabilityForSku(skuId)
-      .map(l => ({ ...l, remaining_units: Number(l.remaining_units || 0) }))
-      .filter(l => l.remaining_units > 0);
-
-    // Unassigned invoices only (so we don't keep redoing old work)
-    const invs = db.listUnassignedInvoicesForSku({ skuId, startDate, endDate });
-
-    let lotIdx = 0;
-    let assignedInvoices = 0;
-    let splitCount = 0;
-    let unknownQty = 0;
-
-    for (const inv of invs) {
-      let need = Number(inv.qty_units || 0);
-      if (need <= 0) continue;
-
-      const rows = [];
-
-      while (need > 0 && lotIdx < lots.length) {
-        const cur = lots[lotIdx];
-        const avail = cur.remaining_units;
-
-        if (avail <= 0) { lotIdx++; continue; }
-
-        const take = Math.min(need, avail);
-
-        rows.push({
-          sku_id: skuId,
-          lot_id: Number(cur.lot_id),
-          qty_units: take,
-          method: 'AUTO_SUGGEST',
-          note: `Auto FIFO (${cur.inbound_date || 'unknown'})`
-        });
-
-        cur.remaining_units -= take;
-        need -= take;
-
-        if (cur.remaining_units <= 0) lotIdx++;
-      }
-
-      if (need > 0) {
-        unknownQty += need;
-        rows.push({
-          sku_id: skuId,
-          lot_id: null,
-          qty_units: need,
-          method: 'AUTO_SUGGEST',
-          note: 'Auto FIFO: insufficient inbound balance (Local Production / Non-Organic)'
-        });
-      }
-
-      // Write allocations (can be multiple rows => split)
-      db.replaceAuditAllocations({
-        invoiceId: String(inv.qbo_invoice_id),
-        txnDate: inv.txn_date || null,
-        customerName: inv.customer_name || null,
-        rows
-      });
-
-      assignedInvoices++;
-      if (rows.length > 1) splitCount++;
-    }
-
-    return res.redirect(
-      `/inventory/audit/search?sku=${skuId}&start=${encodeURIComponent(startDate)}${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}&msg=${encodeURIComponent(`Auto-assign done. invoices=${assignedInvoices}, split=${splitCount}, unknownQty=${unknownQty}`)}`
-    );
-  } catch (e) {
-    return res.redirect(`/inventory/audit/search?msg=${encodeURIComponent(`Auto-assign failed: ${e?.message || e}`)}`);
-  }
-});
-
-// Auto-assign ALL
-app.post('/inventory/audit/auto-assign-all', requireConnected, (req, res) => {
-  try {
-    const startDate = String(req.body.start_date || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
-    const endDate = String(req.body.end_date || '').trim() || null;
-
-    const skus = db.sqlite.prepare(`
-      SELECT id, name
-      FROM skus
-      WHERE is_organic=1 AND active=1
-      ORDER BY name COLLATE NOCASE
-    `).all();
-
-    let totalSkus = skus.length;
-    let totalInvoicesAssigned = 0;
-    let totalSplitInvoices = 0;
-    let totalUnknownQty = 0;
-    let totalSkipped = 0;
-
-    for (const sku of skus) {
-      const skuId = Number(sku.id);
-
-      // Lots with remaining (FIFO by inbound date)
-      const lots = db.listLotAvailabilityForSku(skuId)
-        .map(l => ({ ...l, remaining_units: Number(l.remaining_units || 0) }))
-        .filter(l => l.remaining_units > 0);
-
-      // Only invoices that are NOT already allocated for this SKU
-      const invs = db.listUnassignedInvoicesForSku({ skuId, startDate, endDate });
-
-      if (!invs.length) {
-        totalSkipped++;
-        continue;
-      }
-
-      let lotIdx = 0;
-
-      for (const inv of invs) {
-        let need = Number(inv.qty_units || 0);
-        if (need <= 0) continue;
-
-        const rows = [];
-
-        while (need > 0 && lotIdx < lots.length) {
-          const cur = lots[lotIdx];
-          const avail = cur.remaining_units;
-
-          if (avail <= 0) { lotIdx++; continue; }
-
-          const take = Math.min(need, avail);
-
-          rows.push({
-            sku_id: skuId,
-            lot_id: Number(cur.lot_id),
-            qty_units: take,
-            method: 'AUTO_SUGGEST',
-            note: `Auto FIFO (${cur.inbound_date || 'unknown'})`
-          });
-
-          cur.remaining_units -= take;
-          need -= take;
-
-          if (cur.remaining_units <= 0) lotIdx++;
-        }
-
-        if (need > 0) {
-          totalUnknownQty += need;
-          rows.push({
-            sku_id: skuId,
-            lot_id: null,
-            qty_units: need,
-            method: 'AUTO_SUGGEST',
-            note: 'Auto FIFO: insufficient inbound balance (Local Production / Non-Organic)'
-          });
-        }
-
-        db.replaceAuditAllocations({
-          invoiceId: String(inv.qbo_invoice_id),
-          txnDate: inv.txn_date || null,
-          customerName: inv.customer_name || null,
-          rows
-        });
-
-        totalInvoicesAssigned++;
-        if (rows.length > 1) totalSplitInvoices++;
-      }
-    }
-
-    const msg =
-      `Auto-assign ALL (qty-safe) complete: skus=${totalSkus}, ` +
-      `invoices_assigned=${totalInvoicesAssigned}, split_invoices=${totalSplitInvoices}, ` +
-      `unknownQty=${totalUnknownQty}, skus_skipped(no_unassigned)=${totalSkipped}.`;
-
-    return res.redirect(
-      `/inventory/audit/search?start=${encodeURIComponent(startDate)}` +
-      `${endDate ? `&end=${encodeURIComponent(endDate)}` : ''}` +
-      `&msg=${encodeURIComponent(msg)}`
-    );
-
-  } catch (e) {
-    return res.redirect(`/inventory/audit/search?msg=${encodeURIComponent(`Auto-assign ALL failed: ${e?.message || e}`)}`);
-  }
-});
-
-// Master report
-app.get('/inventory/audit/master-report', requireConnected, (req, res) => {
-  try {
-    const startDate = String(req.query.start || (db.getSetting('organic_tracking_start') || '2025-01-01')).trim();
-    const endDate = String(req.query.end || '').trim() || null;
-
-    const rows = db.listAuditMasterReport({ startDate, endDate });
-
-    const bySku = new Map();
-    let grandTotal = 0;
-
-    for (const r of rows) {
-      const qty = Number(r.qty_units || 0);
-      grandTotal += qty;
-
-      if (!bySku.has(r.sku_id)) {
-        bySku.set(r.sku_id, {
-          sku_id: r.sku_id,
-          sku_name: r.sku_name,
-          unit_type: r.unit_type,
-          skuTotal: 0,
-          lots: new Map()
-        });
-      }
-
-      const skuGroup = bySku.get(r.sku_id);
-      skuGroup.skuTotal += qty;
-
-      const lotKey = r.lot_number ? `LOT:${r.lot_number}` : 'LOT:UNKNOWN';
-
-      if (!skuGroup.lots.has(lotKey)) {
-        skuGroup.lots.set(lotKey, {
-          lot_number: r.lot_number || 'UNKNOWN LOT',
-          lotTotal: 0,
-          invoices: []
-        });
-      }
-
-      const lotGroup = skuGroup.lots.get(lotKey);
-      lotGroup.lotTotal += qty;
-
-      lotGroup.invoices.push({
-        txn_date: r.txn_date || '',
-        qbo_invoice_id: r.qbo_invoice_id,
-        customer_name: r.customer_name || '',
-        qty_units: qty
-      });
-    }
-
-    const skuGroups = [...bySku.values()].map(g => ({
-      ...g,
-      lotsArr: [...g.lots.values()]
-    }));
-
-    res.render('inventory_audit_master_report', {
-      startDate,
-      endDate: endDate || '',
-      skuGroups,
-      grandTotal
-    });
-  } catch (e) {
-    res.status(500).send(`Master report failed: ${e?.message || e}`);
-  }
-});
-
 app.get('/admin/email-automation', requireConnected, (req, res) => {
-  const customers = db.listCustomers(); // already alphabetical in your db.js
+  const customers = db.listCustomers();
   const settings = db.listEmailCustomerSettings();
 
   const map = new Map();
   for (const s of settings) map.set(String(s.customer_id), s);
 
-  // Merge rows
   const rows = customers.map(c => {
     const s = map.get(String(c.id)) || {
       enabled_send_invoice: 0,
       enabled_reminder: 0,
-      reminder_days_before_due: 3
+      reminder_days_before_due: 3,
+      enabled_post_due_reminder: 0,
+      post_due_days_after_due: 3
     };
+
     return {
       customer_id: c.id,
       display_name: c.display_name,
       enabled_send_invoice: Number(s.enabled_send_invoice || 0),
       enabled_reminder: Number(s.enabled_reminder || 0),
-      reminder_days_before_due: Number(s.reminder_days_before_due || 3)
+      reminder_days_before_due: Number(s.reminder_days_before_due || 3),
+      enabled_post_due_reminder: Number(s.enabled_post_due_reminder || 0),
+      post_due_days_after_due: Number(s.post_due_days_after_due || 3)
     };
   });
 
-  // Active setup list (enabled either invoice or reminder)
-  const active = rows.filter(r => r.enabled_send_invoice || r.enabled_reminder);
+  const active = rows.filter(r =>
+    r.enabled_send_invoice || r.enabled_reminder || r.enabled_post_due_reminder
+  );
 
   res.render('admin_email_automation', { rows, active, msg: String(req.query.msg || '') || null });
 });
@@ -1573,13 +911,18 @@ app.post('/admin/email-automation/save', requireConnected, (req, res) => {
     for (const id of customerIds) {
       const enabled_send_invoice = req.body[`enabled_send_invoice_${id}`] === 'on';
       const enabled_reminder = req.body[`enabled_reminder_${id}`] === 'on';
-      const days = Number(req.body[`reminder_days_before_due_${id}`] || 3);
+      const reminder_days_before_due = Number(req.body[`reminder_days_before_due_${id}`] || 3);
+
+      const enabled_post_due_reminder = req.body[`enabled_post_due_reminder_${id}`] === 'on';
+      const post_due_days_after_due = Number(req.body[`post_due_days_after_due_${id}`] || 3);
 
       db.upsertEmailCustomerSettings({
         customer_id: id,
         enabled_send_invoice,
         enabled_reminder,
-        reminder_days_before_due: days
+        reminder_days_before_due,
+        enabled_post_due_reminder,
+        post_due_days_after_due
       });
     }
 
@@ -1609,22 +952,8 @@ app.post('/admin/email-automation/run-now', requireConnected, async (req, res) =
   }
 });
 
-// Admin-only: run email job now (dry run or send)
-app.post('/admin/email-automation/run-now', requireConnected, async (req, res) => {
-  try {
-    const dry = String(req.body.dry || '1') === '1';
-    const startDate = String(req.body.startDate || '2025-01-01').trim();
-
-    // Call the same internal function you use in /jobs/qbo-email
-    const summary = await runQboEmailJob({ dry, startDate });
-
-    return res.redirect('/admin/email-automation?msg=' + encodeURIComponent(
-      `${dry ? 'Dry run' : 'Sent'}: scanned=${summary.scanned}, sendInvoice=${summary.sentInvoices}, reminders=${summary.sentReminders}, failed=${summary.failed}`
-    ));
-  } catch (e) {
-    return res.redirect('/admin/email-automation?msg=' + encodeURIComponent('Run failed: ' + (e?.message || e)));
-  }
-});
-
+// ==========================================================
+// Server start
+// ==========================================================
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`App running on http://localhost:${port}`));
