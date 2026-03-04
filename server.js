@@ -310,6 +310,14 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
     startDate = d.toISOString().slice(0, 10);
   }
 
+  // customer id -> name map (from your synced customers table)
+  const customerNameMap = new Map(db.listCustomers().map(c => [String(c.id), c.display_name]));
+
+  // previews (dry run only)
+  const previewSend = [];
+  const previewPre = [];
+  const previewPost = [];
+
   const pageSize = 100;
   let start = 1;
 
@@ -338,14 +346,26 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
       if (scanned >= maxInvoices) {
         console.log(`[email-job] cap reached scanned=${scanned} maxInvoices=${maxInvoices} (stopping early)`);
         return {
-          scanned, eligibleSendInvoice, eligibleReminderPre, eligibleReminderPost,
-          sentInvoices, sentRemindersPre, sentRemindersPost, failed,
-          capped: true, startDate
+          scanned,
+          eligibleSendInvoice,
+          eligibleReminderPre,
+          eligibleReminderPost,
+          sentInvoices,
+          sentRemindersPre,
+          sentRemindersPost,
+          failed,
+          capped: true,
+          startDate,
+          previewSend,
+          previewPre,
+          previewPost
         };
       }
 
       const invoiceId = String(inv.Id);
+      const docNumber = String(inv.DocNumber || invoiceId);
       const customerId = String(inv?.CustomerRef?.value || '');
+      const customerName = customerNameMap.get(customerId) || String(inv?.CustomerRef?.name || '');
 
       const settings = db.getEmailCustomerSettings(customerId) || {
         enabled_send_invoice: 0,
@@ -366,22 +386,32 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
 
       if (shouldSendInvoice) {
         eligibleSendInvoice++;
+
+        if (dry && previewSend.length < 50) {
+          previewSend.push({
+            docNumber,
+            customerName,
+            dueDate: inv.DueDate || '',
+            balance,
+            emailStatus: inv.EmailStatus || ''
+          });
+        }
+
         if (!dry) {
           try {
             await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
             sentInvoices++;
           } catch (e) {
             failed++;
-            console.log(`[email-job] send invoice failed id=${invoiceId} err=${e?.message || e}`);
+            console.log(`[email-job] send invoice failed id=${invoiceId} doc=${docNumber} err=${e?.message || e}`);
           }
         }
       }
 
-      // Need due date for reminders
       const due = inv.DueDate ? String(inv.DueDate) : null;
       if (!due) continue;
 
-      // PRE-DUE reminder (one-time, only before due, only if emailed at least once)
+      // PRE-DUE reminder (one-time, only before due, only if already emailed once)
       if (settings.enabled_reminder) {
         if (daysBetween(tdy, due) > 0 && emailAlreadySent) {
           const daysBefore = Number(settings.reminder_days_before_due || 3);
@@ -390,6 +420,16 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
           if (delta === daysBefore) {
             if (!db.hasReminderBeenSent(invoiceId, 'REMINDER_PRE')) {
               eligibleReminderPre++;
+
+              if (dry && previewPre.length < 50) {
+                previewPre.push({
+                  docNumber,
+                  customerName,
+                  dueDate: due,
+                  balance
+                });
+              }
+
               if (!dry) {
                 try {
                   await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
@@ -398,7 +438,7 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
                 } catch (e) {
                   db.logReminderSent({ invoiceId, type: 'REMINDER_PRE', status: 'FAILED', error: e?.message || String(e) });
                   failed++;
-                  console.log(`[email-job] pre-due reminder failed id=${invoiceId} err=${e?.message || e}`);
+                  console.log(`[email-job] pre-due reminder failed id=${invoiceId} doc=${docNumber} err=${e?.message || e}`);
                 }
               }
             }
@@ -406,15 +446,25 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
         }
       }
 
-      // POST-DUE reminder (one-time, exact day after due, only if emailed at least once)
+      // POST-DUE reminder (one-time, exact N days after due, only if already emailed once)
       if (settings.enabled_post_due_reminder) {
         if (emailAlreadySent) {
-          const daysAfterDue = daysBetween(due, tdy); // overdue by X days if positive
+          const daysAfterDue = daysBetween(due, tdy);
           const targetAfter = Number(settings.post_due_days_after_due || 3);
 
           if (daysAfterDue === targetAfter) {
             if (!db.hasReminderBeenSent(invoiceId, 'REMINDER_POST')) {
               eligibleReminderPost++;
+
+              if (dry && previewPost.length < 50) {
+                previewPost.push({
+                  docNumber,
+                  customerName,
+                  dueDate: due,
+                  balance
+                });
+              }
+
               if (!dry) {
                 try {
                   await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
@@ -423,7 +473,7 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
                 } catch (e) {
                   db.logReminderSent({ invoiceId, type: 'REMINDER_POST', status: 'FAILED', error: e?.message || String(e) });
                   failed++;
-                  console.log(`[email-job] post-due reminder failed id=${invoiceId} err=${e?.message || e}`);
+                  console.log(`[email-job] post-due reminder failed id=${invoiceId} doc=${docNumber} err=${e?.message || e}`);
                 }
               }
             }
@@ -439,9 +489,19 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
   console.log(`[email-job] done scanned=${scanned} eligibleSend=${eligibleSendInvoice} eligiblePre=${eligibleReminderPre} eligiblePost=${eligibleReminderPost} sentInvoices=${sentInvoices} sentPre=${sentRemindersPre} sentPost=${sentRemindersPost} failed=${failed}`);
 
   return {
-    scanned, eligibleSendInvoice, eligibleReminderPre, eligibleReminderPost,
-    sentInvoices, sentRemindersPre, sentRemindersPost, failed,
-    capped: false, startDate
+    scanned,
+    eligibleSendInvoice,
+    eligibleReminderPre,
+    eligibleReminderPost,
+    sentInvoices,
+    sentRemindersPre,
+    sentRemindersPost,
+    failed,
+    capped: false,
+    startDate,
+    previewSend,
+    previewPre,
+    previewPost
   };
 }
 
@@ -940,13 +1000,49 @@ app.post('/admin/email-automation/run-now', requireConnected, async (req, res) =
 
     const summary = await runQboEmailJob({ dry, startDate, maxInvoices });
 
+    // rebuild rows/active exactly like GET page
+    const customers = db.listCustomers();
+    const settings = db.listEmailCustomerSettings();
+    const map = new Map(settings.map(s => [String(s.customer_id), s]));
+
+    const rows = customers.map(c => {
+      const s = map.get(String(c.id)) || {
+        enabled_send_invoice: 0,
+        enabled_reminder: 0,
+        reminder_days_before_due: 3,
+        enabled_post_due_reminder: 0,
+        post_due_days_after_due: 3
+      };
+
+      return {
+        customer_id: c.id,
+        display_name: c.display_name,
+        enabled_send_invoice: Number(s.enabled_send_invoice || 0),
+        enabled_reminder: Number(s.enabled_reminder || 0),
+        reminder_days_before_due: Number(s.reminder_days_before_due || 3),
+        enabled_post_due_reminder: Number(s.enabled_post_due_reminder || 0),
+        post_due_days_after_due: Number(s.post_due_days_after_due || 3)
+      };
+    });
+
+    const active = rows.filter(r =>
+      r.enabled_send_invoice || r.enabled_reminder || r.enabled_post_due_reminder
+    );
+
     const msg =
       `${dry ? 'Dry run' : 'Sent'}: scanned=${summary.scanned}, eligibleSend=${summary.eligibleSendInvoice}, ` +
       `eligiblePre=${summary.eligibleReminderPre}, eligiblePost=${summary.eligibleReminderPost}, ` +
       `sentInvoices=${summary.sentInvoices}, sentPre=${summary.sentRemindersPre}, sentPost=${summary.sentRemindersPost}, failed=${summary.failed}` +
       (summary.capped ? ' (CAP HIT)' : '');
 
-    return res.redirect('/admin/email-automation?msg=' + encodeURIComponent(msg));
+    return res.render('admin_email_automation', {
+      rows,
+      active,
+      msg,
+      previewSend: summary.previewSend || [],
+      previewPre: summary.previewPre || [],
+      previewPost: summary.previewPost || []
+    });
   } catch (e) {
     return res.redirect('/admin/email-automation?msg=' + encodeURIComponent('Run failed: ' + (e?.message || e)));
   }
