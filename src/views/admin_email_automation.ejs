@@ -8,11 +8,13 @@
     .muted { color:#666; font-size:13px; }
     .card { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; margin-top:12px; }
     table { width:100%; border-collapse:collapse; margin-top:12px; }
-    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; }
+    th, td { border-bottom:1px solid #eee; padding:10px; text-align:left; vertical-align: top; }
     th { background:#fafafa; position:sticky; top:0; }
     input[type="number"] { width:80px; padding:8px; border:1px solid #ddd; border-radius:10px; }
     input[type="text"] { padding:8px; border:1px solid #ddd; border-radius:10px; }
     button { padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#fff; cursor:pointer; }
+    .right { text-align:right; }
+    .q { font-family: ui-monospace, monospace; font-size:12px; }
   </style>
 </head>
 <body>
@@ -45,6 +47,87 @@
     Dry run computes what would be emailed. “Send now” uses QuickBooks email.
   </div>
 </div>
+
+<!-- ✅ Dry-run preview tables -->
+<% if (previewSend && previewSend.length) { %>
+  <div class="card">
+    <h3 style="margin-top:0;">Dry run preview — Auto-send invoice (first <%= previewSend.length %>)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Invoice #</th>
+          <th>Customer</th>
+          <th>Due</th>
+          <th>EmailStatus</th>
+          <th class="right">Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% previewSend.forEach(p => { %>
+          <tr>
+            <td class="q"><%= p.docNumber %></td>
+            <td><%= p.customerName %></td>
+            <td class="q"><%= p.dueDate %></td>
+            <td class="q"><%= p.emailStatus %></td>
+            <td class="right"><%= Number(p.balance || 0).toFixed(2).replace(/\.00$/,'') %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+<% } %>
+
+<% if (previewPre && previewPre.length) { %>
+  <div class="card">
+    <h3 style="margin-top:0;">Dry run preview — Pre-due reminders (first <%= previewPre.length %>)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Invoice #</th>
+          <th>Customer</th>
+          <th>Due</th>
+          <th class="right">Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% previewPre.forEach(p => { %>
+          <tr>
+            <td class="q"><%= p.docNumber %></td>
+            <td><%= p.customerName %></td>
+            <td class="q"><%= p.dueDate %></td>
+            <td class="right"><%= Number(p.balance || 0).toFixed(2).replace(/\.00$/,'') %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+<% } %>
+
+<% if (previewPost && previewPost.length) { %>
+  <div class="card">
+    <h3 style="margin-top:0;">Dry run preview — Post-due reminders (first <%= previewPost.length %>)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Invoice #</th>
+          <th>Customer</th>
+          <th>Due</th>
+          <th class="right">Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% previewPost.forEach(p => { %>
+          <tr>
+            <td class="q"><%= p.docNumber %></td>
+            <td><%= p.customerName %></td>
+            <td class="q"><%= p.dueDate %></td>
+            <td class="right"><%= Number(p.balance || 0).toFixed(2).replace(/\.00$/,'') %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+<% } %>
 
 <div class="card">
   <% if (msg) { %><div class="muted"><b><%= msg %></b></div><% } %>
