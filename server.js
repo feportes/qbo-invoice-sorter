@@ -72,7 +72,7 @@ async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
 async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 12 }) {
   let lastErr = null;
 
-  // ~2Ã¢ÂÂ3 minutes total worst-case. Good for bursts.
+  // ~2ÃÂ¢ÃÂÃÂ3 minutes total worst-case. Good for bursts.
   const delays = [1500, 2500, 4000, 6500, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000];
 
   for (let i = 0; i < retries; i++) {
@@ -403,8 +403,12 @@ async function runQboEmailJob({ dry = true, startDate = null, maxInvoices = 2000
             await qboSendInvoice(oauthClient, conn.realm_id, invoiceId);
             sentInvoices++;
           } catch (e) {
-            failed++;
-            console.log(`[email-job] send invoice failed id=${invoiceId} doc=${docNumber} err=${e?.message || e}`);
+              failed++;
+              const _qboErr = e?.response?.data?.Fault?.Error?.[0]?.Detail
+                || e?.response?.data?.Fault?.Error?.[0]?.Message
+                || e?.response?.data
+                || e?.message || e;
+              console.log(`[email-job] send invoice failed id=${invoiceId} doc=${docNumber} err=${JSON.stringify(_qboErr)}`);
           }
         }
       }
@@ -753,7 +757,7 @@ app.post('/inventory/allocate/apply', async (req, res) => {
     const plan = buildPlanFromInvoice(invoice);
     applyPlan(plan);
 
-    return res.render('inventory_allocate', { connected: true, msg: 'Ã¢ÂÂ Allocation applied successfully.', plan });
+    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂ¢ÃÂÃÂ Allocation applied successfully.', plan });
   } catch (e) {
     const conn = db.getConnection();
     return res.status(400).render('inventory_allocate', { connected: !!conn, msg: e?.message || String(e), plan: null });
