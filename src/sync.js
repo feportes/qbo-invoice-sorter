@@ -7,11 +7,10 @@ export async function syncCustomers(oauthClient, realmId) {
   let total = 0;
 
   while (true) {
-    const q = `select Id, DisplayName from Customer startposition ${start} maxresults ${pageSize}`;
+    const q = `select Id, DisplayName, PrimaryEmailAddr from Customer startposition ${start} maxresults ${pageSize}`;
     const r = await qboQuery(oauthClient, realmId, q);
     const customers = r?.QueryResponse?.Customer || [];
-    for (const c of customers) {
-      db.upsertCustomer({ id: c.Id, display_name: c.DisplayName || c.FullyQualifiedName || `Customer ${c.Id}` });
+    for (const c of cdb.upsertCustomer({ id: c.Id, display_name: c.DisplayName || c.FullyQualifiedName || c.Id, qbo_email: c.PrimaryEmailAddr?.Address || null });c.Id}` });
     }
     total += customers.length;
     if (customers.length < pageSize) break;
