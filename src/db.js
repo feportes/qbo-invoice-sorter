@@ -941,7 +941,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
 
   replaceAuditAllocations({ invoiceId, txnDate, customerName, rows }) {
   const tx = sqlite.transaction(() => {
-    // ✅ Only delete allocations for the SKU(s) being replaced,
+    // â Only delete allocations for the SKU(s) being replaced,
     // NOT the entire invoice (prevents wiping other SKU allocations).
     const skuIds = [...new Set((rows || []).map(r => Number(r.sku_id)).filter(Boolean))];
 
@@ -1094,7 +1094,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   },
 
   // ==========================================================
-  // ✅ Pallets listing helpers for WALKIN/RETURNS/etc
+  // â Pallets listing helpers for WALKIN/RETURNS/etc
   // ==========================================================
   listPalletsInLocationId(locationId) {
     return sqlite.prepare(`
@@ -1320,7 +1320,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   },
 
   // ==========================================================
-  // ✅ ADD PALLET (manual receive)
+  // â ADD PALLET (manual receive)
   // ==========================================================
   createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes, userName = 'user' }) {
     const tx = sqlite.transaction(() => {
@@ -1375,7 +1375,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
 
   // ==========================================================
   // Move pallet between locations (including WALKIN/RETURNS)
-  // ✅ NOW prevents moving into an occupied CONTAINER slot
+  // â NOW prevents moving into an occupied CONTAINER slot
   // ==========================================================
   movePallet(palletId, toLocationId, userName = 'user') {
     const tx = sqlite.transaction(() => {
@@ -1566,12 +1566,20 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   // ==========================================================
   // Customers
   // ==========================================================
-  upsertCustomer({ id, display_name }) {
+  upsertCustomer({ id, display_name, qbo_email = null }) {
     sqlite.prepare(`
-      INSERT INTO customers (id, display_name)
-      VALUES (?, ?)
-      ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name
-    `).run(id, display_name);
+      INSERT INTO customers (id, display_name, qbo_email)
+      VALUES (@id, @display_name, @qbo_email)
+      ON CONFLICT(id) DO UPDATE SET
+        display_name = excluded.display_name,
+        qbo_email = COALESCE(excluded.qbo_email, customers.qbo_email)
+    `).run({ id, display_name, qbo_email });
+  },
+  saveCustomerEmailOverrides({ customer_id, override_email, cc_email }) {
+    sqlite.prepare(`
+      UPDATE customers SET override_email = @override_email, cc_email = @cc_email
+      WHERE id = @customer_id
+    `).run({ customer_id, override_email: override_email || null, cc_email: cc_email || null });
   },
   listCustomers() {
     return sqlite.prepare('SELECT * FROM customers ORDER BY display_name COLLATE NOCASE').all();
