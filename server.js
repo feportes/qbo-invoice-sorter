@@ -1,4 +1,3 @@
-
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -45,7 +44,7 @@ app.use(morgan('dev'));
 
 // Body parsing (webhooks need raw body)
 app.use(express.json({ verify: rawBodySaver, limit: '2mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
   const raw = String(invoiceIdOrDocNumber || '').trim();
@@ -73,7 +72,7 @@ async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
 async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 12 }) {
   let lastErr = null;
 
-  // ~2ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ3 minutes total worst-case. Good for bursts.
+  // ~2ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ3 minutes total worst-case. Good for bursts.
   const delays = [1500, 2500, 4000, 6500, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000];
 
   for (let i = 0; i < retries; i++) {
@@ -758,7 +757,7 @@ app.post('/inventory/allocate/apply', async (req, res) => {
     const plan = buildPlanFromInvoice(invoice);
     applyPlan(plan);
 
-    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Allocation applied successfully.', plan });
+    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Allocation applied successfully.', plan });
   } catch (e) {
     const conn = db.getConnection();
     return res.status(400).render('inventory_allocate', { connected: !!conn, msg: e?.message || String(e), plan: null });
@@ -771,6 +770,11 @@ app.post('/inventory/allocate/apply', async (req, res) => {
 
 // Helper: build left/right slot arrays for a container
 function buildContainerSlots(containerNo, db) {
+  // Normalize in case a full container object was passed accidentally
+  if (typeof containerNo === 'object' && containerNo !== null) {
+    containerNo = containerNo.containerNo ?? containerNo.container_no ?? containerNo.id;
+  }
+  containerNo = Number(containerNo);
   const { leftMax, rightMax, flip } = db.getContainerDepths(containerNo);
   const pallets = db.listPalletsInContainer(containerNo);
   const palletMap = {};
@@ -847,8 +851,10 @@ app.get('/inventory/yard', requireConnected, (req, res) => {
   try {
     const containers = db.listContainers();
     const yard = containers.map(cont => {
-      const { left, right, flip } = buildContainerSlots(cont.containerNo, db);
-      return { ...cont, left, right, flip };
+      // Normalize: db may return container_no (snake) or containerNo (camel)
+      const containerNo = cont.containerNo ?? cont.container_no ?? cont.id;
+      const { left, right, flip } = buildContainerSlots(containerNo, db);
+      return { ...cont, containerNo, left, right, flip };
     });
     const c1Mode = db.getSetting('container_mode_C1') || 'S';
     res.render('inventory_yard', { yard, c1Mode, modeLabel: 'Grid View', rangeLabel: '' });
@@ -915,7 +921,10 @@ app.post('/inventory/move', requireConnected, (req, res) => {
 // POST /inventory/move-json (drag-drop AJAX)
 app.post('/inventory/move-json', requireConnected, (req, res) => {
   try {
-    const { pallet_id, to_location_code } = req.body;
+    // Accept both JSON body and urlencoded
+    const body = req.body || {};
+    const pallet_id = body.pallet_id;
+    const to_location_code = body.to_location_code;
     if (!pallet_id || !to_location_code) throw new Error('Missing pallet_id or to_location_code');
     const loc = db.getLocationByCode(String(to_location_code));
     if (!loc) throw new Error(`Unknown location: ${to_location_code}`);
@@ -1201,7 +1210,7 @@ app.post('/admin/email-automation/save', requireConnected, (req, res) => {
       const enabled_post_due_reminder = req.body[`enabled_post_due_reminder_${id}`] === 'on';
       const post_due_days_after_due = Number(req.body[`post_due_days_after_due_${id}`] || 3);
 
-        db.upsertEmailCustomerSettings({
+      db.upsertEmailCustomerSettings({
         customer_id: id,
         enabled_send_invoice,
         enabled_reminder,
