@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS inbound_doc_lines (
   net_kg REAL NULL,
   gross_kg REAL NULL,
 
-  lot_number TEXT NULL,            -- Batch NÂ°
+  lot_number TEXT NULL,            -- Batch NÃÂ°
   sku_id INTEGER NULL,             -- mapped later
 
   FOREIGN KEY (inbound_doc_id) REFERENCES inbound_docs(id)
@@ -219,8 +219,13 @@ CREATE TABLE IF NOT EXISTS sku_aliases (
     CREATE INDEX IF NOT EXISTS idx_movements_sku_lot ON inventory_movements(sku_id, lot_id);
     CREATE INDEX IF NOT EXISTS idx_movements_time ON inventory_movements(created_at);
   `);
+// Customer email columns
+try { db.sqlite.exec('ALTER TABLE customers ADD COLUMN qbo_email TEXT NULL;'); } catch {}
+try { db.sqlite.exec('ALTER TABLE customers ADD COLUMN override_email TEXT NULL;'); } catch {}
+try { db.sqlite.exec('ALTER TABLE customers ADD COLUMN cc_email TEXT NULL;'); } catch {}
 
-// â Email automation tables
+
+// Ã¢ÂÂ Email automation tables
 try {
   s.exec(`
     CREATE TABLE IF NOT EXISTS email_customer_settings (
@@ -244,7 +249,7 @@ try {
   `);
 } catch {}
 
-  // â Safe migrations
+  // Ã¢ÂÂ Safe migrations
 try { s.exec(`ALTER TABLE email_customer_settings ADD COLUMN enabled_post_due_reminder INTEGER NOT NULL DEFAULT 0;`); } catch {}
 try { s.exec(`ALTER TABLE email_customer_settings ADD COLUMN post_due_days_after_due INTEGER NOT NULL DEFAULT 3;`); } catch {}
 
@@ -273,10 +278,10 @@ try {
   `);
 } catch {}
 
-  // â Inbound docs: store extracted PDF text for reload/debug/inspection
+  // Ã¢ÂÂ Inbound docs: store extracted PDF text for reload/debug/inspection
   try { s.exec(`ALTER TABLE inbound_docs ADD COLUMN raw_text TEXT;`); } catch {}
 
-  // â Allocation tracking
+  // Ã¢ÂÂ Allocation tracking
   try {
     s.exec(`
       CREATE TABLE IF NOT EXISTS invoice_allocations (
@@ -294,7 +299,7 @@ try {
     `);
   } catch {}
 
-  // â Engine state tables
+  // Ã¢ÂÂ Engine state tables
   try {
     s.exec(`
       CREATE TABLE IF NOT EXISTS invoice_state (
@@ -316,7 +321,7 @@ try {
     `);
   } catch {}
 
-  // â Lot Audit Allocations (does NOT change inventory)
+  // Ã¢ÂÂ Lot Audit Allocations (does NOT change inventory)
   try {
     s.exec(`
       CREATE TABLE IF NOT EXISTS invoice_lot_audit_allocations (
@@ -337,7 +342,7 @@ try {
     `);
   } catch {}
 
-  // â Invoice SKU Line Index (audit search/reporting)
+  // Ã¢ÂÂ Invoice SKU Line Index (audit search/reporting)
   try {
     s.exec(`
       CREATE TABLE IF NOT EXISTS invoice_sku_lines (
