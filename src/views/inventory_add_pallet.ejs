@@ -29,7 +29,9 @@
     .slot.selected { outline:2px solid #0a7; background:#f2fffb; }
     .code { font-weight:700; }
     .topbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-  </style>
+      .slot.occupied { background:#f0fdf4; border:1px solid #86efac; }
+    .pallet-info { font-size:0.78em; color:#333; margin-top:4px; }
+</style>
 </head>
 <body>
 
@@ -97,8 +99,9 @@
       <div class="col">
         <h3 style="margin:0 0 10px 0;">LEFT (L) <span class="muted">01 = closest to door</span></h3>
         <% left.forEach(s => { %>
-          <div class="slot" data-slot="<%= s.code %>">
+          <div class="slot<%= s.pallet ? ' occupied' : '' %>" data-slot="<%= s.code %>">
             <div class="code"><%= s.code %></div>
+            <% if (s.pallet) { %><div class="pallet-info"><strong><%= s.pallet.sku_name %></strong> &mdash; <%= s.pallet.qty_units %> <%= s.pallet.unit_type || 'units' %><% if (s.pallet.lot_number) { %> &bull; Lot <%= s.pallet.lot_number %><% } %></div><% } %>
           </div>
         <% }) %>
       </div>
@@ -106,8 +109,9 @@
       <div class="col">
         <h3 style="margin:0 0 10px 0;">RIGHT (R) <span class="muted">01 = closest to door</span></h3>
         <% right.forEach(s => { %>
-          <div class="slot" data-slot="<%= s.code %>">
+          <div class="slot<%= s.pallet ? ' occupied' : '' %>" data-slot="<%= s.code %>">
             <div class="code"><%= s.code %></div>
+            <% if (s.pallet) { %><div class="pallet-info"><strong><%= s.pallet.sku_name %></strong> &mdash; <%= s.pallet.qty_units %> <%= s.pallet.unit_type || 'units' %><% if (s.pallet.lot_number) { %> &bull; Lot <%= s.pallet.lot_number %><% } %></div><% } %>
           </div>
         <% }) %>
       </div>
