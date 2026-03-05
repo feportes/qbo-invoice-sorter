@@ -22,7 +22,7 @@
 <h1>Email Automation</h1>
 
 <div style="margin: 10px 0;">
-  <a href="/">← Home</a>
+  <a href="/">â Home</a>
 </div>
 
 <div class="muted">
@@ -44,14 +44,14 @@
   </form>
 
   <div class="muted" style="margin-top:8px;">
-    Dry run computes what would be emailed. “Send now” uses QuickBooks email.
+    Dry run computes what would be emailed. âSend nowâ uses QuickBooks email.
   </div>
 </div>
 
-<!-- ✅ Dry-run preview tables -->
+<!-- â Dry-run preview tables -->
 <% if (previewSend && previewSend.length) { %>
   <div class="card">
-    <h3 style="margin-top:0;">Dry run preview — Auto-send invoice (first <%= previewSend.length %>)</h3>
+    <h3 style="margin-top:0;">Dry run preview â Auto-send invoice (first <%= previewSend.length %>)</h3>
     <table>
       <thead>
         <tr>
@@ -79,7 +79,7 @@
 
 <% if (previewPre && previewPre.length) { %>
   <div class="card">
-    <h3 style="margin-top:0;">Dry run preview — Pre-due reminders (first <%= previewPre.length %>)</h3>
+    <h3 style="margin-top:0;">Dry run preview â Pre-due reminders (first <%= previewPre.length %>)</h3>
     <table>
       <thead>
         <tr>
@@ -105,7 +105,7 @@
 
 <% if (previewPost && previewPost.length) { %>
   <div class="card">
-    <h3 style="margin-top:0;">Dry run preview — Post-due reminders (first <%= previewPost.length %>)</h3>
+    <h3 style="margin-top:0;">Dry run preview â Post-due reminders (first <%= previewPost.length %>)</h3>
     <table>
       <thead>
         <tr>
@@ -142,6 +142,9 @@
         <th>Days before due</th>
         <th>Post-due reminder</th>
         <th>Days after due</th>
+        <th>QBO Email</th>
+        <th>Override Email</th>
+        <th>CC Email</th>
       </tr>
     </thead>
     <tbody>
@@ -156,7 +159,10 @@
             <td><%= r.reminder_days_before_due %></td>
             <td><%= r.enabled_post_due_reminder ? 'Yes' : '' %></td>
             <td><%= r.post_due_days_after_due %></td>
-          </tr>
+          
+          <td style="font-size:0.82em;color:#888"><%- r.qbo_email || '' %></td>
+          <td><input type="text" name="override_email_<%- r.customer_id %>" value="<%- r.override_email || '' %>" placeholder="(use QBO)" style="width:150px;font-size:0.82em"></td>
+          <td><input type="text" name="cc_email_<%- r.customer_id %>" value="<%- r.cc_email || '' %>" placeholder="CC (optional)" style="width:150px;font-size:0.82em"></td></tr>
         <% }) %>
       <% } %>
     </tbody>
