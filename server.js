@@ -73,7 +73,7 @@ async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
 async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 12 }) {
   let lastErr = null;
 
-  // ~2ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ3 minutes total worst-case. Good for bursts.
+  // ~2ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ3 minutes total worst-case. Good for bursts.
   const delays = [1500, 2500, 4000, 6500, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000];
 
   for (let i = 0; i < retries; i++) {
@@ -294,8 +294,8 @@ function daysBetween(a, b) {
 }
 
 function todayISO() {
-  const now = new Date();
-  return now.toISOString().slice(0, 10);
+  // Use Pacific time so future-dated invoices aren't sent early due to UTC offset
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 }
 
 // ==========================================================
@@ -758,7 +758,7 @@ app.post('/inventory/allocate/apply', async (req, res) => {
     const plan = buildPlanFromInvoice(invoice);
     applyPlan(plan);
 
-    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Allocation applied successfully.', plan });
+    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Allocation applied successfully.', plan });
   } catch (e) {
     const conn = db.getConnection();
     return res.status(400).render('inventory_allocate', { connected: !!conn, msg: e?.message || String(e), plan: null });
@@ -1163,7 +1163,10 @@ app.get('/admin/email-automation', requireConnected, (req, res) => {
       enabled_reminder: Number(s.enabled_reminder || 0),
       reminder_days_before_due: Number(s.reminder_days_before_due || 3),
       enabled_post_due_reminder: Number(s.enabled_post_due_reminder || 0),
-      post_due_days_after_due: Number(s.post_due_days_after_due || 3)
+      post_due_days_after_due: Number(s.post_due_days_after_due || 3),
+      qbo_email: c.qbo_email || null,
+      override_email: c.override_email || null,
+      cc_email: c.cc_email || null
     };
   });
 
@@ -1275,7 +1278,7 @@ async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
 async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 12 }) {
   let lastErr = null;
 
-  // ~2ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ3 minutes total worst-case. Good for bursts.
+  // ~2ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ3 minutes total worst-case. Good for bursts.
   const delays = [1500, 2500, 4000, 6500, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000];
 
   for (let i = 0; i < retries; i++) {
@@ -1960,7 +1963,7 @@ app.post('/inventory/allocate/apply', async (req, res) => {
     const plan = buildPlanFromInvoice(invoice);
     applyPlan(plan);
 
-    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Allocation applied successfully.', plan });
+    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Allocation applied successfully.', plan });
   } catch (e) {
     const conn = db.getConnection();
     return res.status(400).render('inventory_allocate', { connected: !!conn, msg: e?.message || String(e), plan: null });
