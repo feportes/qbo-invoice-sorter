@@ -72,7 +72,7 @@ async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
 async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 12 }) {
   let lastErr = null;
 
-  // ~2â3 minutes total worst-case. Good for bursts.
+  // ~2Ã¢ÂÂ3 minutes total worst-case. Good for bursts.
   const delays = [1500, 2500, 4000, 6500, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000];
 
   for (let i = 0; i < retries; i++) {
@@ -753,10 +753,214 @@ app.post('/inventory/allocate/apply', async (req, res) => {
     const plan = buildPlanFromInvoice(invoice);
     applyPlan(plan);
 
-    return res.render('inventory_allocate', { connected: true, msg: 'â Allocation applied successfully.', plan });
+    return res.render('inventory_allocate', { connected: true, msg: 'Ã¢ÂÂ Allocation applied successfully.', plan });
   } catch (e) {
     const conn = db.getConnection();
     return res.status(400).render('inventory_allocate', { connected: !!conn, msg: e?.message || String(e), plan: null });
+  }
+});
+
+// ==========================================================
+// INVENTORY ROUTES
+// ==========================================================
+
+// Helper: build left/right slot arrays for a container
+function buildContainerSlots(containerNo, db) {
+  const { leftMax, rightMax, flip } = db.getContainerDepths(containerNo);
+  const pallets = db.listPalletsInContainer(containerNo);
+  const palletMap = {};
+  for (const p of pallets) palletMap[p.location_code] = p;
+  const left = [];
+  for (let d = 1; d <= leftMax; d++) {
+    const code = `C${containerNo}-L-${String(d).padStart(2,'0')}`;
+    left.push({ code, depth: d, pallet: palletMap[code] || null });
+  }
+  const right = [];
+  for (let d = 1; d <= rightMax; d++) {
+    const code = `C${containerNo}-R-${String(d).padStart(2,'0')}`;
+    right.push({ code, depth: d, pallet: palletMap[code] || null });
+  }
+  return { left, right, flip, leftMax, rightMax };
+}
+
+// GET /inventory/map
+app.get('/inventory/map', requireConnected, (req, res) => {
+  try {
+    const containers = db.listContainers();
+    let defaultC = 1;
+    for (const c of containers) {
+      const pallets = db.listPalletsInContainer(c.containerNo);
+      if (pallets.length > 0) { defaultC = c.containerNo; break; }
+    }
+    const containerNo = parseInt(req.query.c || defaultC, 10);
+    const { left, right, flip } = buildContainerSlots(containerNo, db);
+    const c1Mode = db.getSetting('container_mode_C1') || 'S';
+    const slotOptions = db.listValidSlotCodes(containerNo);
+    const walkinPallets = db.listPalletsInWalkin();
+    const walkinLoose   = db.listWalkinLoose();
+    const returnsPallets = db.listPalletsInReturns();
+    res.render('inventory_map', {
+      containerNo, c1Mode, containers, left, right, flip,
+      walkinPallets, walkinLoose, returnsPallets, slotOptions,
+      msg: String(req.query.msg || '') || null
+    });
+  } catch (e) {
+    res.status(500).send(`Inventory map error: ${e?.message || e}`);
+  }
+});
+
+// GET /inventory/walkin
+app.get('/inventory/walkin', requireConnected, (req, res) => {
+  try {
+    const pallets = db.listPalletsInWalkin();
+    const groupMap = {};
+    for (const p of pallets) {
+      const key = p.sku_id;
+      if (!groupMap[key]) groupMap[key] = { sku_name: p.sku_name, sku_id: p.sku_id, slots: [] };
+      groupMap[key].slots.push(p);
+    }
+    const slotGroups = Object.values(groupMap);
+    const rows = pallets;
+    res.render('inventory_walkin', { pallets, slotGroups, rows });
+  } catch (e) {
+    res.status(500).send(`Walk-in error: ${e?.message || e}`);
+  }
+});
+
+// GET /inventory/returns
+app.get('/inventory/returns', requireConnected, (req, res) => {
+  try {
+    const pallets = db.listPalletsInReturns();
+    res.render('inventory_returns', { pallets });
+  } catch (e) {
+    res.status(500).send(`Returns error: ${e?.message || e}`);
+  }
+});
+
+// GET /inventory/yard
+app.get('/inventory/yard', requireConnected, (req, res) => {
+  try {
+    const yard = db.listPalletsByLocationCode('YARD') || [];
+    const modeLabel = 'Grid View';
+    const rangeLabel = `${yard.length} pallet(s)`;
+    res.render('inventory_yard', { yard, modeLabel, rangeLabel });
+  } catch (e) {
+    res.status(500).send(`Yard error: ${e?.message || e}`);
+  }
+});
+
+// GET /inventory/add-pallet
+app.get('/inventory/add-pallet', requireConnected, (req, res) => {
+  try {
+    const containerNo = parseInt(req.query.c || 1, 10);
+    const containers = db.listContainers();
+    const { left, right } = buildContainerSlots(containerNo, db);
+    const skus = db.listSkusActiveOnly();
+    const configs = db.listPalletConfigsAll();
+    res.render('inventory_add_pallet', {
+      containerNo, containers, left, right, skus, configs,
+      msg: String(req.query.msg || '') || null
+    });
+  } catch (e) {
+    res.status(500).send(`Add pallet error: ${e?.message || e}`);
+  }
+});
+
+// POST /inventory/add-pallet
+app.post('/inventory/add-pallet', requireConnected, async (req, res) => {
+  try {
+    const { sku_id, lot_id, pallet_config_id, location_code, qty_units, pallet_tag, notes, containerNo } = req.body;
+    if (!sku_id || !location_code || !qty_units) throw new Error('Missing required fields');
+    db.createPallet({
+      skuId: Number(sku_id),
+      lotId: lot_id ? Number(lot_id) : null,
+      palletConfigId: pallet_config_id ? Number(pallet_config_id) : null,
+      locationCode: String(location_code),
+      qtyUnits: Number(qty_units),
+      palletTag: pallet_tag || null,
+      notes: notes || null,
+      userName: 'admin'
+    });
+    const c = containerNo || 1;
+    res.redirect(`/inventory/add-pallet?c=${c}&msg=${encodeURIComponent('Pallet added.')}`);
+  } catch (e) {
+    res.redirect(`/inventory/add-pallet?msg=${encodeURIComponent('Error: ' + (e?.message || e))}`);
+  }
+});
+
+// POST /inventory/move (form-based)
+app.post('/inventory/move', requireConnected, (req, res) => {
+  try {
+    const { pallet_id, to_location_code, redirect_to } = req.body;
+    if (!pallet_id || !to_location_code) throw new Error('Missing pallet_id or to_location_code');
+    const loc = db.getLocationByCode(String(to_location_code));
+    if (!loc) throw new Error(`Unknown location: ${to_location_code}`);
+    db.movePallet(Number(pallet_id), loc.id, 'user');
+    const back = redirect_to || '/inventory/map';
+    res.redirect(`${back}?msg=${encodeURIComponent('Pallet moved.')}`);
+  } catch (e) {
+    const back = req.body.redirect_to || '/inventory/map';
+    res.redirect(`${back}?msg=${encodeURIComponent('Move failed: ' + (e?.message || e))}`);
+  }
+});
+
+// POST /inventory/move-json (drag-drop AJAX)
+app.post('/inventory/move-json', requireConnected, (req, res) => {
+  try {
+    const { pallet_id, to_location_code } = req.body;
+    if (!pallet_id || !to_location_code) throw new Error('Missing pallet_id or to_location_code');
+    const loc = db.getLocationByCode(String(to_location_code));
+    if (!loc) throw new Error(`Unknown location: ${to_location_code}`);
+    db.movePallet(Number(pallet_id), loc.id, 'user');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+// POST /inventory/break-to-walkin
+app.post('/inventory/break-to-walkin', requireConnected, (req, res) => {
+  try {
+    const { pallet_id, qty, redirect_to } = req.body;
+    if (!pallet_id) throw new Error('Missing pallet_id');
+    db.breakPalletToWalkin(Number(pallet_id), qty ? Number(qty) : null, 'user');
+    const back = redirect_to || '/inventory/map';
+    res.redirect(`${back}?msg=${encodeURIComponent('Pallet broken to walk-in.')}`);
+  } catch (e) {
+    const back = req.body.redirect_to || '/inventory/map';
+    res.redirect(`${back}?msg=${encodeURIComponent('Break failed: ' + (e?.message || e))}`);
+  }
+});
+
+// GET /inventory/settings/containers
+app.get('/inventory/settings/containers', requireConnected, (req, res) => {
+  try {
+    const c = {};
+    for (let n = 1; n <= 7; n++) {
+      c[`C${n}`] = {
+        mode:  db.getSetting(`container_mode_C${n}`)  || (n === 1 ? 'S' : 'L'),
+        flip:  db.getSetting(`container_flip_C${n}`)  || '0',
+        label: n === 1 ? '20ft' : '40ft'
+      };
+    }
+    res.render('inventory_container_settings', { c, msg: String(req.query.msg || '') || null });
+  } catch (e) {
+    res.status(500).send(`Container settings error: ${e?.message || e}`);
+  }
+});
+
+// POST /inventory/settings/containers
+app.post('/inventory/settings/containers', requireConnected, (req, res) => {
+  try {
+    for (let n = 1; n <= 7; n++) {
+      const mode = req.body[`mode_C${n}`] || (n === 1 ? 'S' : 'L');
+      const flip = req.body[`flip_C${n}`] === '1' ? '1' : '0';
+      db.setSetting(`container_mode_C${n}`, mode);
+      db.setSetting(`container_flip_C${n}`, flip);
+    }
+    res.redirect('/inventory/settings/containers?msg=' + encodeURIComponent('Container settings saved.'));
+  } catch (e) {
+    res.redirect('/inventory/settings/containers?msg=' + encodeURIComponent('Save failed: ' + (e?.message || e)));
   }
 });
 
