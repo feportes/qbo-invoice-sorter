@@ -1201,19 +1201,18 @@ app.post('/admin/email-automation/save', requireConnected, (req, res) => {
       const enabled_post_due_reminder = req.body[`enabled_post_due_reminder_${id}`] === 'on';
       const post_due_days_after_due = Number(req.body[`post_due_days_after_due_${id}`] || 3);
 
-      db.upsertEmailCustomerSettings({
-          customer_id: id,
-          enabled_send_invoice,
-          enabled_reminder,
-          reminder_days_before_due,
-          enabled_post_due_reminder,
-          post_due_days_after_due
-        });
-        db.saveCustomerEmailOverrides({
-          customer_id: id,
-          override_email: (req.body[`override_email_${id}`] || '').trim() || null,
-          cc_email: (req.body[`cc_email_${id}`] || '').trim() || null
-        });
+        db.upsertEmailCustomerSettings({
+        customer_id: id,
+        enabled_send_invoice,
+        enabled_reminder,
+        reminder_days_before_due,
+        enabled_post_due_reminder,
+        post_due_days_after_due
+      });
+      db.saveCustomerEmailOverrides({
+        customer_id: id,
+        override_email: (req.body[`override_email_${id}`] || '').trim() || null,
+        cc_email: (req.body[`cc_email_${id}`] || '').trim() || null
       });
     }
 
