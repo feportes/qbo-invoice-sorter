@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS inbound_doc_lines (
   net_kg REAL NULL,
   gross_kg REAL NULL,
 
-  lot_number TEXT NULL,            -- Batch N°
+  lot_number TEXT NULL,            -- Batch NÂ°
   sku_id INTEGER NULL,             -- mapped later
 
   FOREIGN KEY (inbound_doc_id) REFERENCES inbound_docs(id)
@@ -220,7 +220,7 @@ CREATE TABLE IF NOT EXISTS sku_aliases (
     CREATE INDEX IF NOT EXISTS idx_movements_time ON inventory_movements(created_at);
   `);
 
-// ✅ Email automation tables
+// â Email automation tables
 try {
   s.exec(`
     CREATE TABLE IF NOT EXISTS email_customer_settings (
@@ -244,7 +244,7 @@ try {
   `);
 } catch {}
 
-  // ✅ Safe migrations
+  // â Safe migrations
 try { s.exec(`ALTER TABLE email_customer_settings ADD COLUMN enabled_post_due_reminder INTEGER NOT NULL DEFAULT 0;`); } catch {}
 try { s.exec(`ALTER TABLE email_customer_settings ADD COLUMN post_due_days_after_due INTEGER NOT NULL DEFAULT 3;`); } catch {}
 
@@ -273,10 +273,10 @@ try {
   `);
 } catch {}
 
-  // ✅ Inbound docs: store extracted PDF text for reload/debug/inspection
+  // â Inbound docs: store extracted PDF text for reload/debug/inspection
   try { s.exec(`ALTER TABLE inbound_docs ADD COLUMN raw_text TEXT;`); } catch {}
 
-  // ✅ Allocation tracking
+  // â Allocation tracking
   try {
     s.exec(`
       CREATE TABLE IF NOT EXISTS invoice_allocations (
@@ -294,7 +294,7 @@ try {
     `);
   } catch {}
 
-  // ✅ Engine state tables
+  // â Engine state tables
   try {
     s.exec(`
       CREATE TABLE IF NOT EXISTS invoice_state (
@@ -316,7 +316,7 @@ try {
     `);
   } catch {}
 
-  // ✅ Lot Audit Allocations (does NOT change inventory)
+  // â Lot Audit Allocations (does NOT change inventory)
   try {
     s.exec(`
       CREATE TABLE IF NOT EXISTS invoice_lot_audit_allocations (
@@ -337,7 +337,7 @@ try {
     `);
   } catch {}
 
-  // ✅ Invoice SKU Line Index (audit search/reporting)
+  // â Invoice SKU Line Index (audit search/reporting)
   try {
     s.exec(`
       CREATE TABLE IF NOT EXISTS invoice_sku_lines (
@@ -375,4 +375,35 @@ export function seedDefaults() {
 
   // Audit defaults
   if (!db.getSetting('organic_tracking_start')) db.setSetting('organic_tracking_start', '2025-01-01');
+}
+
+export function seedLocations() {
+  const insert = db.sqlite.prepare(
+    `INSERT OR IGNORE INTO locations (type, code, container_no, side, depth, enabled)
+     VALUES (@type, @code, @container_no, @side, @depth, 1)`
+  );
+
+  const run = db.sqlite.transaction(() => {
+    // Special locations
+    for (const code of ['WALKIN', 'YARD', 'RETURNS']) {
+      insert.run({ type: code, code, container_no: null, side: null, depth: null });
+    }
+
+    // Container 1 (20ft): max 5L + 4R in long mode, or 4L+4R short mode
+    // We seed the maximum possible slots (5L, 5R) and the config controls which are valid
+    for (let d = 1; d <= 5; d++) {
+      insert.run({ type: 'CONTAINER', code: `C1-L-${String(d).padStart(2,'0')}`, container_no: 1, side: 'L', depth: d });
+      insert.run({ type: 'CONTAINER', code: `C1-R-${String(d).padStart(2,'0')}`, container_no: 1, side: 'R', depth: d });
+    }
+
+    // Containers 2-7 (40ft): max 11L + 11R
+    for (let n = 2; n <= 7; n++) {
+      for (let d = 1; d <= 11; d++) {
+        insert.run({ type: 'CONTAINER', code: `C${n}-L-${String(d).padStart(2,'0')}`, container_no: n, side: 'L', depth: d });
+        insert.run({ type: 'CONTAINER', code: `C${n}-R-${String(d).padStart(2,'0')}`, container_no: n, side: 'R', depth: d });
+      }
+    }
+  });
+
+  run();
 }
