@@ -10,7 +10,12 @@ export async function syncCustomers(oauthClient, realmId) {
     const q = `select Id, DisplayName, PrimaryEmailAddr from Customer startposition ${start} maxresults ${pageSize}`;
     const r = await qboQuery(oauthClient, realmId, q);
     const customers = r?.QueryResponse?.Customer || [];
-    for (const c of cdb.upsertCustomer({ id: c.Id, display_name: c.DisplayName || c.FullyQualifiedName || c.Id, qbo_email: c.PrimaryEmailAddr?.Address || null });c.Id}` });
+    for (const c of customers) {
+      db.upsertCustomer({
+        id: c.Id,
+        display_name: c.DisplayName || c.FullyQualifiedName || c.Id,
+        qbo_email: c.PrimaryEmailAddr?.Address || null
+      });
     }
     total += customers.length;
     if (customers.length < pageSize) break;
@@ -20,7 +25,6 @@ export async function syncCustomers(oauthClient, realmId) {
 }
 
 export async function syncCategories(oauthClient, realmId) {
-  // Categories are Items with Type = 'Category'
   let start = 1;
   const pageSize = 1000;
   let total = 0;
