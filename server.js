@@ -72,7 +72,7 @@ async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
 async function processInvoiceWithRetry({ oauthClient, realmId, invoiceId, source, retries = 12 }) {
   let lastErr = null;
 
-  // ~2ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ3 minutes total worst-case. Good for bursts.
+  // ~2ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ3 minutes total worst-case. Good for bursts.
   const delays = [1500, 2500, 4000, 6500, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000];
 
   for (let i = 0; i < retries; i++) {
@@ -757,7 +757,7 @@ app.post('/inventory/allocate/apply', async (req, res) => {
     const plan = buildPlanFromInvoice(invoice);
     applyPlan(plan);
 
-    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Allocation applied successfully.', plan });
+    return res.render('inventory_allocate', { connected: true, msg: 'ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ Allocation applied successfully.', plan });
   } catch (e) {
     const conn = db.getConnection();
     return res.status(400).render('inventory_allocate', { connected: !!conn, msg: e?.message || String(e), plan: null });
@@ -781,12 +781,12 @@ function buildContainerSlots(containerNo, db) {
   for (const p of pallets) palletMap[p.location_code] = p;
   const left = [];
   for (let d = 1; d <= leftMax; d++) {
-    const code = `C${containerNo}-L-${String(d).padStart(2,'0')}`;
+    const code = `C${containerNo}-L${String(d).padStart(2,'0')}`;
     left.push({ code, depth: d, pallet: palletMap[code] || null });
   }
   const right = [];
   for (let d = 1; d <= rightMax; d++) {
-    const code = `C${containerNo}-R-${String(d).padStart(2,'0')}`;
+    const code = `C${containerNo}-R${String(d).padStart(2,'0')}`;
     right.push({ code, depth: d, pallet: palletMap[code] || null });
   }
   return { left, right, flip, leftMax, rightMax };
@@ -795,11 +795,12 @@ function buildContainerSlots(containerNo, db) {
 // GET /inventory/map
 app.get('/inventory/map', requireConnected, (req, res) => {
   try {
-    const containers = db.listContainers();
+    const containers = db.listContainers(); // [1,2,3,4,5,6,7]
     let defaultC = 1;
-    for (const c of containers) {
-      const pallets = db.listPalletsInContainer(c.containerNo);
-      if (pallets.length > 0) { defaultC = c.containerNo; break; }
+    for (const cn of containers) {
+      const containerNo = (typeof cn === 'object') ? (cn.containerNo ?? cn.container_no) : Number(cn);
+      const pallets = db.listPalletsInContainer(containerNo);
+      if (pallets.length > 0) { defaultC = containerNo; break; }
     }
     const containerNo = parseInt(req.query.c || defaultC, 10);
     const { left, right, flip } = buildContainerSlots(containerNo, db);
@@ -852,9 +853,9 @@ app.get('/inventory/yard', requireConnected, (req, res) => {
     const containers = db.listContainers();
     const yard = containers.map(cont => {
       // Normalize: db may return container_no (snake) or containerNo (camel)
-      const containerNo = cont.containerNo ?? cont.container_no ?? cont.id;
+      const containerNo = (typeof cont === 'object') ? (cont.containerNo ?? cont.container_no ?? cont.id) : Number(cont);
       const { left, right, flip } = buildContainerSlots(containerNo, db);
-      return { ...cont, containerNo, left, right, flip };
+      return { containerNo, left, right, flip };
     });
     const c1Mode = db.getSetting('container_mode_C1') || 'S';
     res.render('inventory_yard', { yard, c1Mode, modeLabel: 'Grid View', rangeLabel: '' });
@@ -919,7 +920,7 @@ app.post('/inventory/move', requireConnected, (req, res) => {
 });
 
 // POST /inventory/move-json (drag-drop AJAX)
-app.post('/inventory/move-json', requireConnected, (req, res) => {
+app.post('/inventory/move-json', requireConnected, express.json(), (req, res) => {
   try {
     // Accept both JSON body and urlencoded
     const body = req.body || {};
@@ -988,7 +989,7 @@ app.post('/webhooks/qbo', verifyIntuitWebhook, async (req, res) => {
   res.status(200).send('OK');
 
   try {
-    const payload = req.body;
+    const payload = req.body?.data ?? req.body; // support both old and new CloudEvents format (Intuit migration due May 15 2026)
     const notifications = payload?.eventNotifications || [];
     const invoiceIds = [];
 
