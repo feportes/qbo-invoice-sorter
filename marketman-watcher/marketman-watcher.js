@@ -53,21 +53,28 @@ const SCOPES = [
 ];
 
 async function getGmailClient() {
-  if (!fs.existsSync(CONFIG.CREDENTIALS_FILE)) {
-    throw new Error(
-      `Missing credentials.json — download it from Google Cloud Console and place it at:\n  ${CONFIG.CREDENTIALS_FILE}`
-    );
+  let credentials;
+
+  // On Render: read from environment variables (base64 encoded)
+  if (process.env.CREDENTIALS_JSON_B64) {
+    credentials = JSON.parse(Buffer.from(process.env.CREDENTIALS_JSON_B64, 'base64').toString('utf-8'));
+  } else if (fs.existsSync(CONFIG.CREDENTIALS_FILE)) {
+    credentials = JSON.parse(fs.readFileSync(CONFIG.CREDENTIALS_FILE));
+  } else {
+    throw new Error('Missing credentials — set CREDENTIALS_JSON_B64 env var or provide credentials.json');
   }
 
-  const credentials = JSON.parse(fs.readFileSync(CONFIG.CREDENTIALS_FILE));
   const { client_secret, client_id, redirect_uris } = credentials.installed || credentials.web;
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 
-  if (fs.existsSync(CONFIG.TOKEN_FILE)) {
+  // On Render: read token from environment variable (base64 encoded)
+  if (process.env.TOKEN_JSON_B64) {
+    const token = JSON.parse(Buffer.from(process.env.TOKEN_JSON_B64, 'base64').toString('utf-8'));
+    oAuth2Client.setCredentials(token);
+  } else if (fs.existsSync(CONFIG.TOKEN_FILE)) {
     const token = JSON.parse(fs.readFileSync(CONFIG.TOKEN_FILE));
     oAuth2Client.setCredentials(token);
   } else {
-    // First-time auth — print URL and wait for code
     const authUrl = oAuth2Client.generateAuthUrl({ access_type: 'offline', scope: SCOPES });
     console.log('\n🔐 Authorize this app by visiting:\n');
     console.log('  ' + authUrl);
