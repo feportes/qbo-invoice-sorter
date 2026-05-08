@@ -1,0 +1,15 @@
+{
+    "name": "marketman-watcher",
+    "version": "1.0.0",
+    "description": "Watches for MarketMan orders and forwards to Cut+Dry",
+    "main": "marketman-watcher.js",
+    "scripts": {
+          "start": "node marketman-watcher.js",
+          "watch": "node marketman-watcher.js --watch"
+    },
+    "dependencies": {
+          "cheerio": "^1.0.0",
+          "googleapis": "^140.0.0",
+          "node-fetch": "^2.7.0"
+    }
+}
