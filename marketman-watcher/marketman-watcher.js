@@ -413,9 +413,11 @@ function formatOrderForCutDry(order) {
   lines.push('Items:');
   if (order.items.length > 0) {
     for (const item of order.items) {
-      // Format: "Product Name: Qty TotalQty"
-      // e.g.  "Peanuts 5 lb: 1 (5 lb)"
-      let line = `- ${item.product}: ${item.quantity}`;
+      // Format: "[SKU] Product Name: Qty (TotalQty) @ Price"
+      // e.g.  "[000014] Cacao Nibs - Organic - 5 LB: 1 (5 lb) @ $58.50"
+      let line = '- ';
+      if (item.itemCode) line += `[${item.itemCode}] `;
+      line += `${item.product}: ${item.quantity}`;
       if (item.totalQty && item.totalQty !== item.quantity) {
         line += ` (${item.totalQty})`;
       }
