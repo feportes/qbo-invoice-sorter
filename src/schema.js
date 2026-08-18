@@ -259,6 +259,8 @@ try { s.exec(`ALTER TABLE email_customer_settings ADD COLUMN post_due_days_after
     try { s.exec(`ALTER TABLE skus ADD COLUMN needs_barcode INTEGER NOT NULL DEFAULT 0;`); } catch {}
     try { s.exec(`ALTER TABLE skus ADD COLUMN barcode_code TEXT;`); } catch {}
     try { s.exec(`CREATE INDEX IF NOT EXISTS idx_skus_needs_barcode ON skus(needs_barcode);`); } catch {}
+      // The actual SKU value set on the Item in QuickBooks (Item.Sku) - distinct from our internal row id
+      try { s.exec(`ALTER TABLE skus ADD COLUMN qbo_sku TEXT;`); } catch {}
 try {
   s.exec(`
     CREATE TABLE IF NOT EXISTS email_customer_settings (
