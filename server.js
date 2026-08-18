@@ -1158,7 +1158,7 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
 // ==========================================================
 // Inventory: Barcode Labels (print sheet for SKUs flagged "needs barcode")
 // ==========================================================
-app.get('/inventory/settings/skus/labels', requireConnected, (req, res) => {
+app.get('/inventory/settings/skus/debug-item/:id', requireConnected, async (req, res) => { try { const conn = db.getConnectionOrThrow(); const oauthClient = getOAuthClient(conn); const q = `select Id, Name, Sku, Type, Active, ParentRef from Item where Id = '${req.params.id}'`; const r = await qboQuery(oauthClient, conn.realm_id, q); res.json(r); } catch (e) { res.status(500).json({ error: e?.message || String(e) }); } }); app.get('/inventory/settings/skus/labels', requireConnected, (req, res) => {
     try {
           const selectedCat = (req.query.cat || 'all').toString();
           const skus = db.listSkusNeedingBarcode({ categoryId: selectedCat });
