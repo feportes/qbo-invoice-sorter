@@ -134,7 +134,7 @@
 <script>
 (function(){
   var ITEMS = <%- JSON.stringify((skus || []).map(function(s){
-    return { name: s.name, code: s.barcode_code || s.qbo_item_id || ('SKU-' + s.id) };
+            return { name: s.name, code: s.barcode_code || ('SKU-' + s.id) };
   })) %>;
 
   if (!ITEMS.length) return;
