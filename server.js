@@ -1126,7 +1126,7 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
       const items = r?.QueryResponse?.Item || [];
 
       for (const it of items) {
-        if (!globalThis.__debugSample) globalThis.__debugSample = []; if (globalThis.__debugSample.length < 5) globalThis.__debugSample.push(it); if (!it?.Id || !it?.Name) continue;
+        if (!it?.Id || !it?.Name) continue;
         if (String(it.Type || '').toLowerCase() === 'category') continue;
 
         const parentCatId = it?.ParentRef?.value ? String(it.ParentRef.value) : null;
@@ -1146,7 +1146,7 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
     const categories = db.listCategoriesOrdered();
     const selectedCat = 'all';
     const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
-    res.render('inventory_sku_settings', { skus, msg: 'Synced. RAW SAMPLE: ' + JSON.stringify(globalThis.__debugSample || []), categories, selectedCat });
+    res.render('inventory_sku_settings', { skus, msg: 'Synced items from QuickBooks.', categories, selectedCat });
   } catch (e) {
     const categories = db.listCategoriesOrdered();
     const selectedCat = 'all';
