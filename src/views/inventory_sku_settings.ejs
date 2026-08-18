@@ -144,6 +144,7 @@
           <th class="select-col">Save?</th>
           <th>Name</th>
           <th class="w-160">QBO Item ID</th>
+          <th class="w-160">QBO SKU</th>
           <th class="w-90">Active</th>
           <th class="w-90">Lot</th>
           <th class="w-90">Organic</th>
@@ -168,6 +169,8 @@
             </td>
 
             <td class="qboid"><%= s.qbo_item_id || '' %></td>
+
+            <td class="qboid"><%= s.qbo_sku || '' %></td>
 
             <td>
               <input class="checkbox trackField" type="checkbox"
@@ -218,10 +221,10 @@
             <td>
               <input class="trackField" type="text"
                      name="barcode_code_<%= s.id %>"
-                     placeholder="SKU-<%= s.id %>"
+placeholder="<%= s.qbo_sku ? s.qbo_sku : ('SKU-' + s.id) %>"
                      value="<%= s.barcode_code || '' %>"
                      data-initial="<%= s.barcode_code || '' %>"/>
-              <div class="muted">blank = SKU ID</div>
+              <div class="muted">blank = QBO SKU<%= s.qbo_sku ? '' : ' (none set - using internal id)' %></div>
             </td>
           </tr>
         <% }) %>
