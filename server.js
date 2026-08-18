@@ -1121,7 +1121,7 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
     const pageSize = 1000;
 
     while (true) {
-      const q = `select Id, Name, Type, Active, ParentRef from Item startposition ${start} maxresults ${pageSize}`;
+                const q = `select Id, Name, Sku, Type, Active, ParentRef from Item startposition ${start} maxresults ${pageSize}`;
       const r = await qboQuery(oauthClient, conn.realm_id, q);
       const items = r?.QueryResponse?.Item || [];
 
@@ -1134,7 +1134,8 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
         db.upsertSkuFromQbo({
           qbo_item_id: String(it.Id),
           name: String(it.Name),
-          qbo_category_id: parentCatId
+          qbo_category_id: parentCatId,
+                    qbo_sku: it.Sku ? String(it.Sku) : null
         });
       }
 
