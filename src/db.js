@@ -1711,14 +1711,20 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   // ==========================================================
   // SKU Sync / Filter
   // ==========================================================
-  upsertSkuFromQbo({ qbo_item_id, name, qbo_category_id }) {
-    sqlite.prepare(`
-      INSERT INTO skus (qbo_item_id, name, unit_type, is_organic, is_lot_tracked, active, qbo_category_id)
-      VALUES (?, ?, 'unit', 0, 0, 1, ?)
-      ON CONFLICT(qbo_item_id) DO UPDATE SET
-        name = excluded.name,
-        qbo_category_id = excluded.qbo_category_id
-    `).run(String(qbo_item_id), String(name), qbo_category_id ? String(qbo_category_id) : null);
+  upsertSkuFromQbo({ qbo_item_id, name, qbo_category_id, qbo_sku }) {
+        sqlite.prepare(`
+              INSERT INTO skus (qbo_item_id, name, unit_type, is_organic, is_lot_tracked, active, qbo_category_id, qbo_sku)
+                    VALUES (?, ?, 'unit', 0, 0, 1, ?, ?)
+                          ON CONFLICT(qbo_item_id) DO UPDATE SET
+                                  name = excluded.name,
+                                          qbo_category_id = excluded.qbo_category_id,
+                                                  qbo_sku = excluded.qbo_sku
+                                                      `).run(
+                String(qbo_item_id),
+                String(name),
+                qbo_category_id ? String(qbo_category_id) : null,
+                (qbo_sku === undefined || qbo_sku === null || String(qbo_sku).trim() === '') ? null : String(qbo_sku).trim()
+              );
   },
 
   listSkusAllFiltered({ categoryId = null } = {}) {
