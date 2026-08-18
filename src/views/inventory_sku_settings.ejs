@@ -115,6 +115,15 @@
     </form>
 
     <span class="muted">Tip: run <a href="/admin/sync">Admin Sync</a> to pull categories first.</span>
+
+    <a href="/inventory/settings/skus/labels?cat=<%= selectedCat %>" target="_blank"
+       style="margin-left:auto; padding:10px 14px; border-radius:10px; border:1px solid #333; background:#fff; color:#111; text-decoration:none;">
+      Print Barcode Labels
+    </a>
+  </div>
+  <div class="muted" style="margin-top:6px;">
+    Check the <b>Barcode</b> box on the products you want labels for, then click <b>Save changed</b> before printing -
+    the print page only includes products saved with Barcode checked, filtered by the category dropdown above.
   </div>
 
   <!-- BULK SAVE FORM WRAPS TABLE -->
@@ -140,6 +149,8 @@
           <th class="w-90">Organic</th>
           <th class="w-90">Unit</th>
           <th class="w-160">Pallet threshold</th>
+          <th class="w-90">Barcode</th>
+          <th class="w-160">Barcode code</th>
         </tr>
       </thead>
 
@@ -195,6 +206,22 @@
                      value="<%= (s.pallet_pick_threshold === null || typeof s.pallet_pick_threshold === 'undefined') ? '' : s.pallet_pick_threshold %>"
                      data-initial="<%= (s.pallet_pick_threshold === null || typeof s.pallet_pick_threshold === 'undefined') ? '' : s.pallet_pick_threshold %>"/>
               <div class="muted">0.80 = 80%</div>
+            </td>
+
+            <td>
+              <input class="checkbox trackField" type="checkbox"
+                     name="needs_barcode_<%= s.id %>"
+                     <%= s.needs_barcode ? 'checked' : '' %>
+                     data-initial="<%= s.needs_barcode ? '1' : '0' %>"/>
+            </td>
+
+            <td>
+              <input class="trackField" type="text"
+                     name="barcode_code_<%= s.id %>"
+                     placeholder="<%= s.qbo_item_id ? ('QBO #' + s.qbo_item_id) : ('SKU-' + s.id) %>"
+                     value="<%= s.barcode_code || '' %>"
+                     data-initial="<%= s.barcode_code || '' %>"/>
+              <div class="muted">blank = QBO item ID</div>
             </td>
           </tr>
         <% }) %>
