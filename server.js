@@ -1074,13 +1074,18 @@ app.post('/inventory/settings/skus/bulk-save', requireConnected, (req, res) => {
         throw new Error(`Pallet threshold must be between 0.10 and 1.00 (or blank). SKU ${skuId}`);
       }
 
-      db.updateSkuSettings({
+const needs_barcode = req.body[`needs_barcode_${skuId}`] === 'on' ? 1 : 0;
+            const barcode_code = req.body[`barcode_code_${skuId}`];
+      
+            db.updateSkuSettings({
         sku_id: skuId,
         active,
         is_organic,
         is_lot_tracked,
         unit_type,
-        pallet_pick_threshold: threshold
+        pallet_pick_threshold: threshold,
+                      needs_barcode,
+                      barcode_code
       });
     }
 
@@ -1147,6 +1152,20 @@ app.post('/inventory/settings/skus/sync', requireConnected, async (req, res) => 
     const skus = db.listSkusAllFiltered({ categoryId: selectedCat });
     res.status(500).render('inventory_sku_settings', { skus, msg: `Sync failed: ${e?.message || e}`, categories, selectedCat });
   }
+});
+
+// ==========================================================
+// Inventory: Barcode Labels (print sheet for SKUs flagged "needs barcode")
+// ==========================================================
+app.get('/inventory/settings/skus/labels', requireConnected, (req, res) => {
+    try {
+          const selectedCat = (req.query.cat || 'all').toString();
+          const skus = db.listSkusNeedingBarcode({ categoryId: selectedCat });
+          const categories = db.listCategoriesOrdered();
+          res.render('inventory_barcode_labels', { skus, categories, selectedCat });
+    } catch (e) {
+          res.status(500).send(`Barcode labels failed: ${e?.message || e}`);
+    }
 });
 
 // ==========================================================
