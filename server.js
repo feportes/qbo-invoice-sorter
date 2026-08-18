@@ -44,7 +44,7 @@ app.use(morgan('dev'));
 
 // Body parsing (webhooks need raw body)
 app.use(express.json({ verify: rawBodySaver, limit: '2mb' }));
-app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb', parameterLimit: 100000 }));
 
 async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
   const raw = String(invoiceIdOrDocNumber || '').trim();
