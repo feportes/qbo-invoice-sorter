@@ -218,10 +218,10 @@
             <td>
               <input class="trackField" type="text"
                      name="barcode_code_<%= s.id %>"
-                     placeholder="<%= s.qbo_item_id ? ('QBO #' + s.qbo_item_id) : ('SKU-' + s.id) %>"
+                     placeholder="SKU-<%= s.id %>"
                      value="<%= s.barcode_code || '' %>"
                      data-initial="<%= s.barcode_code || '' %>"/>
-              <div class="muted">blank = QBO item ID</div>
+              <div class="muted">blank = SKU ID</div>
             </td>
           </tr>
         <% }) %>
