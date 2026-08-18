@@ -1731,24 +1731,37 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
     return sqlite.prepare(`SELECT * FROM skus WHERE qbo_category_id=? ORDER BY name COLLATE NOCASE`).all(String(categoryId));
   },
 
-  updateSkuSettings({ sku_id, active, is_organic, is_lot_tracked, unit_type, pallet_pick_threshold }) {
-    sqlite.prepare(`
-      UPDATE skus
-      SET active = ?,
-          is_organic = ?,
-          is_lot_tracked = ?,
-          unit_type = ?,
-          pallet_pick_threshold = ?
-      WHERE id = ?
-    `).run(
-      active,
-      is_organic,
-      is_lot_tracked,
-      unit_type,
-      pallet_pick_threshold,
-      sku_id
-    );
+  updateSkuSettings({ sku_id, active, is_organic, is_lot_tracked, unit_type, pallet_pick_threshold, needs_barcode, barcode_code }) {
+        sqlite.prepare(`
+              UPDATE skus
+                    SET active = ?,
+                              is_organic = ?,
+                                        is_lot_tracked = ?,
+                                                  unit_type = ?,
+                                                            pallet_pick_threshold = ?,
+                                                                      needs_barcode = ?,
+                                                                                barcode_code = ?
+                                                                                      WHERE id = ?
+                                                                                          `).run(
+                active,
+                is_organic,
+                is_lot_tracked,
+                unit_type,
+                pallet_pick_threshold,
+                needs_barcode ? 1 : 0,
+                (barcode_code === undefined || barcode_code === null || String(barcode_code).trim() === '') ? null : String(barcode_code).trim(),
+                sku_id
+              );
   },
+
+    // SKUs flagged for barcode labels, optionally filtered by category (same filter as the settings page)
+    listSkusNeedingBarcode({ categoryId = null } = {}) {
+          if (!categoryId || categoryId === 'all') {
+                  return sqlite.prepare(`SELECT * FROM skus WHERE needs_barcode=1 ORDER BY name COLLATE NOCASE`).all();
+          }
+          if (categoryId === 'uncategorized') {
+                  return sqlite.prepare(`SELECT * FROM skus WHERE needs_barcode=1 AND qbo_category_id IS NULL ORDER BY name COLLATE NOCASE`).all();
+          }
+          return sqlite.prepare(`SELECT * FROM skus WHERE needs_barcode=1 AND qbo_category_id=? ORDER BY name COLLATE NOCASE`).all(String(categoryId));
+    },
 };
-
-
