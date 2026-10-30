@@ -1,9 +1,10 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8"/>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Add Pallet</title>
   <style>
+    * { box-sizing: border-box; }
     body { font-family: system-ui; margin: 24px; max-width: 1000px; }
     .muted { color:#666; font-size:13px; }
     a { color:#111; text-decoration:none; }
@@ -49,6 +50,7 @@
 
 <% if (msg) { %><div class="msg"><%= msg %></div><% } %>
 
+<% if(loadingNote) { %><p><strong>Loading note:</strong> <%= loadingNote %>. Match the product and its units; check existing stock before receiving a new pallet.</p><% } %>
 <div class="card">
   <form method="get" action="/inventory/add-pallet" class="topbar">
     <label style="margin:0;">
@@ -62,16 +64,20 @@
   </form>
 
   <form method="post" action="/inventory/add-pallet" id="addForm">
-    <input type="hidden" name="container_no" value="<%= containerNo %>"/>
-    <input type="hidden" name="location_code" id="location_code" value=""/>
+    <input type="hidden" name="containerNo" value="<%= containerNo %>"/>
+    <input type="hidden" name="location_code" id="location_code" value="<%= selectedSlot %>"/>
 
     <div class="row" style="margin-top:12px;">
-      <div style="min-width:380px; flex:1;">
-        <label>SKU (active only)</label>
+      <div style="min-width:240px; flex:1;">
+        <label for="productSearch">Find frozen products, gelato, yogurt or sorbet</label>
+        <input id="productSearch" type="search" placeholder="Search product name" value="<%= productSearch %>" style="width:100%;margin-bottom:8px">
+        <label for="productCategory">Product category</label>
+        <select id="productCategory" style="width:100%;margin-bottom:8px"><option value="">All active products</option><option value="frozen">Frozen / gelato / yogurt / sorbet</option><% categories.forEach(cat=>{ %><option value="<%= cat.id %>"><%= cat.name %></option><% }); %></select>
+        <label>SKU (active only; uses the synced catalog)</label>
         <select name="sku_id" required style="width:100%;">
           <option value="">-- select SKU --</option>
           <% (skus || []).forEach(s => { %>
-            <option value="<%= s.id %>"><%= s.name %></option>
+            <option value="<%= s.id %>" data-category="<%= s.qbo_category_id || '' %>" data-category-name="<%= categories.find(c=>String(c.id)===String(s.qbo_category_id))?.name || '' %>"><%= s.name %> (<%= s.unit_type %>)</option>
           <% }) %>
         </select>
       </div>
@@ -83,7 +89,7 @@
 
       <div style="min-width:220px;">
         <label>Notes (optional)</label>
-        <input type="text" name="notes" placeholder="ex: received today" style="width:100%;" />
+        <input type="text" name="notes" value="<%= loadingNote %>" placeholder="ex: received today" style="width:100%;" />
       </div>
 
       <div>
@@ -95,10 +101,10 @@
       Selected slot: <b id="slotLabel">none</b>
     </div>
 
-    <div class="grid">
+    <p class="muted" style="text-align:center">BACK / CLOSED END</p><div class="grid">
       <div class="col">
-        <h3 style="margin:0 0 10px 0;">LEFT (L) <span class="muted">01 = closest to door</span></h3>
-        <% left.forEach(s => { %>
+        <h3 style="margin:0 0 10px 0;">LEFT (L) <span class="muted">01 = closest to door; back at top</span></h3>
+        <% [...left].reverse().forEach(s => { %>
           <div class="slot<%= s.pallet ? ' occupied' : '' %>" data-slot="<%= s.code %>">
             <div class="code"><%= s.code %></div>
             <% if (s.pallet) { %><div class="pallet-info"><strong><%= s.pallet.sku_name %></strong> &mdash; <%= s.pallet.qty_units %> <%= s.pallet.unit_type || 'units' %><% if (s.pallet.lot_number) { %> &bull; Lot <%= s.pallet.lot_number %><% } %></div><% } %>
@@ -107,15 +113,15 @@
       </div>
 
       <div class="col">
-        <h3 style="margin:0 0 10px 0;">RIGHT (R) <span class="muted">01 = closest to door</span></h3>
-        <% right.forEach(s => { %>
+        <h3 style="margin:0 0 10px 0;">RIGHT (R) <span class="muted">01 = closest to door; back at top</span></h3>
+        <% [...right].reverse().forEach(s => { %>
           <div class="slot<%= s.pallet ? ' occupied' : '' %>" data-slot="<%= s.code %>">
             <div class="code"><%= s.code %></div>
             <% if (s.pallet) { %><div class="pallet-info"><strong><%= s.pallet.sku_name %></strong> &mdash; <%= s.pallet.qty_units %> <%= s.pallet.unit_type || 'units' %><% if (s.pallet.lot_number) { %> &bull; Lot <%= s.pallet.lot_number %><% } %></div><% } %>
           </div>
         <% }) %>
       </div>
-    </div>
+    </div><p class="muted" style="text-align:center">DOOR / ENTRANCE</p>
   </form>
 </div>
 
@@ -126,6 +132,7 @@
 
   slots.forEach(el => {
     el.addEventListener('click', () => {
+      if (el.classList.contains('occupied')) return;
       slots.forEach(x => x.classList.remove('selected'));
       el.classList.add('selected');
       const code = el.dataset.slot;
@@ -133,6 +140,25 @@
       label.textContent = code;
     });
   });
+
+  const initial = [...slots].find(s => s.dataset.slot === loc.value && !s.classList.contains('occupied'));
+  if (initial) { initial.classList.add('selected'); label.textContent = loc.value; } else { loc.value = ''; }
+  const skuSelect = document.querySelector('select[name="sku_id"]');
+  const products = [...skuSelect.options].slice(1).map(o=>o.cloneNode(true));
+  function filterProducts() {
+    const q = document.getElementById('productSearch').value.toLowerCase();
+    const cat = document.getElementById('productCategory').value;
+    const selected = skuSelect.value;
+    skuSelect.replaceChildren(new Option('-- select SKU --', ''));
+    products.forEach(o=>{
+      const categoryMatch = !cat || (cat === 'frozen' ? /frozen|gelato|yog[hu]rt|sorbet|acai|açaí|pitaya|puree|purée|iqf/i.test(o.textContent+' '+o.dataset.categoryName) : o.dataset.category===cat);
+      if (categoryMatch && o.textContent.toLowerCase().includes(q)) skuSelect.append(o.cloneNode(true));
+    });
+    skuSelect.value = [...skuSelect.options].some(o=>o.value===selected) ? selected : '';
+  }
+  document.getElementById('productSearch').oninput = filterProducts;
+  document.getElementById('productCategory').onchange = filterProducts;
+  filterProducts();
 
   document.getElementById('addForm').addEventListener('submit', (e) => {
     if (!loc.value) {

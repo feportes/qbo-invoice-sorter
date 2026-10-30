@@ -1,230 +1,40 @@
 <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <title>Inventory Yard (C1–C7)</title>
-  <style>
-    body { font-family: system-ui; margin: 24px; }
-    .top { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-    a { color:#111; text-decoration:none; }
-    .muted { color:#666; font-size:13px; }
-
-    .dropzone {
-      border:2px dashed #bbb; border-radius:12px; padding:10px;
-      margin: 12px 0; max-width: 1000px;
-    }
-    .dropzone.drop-hover { border-color:#111; }
-
-    .yard {
-      display:grid;
-      grid-template-columns: repeat(2, minmax(320px, 1fr));
-      gap:16px;
-      align-items:start;
-    }
-
-    .container {
-      border:1px solid #ddd; border-radius:12px; padding:12px;
-      background:#fff;
-    }
-
-    .container h2 { margin:0 0 6px 0; font-size:18px; }
-    .container .meta { margin-bottom:10px; }
-
-    .grid {
-      display:grid;
-      grid-template-columns: 1fr 1fr;
-      gap:12px;
-    }
-
-    .col { border:1px solid #eee; border-radius:12px; padding:10px; }
-    .col h3 { margin:0 0 8px 0; font-size:14px; }
-    .slot {
-      border:1px solid #f0f0f0;
-      border-radius:12px;
-      padding:8px;
-      margin-bottom:8px;
-      min-height: 44px;
-    }
-    .slot.drop-hover { outline:2px dashed #111; }
-
-    .code { font-weight:700; font-size:13px; }
-    .empty { color:#999; font-size:12px; margin-top:2px; }
-
-    .pallet {
-      margin-top:6px;
-      border:1px solid #ddd;
-      border-radius:10px;
-      padding:8px;
-      background:#fafafa;
-      cursor: grab;
-    }
-    .pill {
-      display:inline-block;
-      padding:2px 8px;
-      border-radius:999px;
-      border:1px solid #ddd;
-      font-size:12px;
-      margin-left:6px;
-      background:#fff;
-    }
-  </style>
-</head>
-<body>
-
-<div class="top">
-  <h1 style="margin:0;">Inventory Yard (C1–C7)</h1>
-  <span class="muted">Drag a pallet and drop it into any slot. This moves pallets across containers instantly.</span>
-  <span class="muted">|</span>
-  <a href="/inventory/map?c=1">Container Map</a>
-  <span class="muted">|</span>
-  <a href="/inventory/add-pallet?c=1">+ Add Pallet</a>
-  <span class="muted">|</span>
-  <a href="/inventory/walkin">Walk-in</a>
-  <span class="muted">|</span>
-  <a href="/">Home</a>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Freezer & container map</title>
+<style>
+:root{--ink:#183747;--muted:#52636d;--line:#c5d0d5;--fill:#eef4f5}*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:24px;color:var(--ink);background:#f5f7f8}h1{margin:0;font-size:28px}h2{margin:0;font-size:20px}h3{margin:0;font-size:15px}a{color:#165876}button,.button{font:inherit;border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:white;color:var(--ink);cursor:pointer}nav,.toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:14px 0}.muted{color:var(--muted);font-size:13px}.yard{display:grid;grid-template-columns:repeat(2,minmax(300px,1fr));gap:20px;align-items:start}.container,.special{background:white;border:1px solid var(--line);border-radius:12px;padding:16px}.container header{display:flex;justify-content:space-between;align-items:center}.end{text-align:center;font-size:12px;font-weight:700;letter-spacing:1px;margin:10px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.lane{display:flex;flex-direction:column;gap:5px}.lane .slot{flex:1}.slot{border:1px solid var(--line);border-radius:5px;padding:7px;min-height:74px;overflow-wrap:anywhere}.occupied{background:var(--fill)}.slot.drop-hover,.special.drop-hover{outline:3px dashed #16836b}.pallet{cursor:grab}.pallet.selected{outline:3px solid #16836b}.code{font-size:11px;color:var(--muted)}.product{font-size:13px;font-weight:700;margin:3px 0}.qty{font-size:12px}.actions{display:flex;gap:9px;align-items:center;margin-top:5px;font-size:11px}.actions button{padding:3px 6px;font-size:11px}.empty{font-size:12px;color:var(--muted);margin-top:8px}.specials{display:grid;grid-template-columns:2fr 1fr;gap:20px;margin:20px 0}.cards{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}.cards .pallet{border:1px solid var(--line);border-radius:6px;padding:10px;min-width:170px;max-width:280px}table{width:100%;font-size:12px;border-collapse:collapse;margin-top:12px}td,th{text-align:left;padding:5px;border-bottom:1px solid var(--line)}.dim{opacity:.3}#moveStatus,.msg{padding:12px;background:#e1f1ea;border-radius:6px;margin:12px 0}input[type=search]{font:inherit;padding:8px;border:1px solid var(--line);border-radius:6px;min-width:260px}.long .slot{min-height:60px}.long{border-top:4px solid #628f9d}.notes{white-space:pre-wrap;font-size:11px;margin-top:4px}
+@media(max-width:750px){body{margin:12px}.yard,.specials{grid-template-columns:1fr}.slot{min-height:82px}.actions{flex-wrap:wrap}}
+@media print{@page{size:letter portrait;margin:.4in}body{background:white;margin:0;color:black}nav,.toolbar,.actions,.specials,#moveStatus,.screen,.msg{display:none!important}.yard{display:block}.container{break-after:page;border:0;padding:0}.container:last-child{break-after:auto}.slot{min-height:48px!important;border-color:#777;padding:4px}.lane{gap:3px}.dim{opacity:1}.container h2{font-size:25px}.grid{gap:30px}.product{font-size:12px}.end{margin:9px 0}.notes{font-size:10px}}
+</style></head><body>
+<h1>Freezer & container map</h1>
+<p class="muted">40 x 48 in pallets. Left and right as viewed from the door. Existing slot 01 stays nearest the door.</p>
+<nav><a href="/">Home</a><a href="/inventory/map?c=1">Detailed map</a><a href="/inventory/walkin">Walk-in freezer</a><a href="/inventory/returns">Returns</a><a href="/inventory/settings/containers">Layouts</a><a href="/inventory/settings/skus">Products / sync</a><a href="/inventory/loading-notes">Oct 30 loading notes</a></nav>
+<% if (msg) { %><div class="msg"><%= msg %></div><% } %>
+<div class="toolbar"><input id="search" type="search" placeholder="Find a product or lot" aria-label="Find a product or lot"><button onclick="location.reload()">Refresh</button><label><input id="auto" type="checkbox" checked> Refresh every 30 sec</label><button onclick="window.print()">Print container maps</button></div>
+<div id="moveStatus" hidden aria-live="polite"></div>
+<p class="muted screen">Drag pallets between locations, or tap Move then tap an unoccupied destination. No recorded pallet does not confirm a physically empty slot.</p>
+<% const drawPallet = (p) => { %>
+<div class="pallet" draggable="true" data-pallet-id="<%= p.id %>" data-search="<%= (p.sku_name + ' ' + (p.lot_number || '')).toLowerCase() %>"><div class="product"><%= p.sku_name %></div><div class="qty"><%= p.qty_units %> <%= p.unit_type %> &middot; <%= p.status %></div><% if(p.lot_number) { %><div class="qty">Lot <%= p.lot_number %></div><% } %><% if(p.notes) { %><div class="notes"><%= p.notes %></div><% } %><div class="actions"><button type="button" data-select-pallet="<%= p.id %>">Move</button><a href="/inventory/pallet/<%= p.id %>">Count / notes</a><span>#<%= p.id %></span></div></div>
+<% }; %>
+<div class="specials">
+<section class="special" data-slot="WALKIN"><h2>Walk-in freezer</h2><div class="muted">Move whole pallets here, or use the detailed map to break quantities into loose stock.</div><div class="cards"><% walkinPallets.forEach(drawPallet); %></div>
+<% if(walkinLoose.length) { %><table><thead><tr><th>Loose product</th><th>Lot</th><th>Quantity</th></tr></thead><tbody><% walkinLoose.forEach(p=>{ %><tr><td><%= p.sku_name %></td><td><%= p.lot_number || '' %></td><td><%= p.qty_units %> <%= p.unit_type %></td></tr><% }); %></tbody></table><% } %>
+</section>
+<section class="special" data-slot="RETURNS"><h2>Returns / staging</h2><div class="cards"><% returnsPallets.forEach(drawPallet); %></div></section>
 </div>
-
-<div class="dropzone" id="walkinDrop" data-slot="WALKIN">
-  <b>Drop Here → WALKIN</b>
-  <div class="muted">Drop a pallet here to move it into the walk-in freezer location.</div>
-</div>
-
-<div class="dropzone" id="returnsDrop" data-slot="RETURNS">
-  <b>Drop Here → RETURNS</b>
-  <div class="muted">Drop a pallet here if it’s returned/staging.</div>
-</div>
-
 <div class="yard">
-  <% yard.forEach(c => { %>
-    <div class="container">
-      <h2>C<%= c.containerNo %></h2>
-
-      <div class="meta muted">
-        <% if (c.containerNo === 1 && c.c1Mode) { %>
-          Mode: <b><%= c.c1Mode %></b>
-          <% if (c.c1Mode === '8-slot') { %>
-            (L01–L04 / R01–R04)
-          <% } else { %>
-            (L01–L05 / R01–R05)
-          <% } %>
-        <% } else { %>
-          <% 
-            // Determine depth from rendered slots (server already respected mode)
-            const maxDepth = (c.left && c.left.length) ? c.left.length : 10;
-            const modeLabel = (maxDepth === 9) ? '18-slot' : '20-slot';
-            const rangeLabel = (maxDepth === 9) ? 'L01–L09 / R01–R09' : 'L01–L10 / R01–R10';
-          %>
-          Mode: <b><%= modeLabel %></b> (<%= rangeLabel %>)
-        <% } %>
-      </div>
-
-      <div class="grid">
-        <div class="col">
-          <h3>LEFT (L)</h3>
-          <% c.left.forEach(s => { %>
-            <div class="slot" data-slot="<%= s.code %>">
-              <div class="code"><%= s.code %></div>
-              <% if (!s.pallet) { %>
-                <div class="empty">Empty</div>
-              <% } else { %>
-                <div class="pallet" draggable="true" data-pallet-id="<%= s.pallet.id %>">
-                  <div>
-                    <b>#<%= s.pallet.id %></b>
-                    <span class="pill"><%= s.pallet.status %></span>
-                  </div>
-                  <div class="muted">
-                    <%= s.pallet.sku_name %>
-                    <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
-                    • <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
-                  </div>
-                </div>
-              <% } %>
-            </div>
-          <% }) %>
-        </div>
-
-        <div class="col">
-          <h3>RIGHT (R)</h3>
-          <% c.right.forEach(s => { %>
-            <div class="slot" data-slot="<%= s.code %>">
-              <div class="code"><%= s.code %></div>
-              <% if (!s.pallet) { %>
-                <div class="empty">Empty</div>
-              <% } else { %>
-                <div class="pallet" draggable="true" data-pallet-id="<%= s.pallet.id %>">
-                  <div>
-                    <b>#<%= s.pallet.id %></b>
-                    <span class="pill"><%= s.pallet.status %></span>
-                  </div>
-                  <div class="muted">
-                    <%= s.pallet.sku_name %>
-                    <% if (s.pallet.lot_number) { %> • Lot <%= s.pallet.lot_number %><% } %>
-                    • <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
-                  </div>
-                </div>
-              <% } %>
-            </div>
-          <% }) %>
-        </div>
-      </div>
-    </div>
-  <% }) %>
+<% yard.forEach(c=>{ %><section class="container"><header><h2>Container <%= c.containerNo %></h2><a class="screen" href="/inventory/map?c=<%= c.containerNo %>">Details</a></header><div class="muted"><%= c.containerNo===1?'20 ft':'40 ft' %> &middot; <%= c.layout.label %></div><div class="end">BACK / CLOSED END</div><div class="grid">
+<% [['L',c.left],['R',c.right]].forEach(([side,slots])=>{ const sideways=slots.length===(c.containerNo===1?5:11); %><div class="lane <%= sideways?'long':'' %>"><h3><%= side==='L'?'LEFT':'RIGHT' %> &middot; <%= sideways?'sideways':'straight' %></h3>
+<% [...slots].reverse().forEach((s,i)=>{ %><div class="slot <%= s.pallet?'occupied':'' %>" data-slot="<%= s.code %>" data-occupied="<%= s.pallet?'1':'0' %>"><div class="code"><b><%= side %><%= i+1 %> from back</b> &middot; slot <%= s.code %></div><% if(s.pallet) { drawPallet(s.pallet); } else { %><div class="empty">No pallet recorded</div><a class="screen" style="font-size:11px" href="/inventory/add-pallet?c=<%= c.containerNo %>&slot=<%= encodeURIComponent(s.code) %>">+ Add pallet</a><% } %></div><% }); %></div><% }); %>
+</div><div class="end">DOOR / ENTRANCE</div><% if(c.unmappedPallets.length){ %><aside style="border:2px solid #c68d30;padding:10px"><b>Location review needed</b><p class="muted">Stock outside this layout or sharing a slot. Move these pallets to their correct locations.</p><% c.unmappedPallets.forEach(p=>{ %><div class="code"><%= p.location_code %></div><% drawPallet(p); }); %></aside><% } %></section><% }); %>
 </div>
-
 <script>
-  let draggedPalletId = null;
-
-  function postMove(palletId, toSlot) {
-    return fetch('/inventory/move-json', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pallet_id: palletId, to_slot: toSlot })
-    });
-  }
-
-  document.querySelectorAll('.pallet').forEach(el => {
-    el.addEventListener('dragstart', (e) => {
-      draggedPalletId = el.dataset.palletId;
-      e.dataTransfer.setData('text/plain', draggedPalletId);
-      e.dataTransfer.effectAllowed = 'move';
-    });
-  });
-
-  function makeDroppable(node) {
-    node.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      node.classList.add('drop-hover');
-      e.dataTransfer.dropEffect = 'move';
-    });
-
-    node.addEventListener('dragleave', () => {
-      node.classList.remove('drop-hover');
-    });
-
-    node.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      node.classList.remove('drop-hover');
-
-      const palletId = e.dataTransfer.getData('text/plain') || draggedPalletId;
-      const toSlot = node.dataset.slot;
-
-      if (!palletId || !toSlot) return;
-
-      const resp = await postMove(palletId, toSlot);
-      const json = await resp.json().catch(() => null);
-
-      if (!resp.ok || !json?.ok) {
-        alert('Move failed: ' + (json?.error || resp.statusText));
-        return;
-      }
-      window.location.reload();
-    });
-  }
-
-  document.querySelectorAll('.slot').forEach(makeDroppable);
-  makeDroppable(document.getElementById('walkinDrop'));
-  makeDroppable(document.getElementById('returnsDrop'));
-</script>
-
-</body>
-</html>
+let selectedPallet=null, moving=false;
+const statusBox=document.getElementById('moveStatus');
+function selectPallet(id){selectedPallet=id;document.querySelectorAll('.pallet').forEach(p=>p.classList.toggle('selected',p.dataset.palletId===String(id)));statusBox.hidden=false;statusBox.textContent='Pallet #'+id+': tap an unoccupied destination, Walk-in, or Returns. ';const cancel=document.createElement('button');cancel.textContent='Cancel';cancel.onclick=()=>{selectedPallet=null;statusBox.hidden=true;document.querySelectorAll('.selected').forEach(p=>p.classList.remove('selected'));};statusBox.append(cancel);}
+async function move(id,slot){if(moving)return;moving=true;try{const r=await fetch('/inventory/move-json',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pallet_id:id,to_location_code:slot})});const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||'Unable to save move');location.reload();}catch(e){alert(e.message);moving=false;}}
+document.querySelectorAll('[data-select-pallet]').forEach(b=>b.onclick=e=>{e.stopPropagation();selectPallet(b.dataset.selectPallet);});
+document.querySelectorAll('.pallet').forEach(p=>p.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',p.dataset.palletId);}));
+document.querySelectorAll('[data-slot]').forEach(s=>{s.addEventListener('click',e=>{if(e.target.closest('a,button,.pallet'))return;if(selectedPallet){if(s.dataset.occupied==='1'){alert('Destination is occupied.');return;}move(selectedPallet,s.dataset.slot);}});s.addEventListener('dragover',e=>{if(s.dataset.occupied==='1')return;e.preventDefault();s.classList.add('drop-hover');});s.addEventListener('dragleave',()=>s.classList.remove('drop-hover'));s.addEventListener('drop',e=>{e.preventDefault();s.classList.remove('drop-hover');if(s.dataset.occupied==='1')return;const id=e.dataTransfer.getData('text/plain');if(id)move(id,s.dataset.slot);});});
+document.getElementById('search').oninput=e=>{const q=e.target.value.toLowerCase();document.querySelectorAll('.pallet').forEach(p=>p.classList.toggle('dim',!p.dataset.search.includes(q)));};
+setInterval(()=>{if(document.getElementById('auto').checked&&!document.hidden&&!selectedPallet&&!moving&&!document.getElementById('search').value&&document.activeElement===document.body)location.reload();},30000);
+</script></body></html>

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { containerLayout, slotKey } from './container_layout.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -1099,7 +1100,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   listPalletsInLocationId(locationId) {
     return sqlite.prepare(`
       SELECT p.*,
-             l.code AS location_code,
+             l.code AS location_code, l.side, l.depth,
              s.name AS sku_name,
              s.unit_type AS unit_type,
              lo.lot_number AS lot_number
@@ -1107,7 +1108,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
       JOIN locations l ON l.id = p.location_id
       JOIN skus s ON s.id = p.sku_id
       LEFT JOIN lots lo ON lo.id = p.lot_id
-      WHERE p.location_id = ?
+      WHERE p.location_id = ? AND p.qty_units > 0
       ORDER BY s.name COLLATE NOCASE, lo.lot_number COLLATE NOCASE, p.id DESC
     `).all(Number(locationId));
   },
@@ -1324,8 +1325,9 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   // ==========================================================
   createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes, userName = 'user' }) {
     const tx = sqlite.transaction(() => {
-      const loc = sqlite.prepare(`SELECT * FROM locations WHERE code=? LIMIT 1`).get(String(locationCode));
+      const loc = this.getLocationByCode(String(locationCode));
       if (!loc) throw new Error(`Location not found: ${locationCode}`);
+      this.assertAvailableContainerLocation(loc);
 
       const sku = sqlite.prepare(`SELECT * FROM skus WHERE id=? LIMIT 1`).get(Number(skuId));
       if (!sku) throw new Error(`SKU not found: ${skuId}`);
@@ -1385,6 +1387,8 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
       const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
       const toLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(Number(toLocationId));
       if (!toLoc) throw new Error('Destination location not found');
+      if (pallet.qty_units <= 0) throw new Error('Pallet is depleted.');
+      this.assertAvailableContainerLocation(toLoc, Number(palletId));
 
       // Enforce 1 pallet per container slot
       if (String(toLoc.type) === 'CONTAINER') {
@@ -1393,7 +1397,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
           FROM pallets p
           JOIN skus s ON s.id = p.sku_id
           JOIN locations l ON l.id = p.location_id
-          WHERE p.location_id=? AND p.id <> ?
+          WHERE p.location_id=? AND p.id <> ? AND p.qty_units > 0
           LIMIT 1
         `).get(Number(toLoc.id), Number(palletId));
 
@@ -1666,36 +1670,81 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   listContainers() { return [1,2,3,4,5,6,7]; },
 
   getContainerDepths(containerNo) {
-    if (containerNo === 1) {
-      const mode = this.getSetting('container_mode_C1') || '8-slot';
-      const flip = this.getSetting('container_flip_C1') || 'L_LONG';
-      if (mode === '8-slot') return { leftMax: 4, rightMax: 4, label: '8-slot (4/4)' };
-      if (flip === 'R_LONG') return { leftMax: 4, rightMax: 5, label: '9-slot (4/5)' };
-      return { leftMax: 5, rightMax: 4, label: '9-slot (5/4)' };
-    }
-    const mode = this.getSetting(`container_mode_C${containerNo}`) || '18-slot';
-    const flip = this.getSetting(`container_flip_C${containerNo}`) || 'L_LONG';
-    if (mode === '18-slot') return { leftMax: 9, rightMax: 9, label: '18-slot (9/9)' };
-    if (flip === 'R_LONG') return { leftMax: 9, rightMax: 11, label: '20-slot (9/11)' };
-    return { leftMax: 11, rightMax: 9, label: '20-slot (11/9)' };
+    return containerLayout(containerNo, this.getSetting(`container_mode_C${containerNo}`), this.getSetting(`container_flip_C${containerNo}`));
+  },
+
+  saveContainerLayouts(configs) {
+    sqlite.transaction(() => {
+      const normalized = configs.map(c => ({ ...c, ...containerLayout(c.containerNo, c.mode, c.flip) }));
+      for (const c of normalized) {
+        const previous = this.getContainerDepths(c.containerNo);
+        if (previous.leftMax === c.leftMax && previous.rightMax === c.rightMax) continue;
+        const hidden = sqlite.prepare(`SELECT l.code FROM pallets p JOIN locations l ON l.id=p.location_id
+          WHERE l.type='CONTAINER' AND l.container_no=? AND p.qty_units>0
+          AND ((l.side='L' AND l.depth>?) OR (l.side='R' AND l.depth>?))`)
+          .all(c.containerNo, c.leftMax, c.rightMax);
+        if (hidden.length) throw new Error(`Move pallets out of ${hidden.map(l => l.code).join(', ')} before changing this layout.`);
+      }
+      for (const c of normalized) {
+        this.setSetting(`container_mode_C${c.containerNo}`, c.mode);
+        this.setSetting(`container_flip_C${c.containerNo}`, c.flip);
+      }
+    })();
   },
 
   listValidSlotCodes(containerNo) {
     const { leftMax, rightMax } = this.getContainerDepths(containerNo);
     const codes = [];
-    for (let d = 1; d <= leftMax; d++) codes.push(`C${containerNo}-L${String(d).padStart(2,'0')}`);
-    for (let d = 1; d <= rightMax; d++) codes.push(`C${containerNo}-R${String(d).padStart(2,'0')}`);
+    for (const [side, max] of [['L', leftMax], ['R', rightMax]]) {
+      for (let d = 1; d <= max; d++) codes.push(this.getLocationByCode(slotKey(containerNo, side, d))?.code || slotKey(containerNo, side, d));
+    }
     return codes;
   },
 
   getLocationByCode(code) {
-    return sqlite.prepare('SELECT * FROM locations WHERE code=?').get(code);
+    const exact = sqlite.prepare('SELECT * FROM locations WHERE code=?').get(code);
+    if (exact) return exact;
+    const m = /^C([1-7])-([LR])-?(\d{1,2})$/.exec(code);
+    if (!m) return undefined;
+    return sqlite.prepare(`SELECT * FROM locations WHERE type='CONTAINER' AND container_no=? AND side=? AND depth=? ORDER BY id LIMIT 1`)
+      .get(Number(m[1]), m[2], Number(m[3]));
+  },
+
+  assertAvailableContainerLocation(loc, palletId = 0) {
+    if (loc.type !== 'CONTAINER') return;
+    const layout = this.getContainerDepths(loc.container_no);
+    if (!loc.enabled || loc.depth < 1 || loc.depth > (loc.side === 'L' ? layout.leftMax : layout.rightMax)) {
+      throw new Error(`Slot ${loc.code} is outside the current layout.`);
+    }
+    const occupied = sqlite.prepare(`SELECT p.id FROM pallets p JOIN locations l ON l.id=p.location_id
+      WHERE l.type='CONTAINER' AND l.container_no=? AND p.qty_units>0 AND l.side=? AND l.depth=? AND p.id<>? LIMIT 1`)
+      .get(loc.container_no, loc.side, loc.depth, palletId);
+    if (occupied) throw new Error(`Slot ${loc.code} is occupied by pallet #${occupied.id}.`);
+  },
+
+  updatePalletCount({ palletId, qtyUnits, expectedQty, expectedLocation, expectedNotes, notes, userName }) {
+    sqlite.transaction(() => {
+      const p = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(Number(palletId));
+      if (!p) throw new Error('Pallet not found');
+      if (p.qty_units !== Number(expectedQty) || p.location_id !== Number(expectedLocation) || String(p.notes || '') !== String(expectedNotes || '')) throw new Error('This pallet changed. Reload before saving.');
+      const qty = Number(qtyUnits);
+      if (qtyUnits === '' || qtyUnits == null || !Number.isFinite(qty) || qty < 0) throw new Error('Enter a quantity of zero or more.');
+      if (!String(userName || '').trim()) throw new Error('Enter your name.');
+      if (qty > 0) this.assertAvailableContainerLocation(this.getLocationByCode(sqlite.prepare('SELECT code FROM locations WHERE id=?').get(p.location_id).code), p.id);
+      const sku = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(p.sku_id);
+      sqlite.prepare('UPDATE pallets SET qty_units=?, notes=?, status=? WHERE id=?')
+        .run(qty, String(notes || ''), qty === 0 ? 'DEPLETED' : (qty === p.qty_units ? p.status : 'OPEN'), p.id);
+      sqlite.prepare(`INSERT INTO inventory_movements (user_name,sku_id,lot_id,qty_units,unit_type,from_location_id,to_location_id,from_pallet_id,to_pallet_id,type,reference_type,note)
+        VALUES (?,?,?,?,?,?,?,?,?,'COUNT_ADJUSTMENT','MANUAL',?)`)
+        .run(String(userName).trim(),p.sku_id,p.lot_id,qty-p.qty_units,sku.unit_type,p.location_id,p.location_id,p.id,p.id,
+          `Physical count: ${p.qty_units} -> ${qty}. ${String(notes || '')}`);
+    })();
   },
 
   listPalletsInContainer(containerNo) {
     return sqlite.prepare(`
       SELECT p.*,
-             l.code AS location_code,
+             l.code AS location_code, l.side, l.depth,
              s.name AS sku_name,
              s.unit_type AS unit_type,
              lo.lot_number AS lot_number
@@ -1703,7 +1752,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
       JOIN locations l ON l.id = p.location_id
       JOIN skus s ON s.id = p.sku_id
       LEFT JOIN lots lo ON lo.id = p.lot_id
-      WHERE l.type='CONTAINER' AND l.container_no=?
+      WHERE l.type='CONTAINER' AND l.container_no=? AND p.qty_units>0
       ORDER BY l.depth ASC, l.side DESC
     `).all(containerNo);
   },

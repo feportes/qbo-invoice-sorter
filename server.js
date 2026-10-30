@@ -4,6 +4,7 @@ import morgan from 'morgan';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import XLSX from 'xlsx';
+import { loadingNotes } from './src/loading_notes.js';
 
 import multer from 'multer';
 import { createRequire } from 'module';
@@ -768,6 +769,37 @@ app.post('/inventory/allocate/apply', async (req, res) => {
 // INVENTORY ROUTES
 // ==========================================================
 
+// Reference only: never receive stock or infer full-pallet counts on deployment.
+app.get('/inventory/loading-notes', requireConnected, (req, res) => {
+  res.render('inventory_loading_notes', { loadingNotes });
+});
+
+function inventoryReturnPath(body = {}) {
+  const value = String(body.redirect_to || '');
+  if (/^\/inventory\/(yard|walkin|map)(\?c=[1-7])?$/.test(value)) return value;
+  const n = Number(body.container_no || body.containerNo || 1);
+  return `/inventory/map?c=${Number.isInteger(n) && n >= 1 && n <= 7 ? n : 1}`;
+}
+
+// Quantity changes use optimistic checks so a stale screen cannot overwrite a pick/move.
+app.get('/inventory/pallet/:id', requireConnected, (req, res) => {
+  const pallet = db.sqlite.prepare(`SELECT p.*, s.name AS sku_name, s.unit_type, l.code AS location_code, lo.lot_number
+    FROM pallets p JOIN skus s ON s.id=p.sku_id JOIN locations l ON l.id=p.location_id LEFT JOIN lots lo ON lo.id=p.lot_id WHERE p.id=?`).get(Number(req.params.id));
+  if (!pallet) return res.status(404).send('Pallet not found');
+  const movements = db.sqlite.prepare(`SELECT * FROM inventory_movements WHERE to_pallet_id=? OR from_pallet_id=? ORDER BY id DESC LIMIT 20`).all(pallet.id, pallet.id);
+  res.render('inventory_pallet_edit', { pallet, movements, msg: String(req.query.msg || '') });
+});
+app.post('/inventory/pallet/:id', requireConnected, (req, res) => {
+  try {
+    db.updatePalletCount({ palletId: Number(req.params.id), qtyUnits: req.body.qty_units,
+      expectedQty: req.body.expected_qty, expectedLocation: req.body.expected_location, expectedNotes: req.body.expected_notes,
+      notes: req.body.notes, userName: req.body.user_name });
+    res.redirect('/inventory/yard?msg=' + encodeURIComponent('Pallet count saved.'));
+  } catch (e) {
+    res.redirect(`/inventory/pallet/${Number(req.params.id)}?msg=` + encodeURIComponent(e.message));
+  }
+});
+
 // Helper: build left/right slot arrays for a container
 function buildContainerSlots(containerNo, db) {
   // Normalize in case a full container object was passed accidentally
@@ -777,19 +809,17 @@ function buildContainerSlots(containerNo, db) {
   containerNo = Number(containerNo);
   const { leftMax, rightMax, flip } = db.getContainerDepths(containerNo);
   const pallets = db.listPalletsInContainer(containerNo);
-  const palletMap = {};
-  for (const p of pallets) palletMap[p.location_code] = p;
-  const left = [];
-  for (let d = 1; d <= leftMax; d++) {
-    const code = `C${containerNo}-L${String(d).padStart(2,'0')}`;
-    left.push({ code, depth: d, pallet: palletMap[code] || null });
-  }
-  const right = [];
-  for (let d = 1; d <= rightMax; d++) {
-    const code = `C${containerNo}-R${String(d).padStart(2,'0')}`;
-    right.push({ code, depth: d, pallet: palletMap[code] || null });
-  }
-  return { left, right, flip, leftMax, rightMax };
+  const make = (side, max) => Array.from({ length: max }, (_, i) => {
+    const depth = i + 1;
+    const pallet = pallets.find(p => p.side === side && p.depth === depth) || null;
+    const code = pallet?.location_code || db.getLocationByCode(`C${containerNo}-${side}-${String(depth).padStart(2,'0')}`)?.code;
+    return { code, depth, pallet, occupied: !!pallet };
+  });
+  const left = make('L', leftMax);
+  const right = make('R', rightMax);
+  const shownIds = new Set([...left, ...right].filter(s=>s.pallet).map(s=>s.pallet.id));
+  const unmappedPallets = pallets.filter(p=>!shownIds.has(p.id));
+  return { left, right, flip, leftMax, rightMax, unmappedPallets };
 }
 
 // GET /inventory/map
@@ -803,14 +833,14 @@ app.get('/inventory/map', requireConnected, (req, res) => {
       if (pallets.length > 0) { defaultC = containerNo; break; }
     }
     const containerNo = parseInt(req.query.c || defaultC, 10);
-    const { left, right, flip } = buildContainerSlots(containerNo, db);
-    const c1Mode = db.getSetting('container_mode_C1') || 'S';
+    const { left, right, flip, unmappedPallets } = buildContainerSlots(containerNo, db);
+    const c1Mode = db.getContainerDepths(1).mode;
     const slotOptions = db.listValidSlotCodes(containerNo);
     const walkinPallets = db.listPalletsInWalkin();
     const walkinLoose   = db.listWalkinLoose();
     const returnsPallets = db.listPalletsInReturns();
     res.render('inventory_map', {
-      containerNo, c1Mode, containers, left, right, flip,
+      containerNo, c1Mode, containers, left, right, flip, unmappedPallets, layout: db.getContainerDepths(containerNo),
       walkinPallets, walkinLoose, returnsPallets, slotOptions,
       msg: String(req.query.msg || '') || null
     });
@@ -823,14 +853,12 @@ app.get('/inventory/map', requireConnected, (req, res) => {
 app.get('/inventory/walkin', requireConnected, (req, res) => {
   try {
     const pallets = db.listPalletsInWalkin();
-    const groupMap = {};
-    for (const p of pallets) {
-      const key = p.sku_id;
-      if (!groupMap[key]) groupMap[key] = { sku_name: p.sku_name, sku_id: p.sku_id, slots: [] };
-      groupMap[key].slots.push(p);
-    }
-    const slotGroups = Object.values(groupMap);
-    const rows = pallets;
+    const slotGroups = db.listContainers().map(containerNo => {
+      const { left, right } = buildContainerSlots(containerNo, db);
+      const slots = [...left, ...right];
+      return { containerNo, label: db.getContainerDepths(containerNo).label, slots, occupiedCount: slots.filter(s => s.occupied).length };
+    });
+    const rows = db.listWalkinLoose();
     res.render('inventory_walkin', { pallets, slotGroups, rows });
   } catch (e) {
     res.status(500).send(`Walk-in error: ${e?.message || e}`);
@@ -854,11 +882,11 @@ app.get('/inventory/yard', requireConnected, (req, res) => {
     const yard = containers.map(cont => {
       // Normalize: db may return container_no (snake) or containerNo (camel)
       const containerNo = (typeof cont === 'object') ? (cont.containerNo ?? cont.container_no ?? cont.id) : Number(cont);
-      const { left, right, flip } = buildContainerSlots(containerNo, db);
-      return { containerNo, left, right, flip };
+      const { left, right, flip, unmappedPallets } = buildContainerSlots(containerNo, db);
+      return { containerNo, left, right, flip, unmappedPallets, layout: db.getContainerDepths(containerNo) };
     });
-    const c1Mode = db.getSetting('container_mode_C1') || 'S';
-    res.render('inventory_yard', { yard, c1Mode, modeLabel: 'Grid View', rangeLabel: '' });
+    const c1Mode = db.getContainerDepths(1).mode;
+    res.render('inventory_yard', { yard, c1Mode, walkinPallets: db.listPalletsInWalkin(), walkinLoose: db.listWalkinLoose(), returnsPallets: db.listPalletsInReturns(), msg: String(req.query.msg || '') });
   } catch (e) {
     res.status(500).send(`Yard error: ${e?.message || e}`);
   }
@@ -873,7 +901,7 @@ app.get('/inventory/add-pallet', requireConnected, (req, res) => {
     const skus = db.listSkusActiveOnly();
     const configs = db.listPalletConfigsAll();
     res.render('inventory_add_pallet', {
-      containerNo, containers, left, right, skus, configs,
+      containerNo, containers, left, right, skus, configs, selectedSlot: String(req.query.slot || ''), categories: db.listCategoriesOrdered(), loadingNote: String(req.query.note || ''), productSearch: String(req.query.product || ''),
       msg: String(req.query.msg || '') || null
     });
   } catch (e) {
@@ -896,7 +924,7 @@ app.post('/inventory/add-pallet', requireConnected, async (req, res) => {
       notes: notes || null,
       userName: 'admin'
     });
-    const c = containerNo || 1;
+    const c = containerNo || req.body.container_no || 1;
     res.redirect(`/inventory/add-pallet?c=${c}&msg=${encodeURIComponent('Pallet added.')}`);
   } catch (e) {
     res.redirect(`/inventory/add-pallet?msg=${encodeURIComponent('Error: ' + (e?.message || e))}`);
@@ -906,16 +934,18 @@ app.post('/inventory/add-pallet', requireConnected, async (req, res) => {
 // POST /inventory/move (form-based)
 app.post('/inventory/move', requireConnected, (req, res) => {
   try {
-    const { pallet_id, to_location_code, redirect_to } = req.body;
+    const { pallet_id } = req.body;
+    const to_location_code = req.body.to_location_code || req.body.to_slot;
+    const redirect_to = inventoryReturnPath(req.body);
     if (!pallet_id || !to_location_code) throw new Error('Missing pallet_id or to_location_code');
     const loc = db.getLocationByCode(String(to_location_code));
     if (!loc) throw new Error(`Unknown location: ${to_location_code}`);
     db.movePallet(Number(pallet_id), loc.id, 'user');
     const back = redirect_to || '/inventory/map';
-    res.redirect(`${back}?msg=${encodeURIComponent('Pallet moved.')}`);
+    res.redirect(`${back}${back.includes('?') ? '&' : '?'}msg=${encodeURIComponent('Pallet moved.')}`);
   } catch (e) {
-    const back = req.body.redirect_to || '/inventory/map';
-    res.redirect(`${back}?msg=${encodeURIComponent('Move failed: ' + (e?.message || e))}`);
+    const back = inventoryReturnPath(req.body);
+    res.redirect(`${back}${back.includes('?') ? '&' : '?'}msg=${encodeURIComponent('Move failed: ' + (e?.message || e))}`);
   }
 });
 
@@ -925,7 +955,7 @@ app.post('/inventory/move-json', requireConnected, express.json(), (req, res) =>
     // Accept both JSON body and urlencoded
     const body = req.body || {};
     const pallet_id = body.pallet_id;
-    const to_location_code = body.to_location_code;
+    const to_location_code = body.to_location_code || body.to_slot;
     if (!pallet_id || !to_location_code) throw new Error('Missing pallet_id or to_location_code');
     const loc = db.getLocationByCode(String(to_location_code));
     if (!loc) throw new Error(`Unknown location: ${to_location_code}`);
@@ -939,14 +969,15 @@ app.post('/inventory/move-json', requireConnected, express.json(), (req, res) =>
 // POST /inventory/break-to-walkin
 app.post('/inventory/break-to-walkin', requireConnected, (req, res) => {
   try {
-    const { pallet_id, qty, redirect_to } = req.body;
+    const { pallet_id, qty } = req.body;
+    const redirect_to = inventoryReturnPath(req.body);
     if (!pallet_id) throw new Error('Missing pallet_id');
-    db.breakPalletToWalkin(Number(pallet_id), qty ? Number(qty) : null, 'user');
+    db.breakPalletToWalkin({ palletId: Number(pallet_id), qty: qty ? Number(qty) : null, userName: req.body.user_name || 'user' });
     const back = redirect_to || '/inventory/map';
-    res.redirect(`${back}?msg=${encodeURIComponent('Pallet broken to walk-in.')}`);
+    res.redirect(`${back}${back.includes('?') ? '&' : '?'}msg=${encodeURIComponent('Pallet broken to walk-in.')}`);
   } catch (e) {
-    const back = req.body.redirect_to || '/inventory/map';
-    res.redirect(`${back}?msg=${encodeURIComponent('Break failed: ' + (e?.message || e))}`);
+    const back = inventoryReturnPath(req.body);
+    res.redirect(`${back}${back.includes('?') ? '&' : '?'}msg=${encodeURIComponent('Break failed: ' + (e?.message || e))}`);
   }
 });
 
@@ -956,12 +987,12 @@ app.get('/inventory/settings/containers', requireConnected, (req, res) => {
     const c = {};
     for (let n = 1; n <= 7; n++) {
       c[`C${n}`] = {
-        mode:  db.getSetting(`container_mode_C${n}`)  || (n === 1 ? 'S' : 'L'),
-        flip:  db.getSetting(`container_flip_C${n}`)  || '0',
+        mode: db.getContainerDepths(n).mode,
+        flip: db.getContainerDepths(n).flip,
         label: n === 1 ? '20ft' : '40ft'
       };
     }
-    res.render('inventory_container_settings', { c, msg: String(req.query.msg || '') || null });
+    res.render('inventory_container_settings', { current: c, msg: String(req.query.msg || '') || null });
   } catch (e) {
     res.status(500).send(`Container settings error: ${e?.message || e}`);
   }
@@ -970,12 +1001,11 @@ app.get('/inventory/settings/containers', requireConnected, (req, res) => {
 // POST /inventory/settings/containers
 app.post('/inventory/settings/containers', requireConnected, (req, res) => {
   try {
-    for (let n = 1; n <= 7; n++) {
-      const mode = req.body[`mode_C${n}`] || (n === 1 ? 'S' : 'L');
-      const flip = req.body[`flip_C${n}`] === '1' ? '1' : '0';
-      db.setSetting(`container_mode_C${n}`, mode);
-      db.setSetting(`container_flip_C${n}`, flip);
-    }
+    db.saveContainerLayouts(db.listContainers().map(n => ({
+      containerNo: n,
+      mode: req.body[`mode_C${n}`] || db.getContainerDepths(n).mode,
+      flip: req.body[`flip_C${n}`] || db.getContainerDepths(n).flip
+    })));
     res.redirect('/inventory/settings/containers?msg=' + encodeURIComponent('Container settings saved.'));
   } catch (e) {
     res.redirect('/inventory/settings/containers?msg=' + encodeURIComponent('Save failed: ' + (e?.message || e)));

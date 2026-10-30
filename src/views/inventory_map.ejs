@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8"/>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Inventory Map - C<%= containerNo %></title>
   <style>
     body { font-family: system-ui; margin: 24px; }
@@ -66,11 +66,12 @@
   <span class="muted">|</span>
   <a href="/inventory/returns">Returns</a>
   <span class="muted">|</span>
-  <a href="/inventory/yard">Yard</a>
+  <a href="/inventory/yard">Shared overhead map</a> | <a href="/inventory/settings/containers">Layouts</a>
   <span class="muted">|</span>
   <a href="/">Home</a>
 </div>
 
+<% if(unmappedPallets.length){ %><p>Location review needed: <%= unmappedPallets.length %> additional pallets are outside this layout or share a slot. <a href="/inventory/yard">Review on the shared map</a>.</p><% } %>
 <p class="muted">
   Tip: Drag a pallet and drop it onto another slot, WALKIN, or RETURNS (below).
   Occupied container slots are blocked in the UI (and also protected server-side).
@@ -179,13 +180,13 @@
   </div>
 </div>
 
-<div class="grid">
+<p class="muted" style="text-align:center;max-width:1000px">BACK / CLOSED END - <%= layout.label %></p><div class="grid">
 
   <!-- LEFT -->
   <div class="col">
     <h3>LEFT (L) <span class="muted">01 = closest to door</span></h3>
 
-    <% left.forEach(s => { %>
+    <% [...left].reverse().forEach(s => { %>
       <div class="slot <%= s.pallet ? 'occupied' : '' %>" data-slot="<%= s.code %>" data-occupied="<%= s.pallet ? '1' : '0' %>">
         <div class="code"><%= s.code %></div>
 
@@ -203,7 +204,7 @@
               • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
             </div>
 
-            <div class="actions">
+            <div class="actions"><a href="/inventory/pallet/<%= s.pallet.id %>">Count / notes</a>
               <!-- Move whole pallet -->
               <form method="post" action="/inventory/move">
                 <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
@@ -236,7 +237,7 @@
   <div class="col">
     <h3>RIGHT (R) <span class="muted">01 = closest to door</span></h3>
 
-    <% right.forEach(s => { %>
+    <% [...right].reverse().forEach(s => { %>
       <div class="slot <%= s.pallet ? 'occupied' : '' %>" data-slot="<%= s.code %>" data-occupied="<%= s.pallet ? '1' : '0' %>">
         <div class="code"><%= s.code %></div>
 
@@ -254,7 +255,7 @@
               • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
             </div>
 
-            <div class="actions">
+            <div class="actions"><a href="/inventory/pallet/<%= s.pallet.id %>">Count / notes</a>
               <!-- Move whole pallet -->
               <form method="post" action="/inventory/move">
                 <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
@@ -285,7 +286,7 @@
 
 </div>
 
-<script>
+<p class="muted" style="text-align:center;max-width:1000px">DOOR / ENTRANCE</p><script>
   let draggedPalletId = null;
 
   function postMove(palletId, toSlot) {
