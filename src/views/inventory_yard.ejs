@@ -61,5 +61,11 @@ document.querySelectorAll('[data-slot]').forEach(s=>{
 });
 document.getElementById('search').oninput=e=>{const q=e.target.value.toLowerCase();document.querySelectorAll('.pallet').forEach(p=>p.classList.toggle('dim',!p.dataset.search.includes(q)));};
 setInterval(()=>{if(document.getElementById('auto').checked&&!document.hidden&&!selectedPallet&&!copySource&&!moving&&!document.getElementById('search').value&&document.activeElement===document.body)location.reload();},30000);
-const initialCopy=new URLSearchParams(location.search).get('copy');if(initialCopy){selectCopy(initialCopy);const q=new URLSearchParams(location.search).get('copy_qty');if(q&&Number.isFinite(Number(q))&&Number(q)>0)document.getElementById('copyQty').value=q;}
+// Copy parameters are a one-time action, not persistent page state.
+const entryUrl=new URL(location.href),initialCopy=entryUrl.searchParams.get('copy'),initialQty=entryUrl.searchParams.get('copy_qty');
+if(entryUrl.searchParams.has('copy')||entryUrl.searchParams.has('copy_qty')){
+  entryUrl.searchParams.delete('copy');entryUrl.searchParams.delete('copy_qty');
+  history.replaceState(history.state,'',entryUrl.pathname+entryUrl.search+entryUrl.hash);
+}
+if(initialCopy){selectCopy(initialCopy);if(initialQty&&Number.isFinite(Number(initialQty))&&Number(initialQty)>0)document.getElementById('copyQty').value=initialQty;}
 </script></body></html>
