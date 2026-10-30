@@ -50,6 +50,7 @@
             • Location: <span class="q"><%= p.location_code || 'RETURNS' %></span>
           </div>
 
+          <% if(p.items && p.items.length>1){ %><b>Mixed pallet - other products</b><% p.items.slice(1).forEach(item=>{ %><p><%= item.sku_name %>: <%= item.qty_units %> <%= item.unit_type %></p><% }); } %>
           <div class="muted" style="margin-top:10px; font-size:12px;">
             Tip: Move pallets out of RETURNS from the container map via dropdown or drag/drop.
           </div>

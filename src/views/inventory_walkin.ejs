@@ -87,6 +87,7 @@
             <div><span class="muted">Location:</span> <span class="q"><%= p.location_code || 'WALKIN' %></span></div>
           </div>
 
+          <% if(p.items && p.items.length>1){ %><div class="kv"><b>Mixed pallet - other products</b><% p.items.slice(1).forEach(item=>{ %><p><%= item.sku_name %>: <%= item.qty_units %> <%= item.unit_type %> <a href="/inventory/pallet/<%= item.id %>">Edit</a></p><% }); %></div><% } %>
           <form class="actions" method="POST" action="/inventory/move">
             <input type="hidden" name="pallet_id" value="<%= p.id %>"/>
             <!-- /inventory/move redirects to container map; set to 1, then user can navigate -->

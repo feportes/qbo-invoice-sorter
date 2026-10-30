@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import { containerLayout, slotKey } from './container_layout.js';
 import fs from 'fs';
+import { randomUUID } from 'node:crypto';
+import { copyFingerprint } from './pallet_groups.js';
 import path from 'path';
 
 const dbPath = process.env.DB_PATH || './data/app.db';
@@ -1323,23 +1325,25 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
   // ==========================================================
   // â ADD PALLET (manual receive)
   // ==========================================================
-  createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes, userName = 'user' }) {
+  createPallet({ skuId, lotId, palletConfigId, locationCode, qtyUnits, notes, userName = 'user', palletGroup = null }) {
     const tx = sqlite.transaction(() => {
       const loc = this.getLocationByCode(String(locationCode));
       if (!loc) throw new Error(`Location not found: ${locationCode}`);
-      this.assertAvailableContainerLocation(loc);
+      this.assertAvailableContainerLocation(loc, 0, palletGroup);
 
       const sku = sqlite.prepare(`SELECT * FROM skus WHERE id=? LIMIT 1`).get(Number(skuId));
-      if (!sku) throw new Error(`SKU not found: ${skuId}`);
+      if (!sku || !sku.active) throw new Error(`Active SKU not found: ${skuId}`);
+      if (lotId && !sqlite.prepare('SELECT 1 FROM lots WHERE id=? AND sku_id=?').get(Number(lotId), Number(skuId))) throw new Error('Lot does not match this product.');
+      if (palletConfigId && !sqlite.prepare('SELECT 1 FROM pallet_configs WHERE id=? AND sku_id=?').get(Number(palletConfigId), Number(skuId))) throw new Error('Pallet configuration does not match this product.');
 
       const qty = Number(qtyUnits);
       if (!Number.isFinite(qty) || qty <= 0) throw new Error('qtyUnits must be > 0');
 
       const ins = sqlite.prepare(`
         INSERT INTO pallets
-          (sku_id, lot_id, pallet_config_id, location_id, qty_units, status, notes)
+          (sku_id, lot_id, pallet_config_id, location_id, qty_units, status, notes, pallet_group)
         VALUES
-          (?, ?, ?, ?, ?, 'SEALED', ?)
+          (?, ?, ?, ?, ?, 'SEALED', ?, ?)
       `);
 
       const result = ins.run(
@@ -1348,7 +1352,8 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
         palletConfigId ? Number(palletConfigId) : null,
         Number(loc.id),
         qty,
-        notes ? String(notes) : null
+        notes ? String(notes) : null,
+        palletGroup
       );
 
       const palletId = Number(result.lastInsertRowid);
@@ -1375,67 +1380,70 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
     return tx();
   },
 
-  // ==========================================================
-  // Move pallet between locations (including WALKIN/RETURNS)
-  // â NOW prevents moving into an occupied CONTAINER slot
-  // ==========================================================
-  movePallet(palletId, toLocationId, userName = 'user') {
-    const tx = sqlite.transaction(() => {
-      const pallet = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(Number(palletId));
-      if (!pallet) throw new Error('Pallet not found');
+  physicalPalletItems(palletId, includeDepleted = false) {
+    const source = sqlite.prepare('SELECT * FROM pallets WHERE id=?').get(Number(palletId));
+    if (!source) return [];
+    const rows = source.pallet_group ? sqlite.prepare('SELECT * FROM pallets WHERE pallet_group=? ORDER BY id').all(source.pallet_group) : [source];
+    return includeDepleted ? rows : rows.filter(p=>p.qty_units>0);
+  },
 
-      const fromLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(pallet.location_id);
+  createMixedPallet({ items, locationCode, notes = '', userName = 'user' }) {
+    return sqlite.transaction(() => {
+      if (!Array.isArray(items) || items.length < 1 || items.length > 30) throw new Error('Use 1 to 30 product lines per pallet.');
+      const loc = this.getLocationByCode(String(locationCode));
+      if (!loc) throw new Error('Location not found.');
+      this.assertAvailableContainerLocation(loc);
+      const group = items.length > 1 ? randomUUID() : null;
+      return items.map(item=>this.createPallet({ skuId: Number(item.sku_id), lotId: item.lot_id ? Number(item.lot_id) : null,
+        palletConfigId: item.pallet_config_id ? Number(item.pallet_config_id) : null,
+        locationCode: loc.code, qtyUnits: item.qty_units, notes, userName, palletGroup: group }));
+    })();
+  },
+
+  // Each destination gets one physical pallet, with all product lines copied atomically.
+  copyPallets({ sourcePalletId, locationCodes, qtyUnits, expectedQty, expectedLocation, expectedItems, userName = 'user', notes = '' }) {
+    return sqlite.transaction(() => {
+      const items = this.physicalPalletItems(sourcePalletId);
+      if (!items.length) throw new Error('Source pallet is missing or depleted. Refresh the map.');
+      const source = items[0];
+      if (expectedItems ? copyFingerprint(items) !== expectedItems : (items.length !== 1 || source.qty_units !== Number(expectedQty) || source.location_id !== Number(expectedLocation))) throw new Error('Source pallet changed. Refresh before copying.');
+      const qty = Number(qtyUnits);
+      if (items.length === 1 && (qtyUnits == null || String(qtyUnits).trim() === '' || !Number.isFinite(qty) || qty <= 0)) throw new Error('Quantity per new pallet must be greater than zero.');
+      if (!Array.isArray(locationCodes) || !locationCodes.length || locationCodes.length > 20) throw new Error('Select 1 to 20 empty container slots.');
+      const locations = locationCodes.map(code => {
+        if (typeof code !== 'string') throw new Error('Invalid destination.');
+        const loc = this.getLocationByCode(code);
+        if (!loc || loc.type !== 'CONTAINER') throw new Error('Copies must go into empty container slots.');
+        this.assertAvailableContainerLocation(loc);
+        return loc;
+      });
+      if (new Set(locations.map(l=>`${l.container_no}:${l.side}:${l.depth}`)).size !== locations.length) throw new Error('Select each destination only once.');
+      return locations.map(loc => {
+        const ids = this.createMixedPallet({ locationCode: loc.code, notes, userName,
+          items: items.map(p=>({ ...p, qty_units: items.length === 1 ? qty : p.qty_units })) });
+        for (const id of ids) sqlite.prepare("UPDATE inventory_movements SET note=? WHERE to_pallet_id=? AND type='RECEIVE'")
+          .run(`Copied pallet #${sourcePalletId} template into ${loc.code}; new stock received.`, id);
+        return ids[0];
+      });
+    })();
+  },
+
+  movePallet(palletId, toLocationId, userName = 'user') {
+    sqlite.transaction(() => {
+      const items = this.physicalPalletItems(palletId, true);
+      if (!items.some(p=>p.qty_units>0)) throw new Error('Pallet is missing or depleted.');
       const toLoc = sqlite.prepare('SELECT * FROM locations WHERE id=?').get(Number(toLocationId));
       if (!toLoc) throw new Error('Destination location not found');
-      if (pallet.qty_units <= 0) throw new Error('Pallet is depleted.');
-      this.assertAvailableContainerLocation(toLoc, Number(palletId));
-
-      // Enforce 1 pallet per container slot
-      if (String(toLoc.type) === 'CONTAINER') {
-        const existing = sqlite.prepare(`
-          SELECT p.id, s.name AS sku_name, p.qty_units, l.code AS location_code
-          FROM pallets p
-          JOIN skus s ON s.id = p.sku_id
-          JOIN locations l ON l.id = p.location_id
-          WHERE p.location_id=? AND p.id <> ? AND p.qty_units > 0
-          LIMIT 1
-        `).get(Number(toLoc.id), Number(palletId));
-
-        if (existing) {
-          throw new Error(`Destination ${toLoc.code} is occupied by pallet #${existing.id} (${existing.sku_name}, ${existing.qty_units}).`);
-        }
+      for (const p of items) this.assertAvailableContainerLocation(toLoc, p.id, p.pallet_group);
+      for (const p of items) {
+        const from = sqlite.prepare('SELECT code FROM locations WHERE id=?').get(p.location_id);
+        const sku = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(p.sku_id);
+        sqlite.prepare('UPDATE pallets SET location_id=? WHERE id=?').run(toLoc.id, p.id);
+        sqlite.prepare(`INSERT INTO inventory_movements (user_name,sku_id,lot_id,qty_units,unit_type,from_location_id,to_location_id,from_pallet_id,to_pallet_id,type,reference_type,note)
+          VALUES (?,?,?,0,?,?,?,?,?,'MOVE_PALLET','MANUAL',?)`)
+          .run(userName,p.sku_id,p.lot_id,sku.unit_type,p.location_id,toLoc.id,p.id,p.id,`Moved physical pallet from ${from.code} to ${toLoc.code}`);
       }
-
-      sqlite.prepare('UPDATE pallets SET location_id=? WHERE id=?')
-        .run(Number(toLocationId), Number(palletId));
-
-      const sku = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(pallet.sku_id);
-
-      sqlite.prepare(`
-        INSERT INTO inventory_movements
-          (user_name, sku_id, lot_id, qty_units, unit_type,
-           from_location_id, to_location_id,
-           from_pallet_id, to_pallet_id,
-           type, reference_type, reference_id, note)
-        VALUES
-          (?, ?, ?, 0, ?,
-           ?, ?,
-           ?, ?,
-           'MOVE_PALLET', 'MANUAL', NULL, ?)
-      `).run(
-        String(userName),
-        Number(pallet.sku_id),
-        pallet.lot_id ?? null,
-        String(sku?.unit_type || 'unit'),
-        fromLoc?.id ?? null,
-        Number(toLoc.id),
-        Number(palletId),
-        Number(palletId),
-        `Moved pallet ${palletId} from ${fromLoc?.code || 'UNKNOWN'} to ${toLoc.code}`
-      );
-    });
-
-    tx();
+    })();
   },
 
   // ==========================================================
@@ -1710,15 +1718,15 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
       .get(Number(m[1]), m[2], Number(m[3]));
   },
 
-  assertAvailableContainerLocation(loc, palletId = 0) {
+  assertAvailableContainerLocation(loc, palletId = 0, palletGroup = null) {
     if (loc.type !== 'CONTAINER') return;
     const layout = this.getContainerDepths(loc.container_no);
     if (!loc.enabled || loc.depth < 1 || loc.depth > (loc.side === 'L' ? layout.leftMax : layout.rightMax)) {
       throw new Error(`Slot ${loc.code} is outside the current layout.`);
     }
     const occupied = sqlite.prepare(`SELECT p.id FROM pallets p JOIN locations l ON l.id=p.location_id
-      WHERE l.type='CONTAINER' AND l.container_no=? AND p.qty_units>0 AND l.side=? AND l.depth=? AND p.id<>? LIMIT 1`)
-      .get(loc.container_no, loc.side, loc.depth, palletId);
+      WHERE l.type='CONTAINER' AND l.container_no=? AND p.qty_units>0 AND l.side=? AND l.depth=? AND p.id<>? AND (p.pallet_group IS NULL OR p.pallet_group<>?) LIMIT 1`)
+      .get(loc.container_no, loc.side, loc.depth, palletId, palletGroup || '');
     if (occupied) throw new Error(`Slot ${loc.code} is occupied by pallet #${occupied.id}.`);
   },
 
@@ -1730,7 +1738,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
       const qty = Number(qtyUnits);
       if (qtyUnits === '' || qtyUnits == null || !Number.isFinite(qty) || qty < 0) throw new Error('Enter a quantity of zero or more.');
       if (!String(userName || '').trim()) throw new Error('Enter your name.');
-      if (qty > 0) this.assertAvailableContainerLocation(this.getLocationByCode(sqlite.prepare('SELECT code FROM locations WHERE id=?').get(p.location_id).code), p.id);
+      if (qty > 0) this.assertAvailableContainerLocation(this.getLocationByCode(sqlite.prepare('SELECT code FROM locations WHERE id=?').get(p.location_id).code), p.id, p.pallet_group);
       const sku = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(p.sku_id);
       sqlite.prepare('UPDATE pallets SET qty_units=?, notes=?, status=? WHERE id=?')
         .run(qty, String(notes || ''), qty === 0 ? 'DEPLETED' : (qty === p.qty_units ? p.status : 'OPEN'), p.id);

@@ -4,6 +4,7 @@ import morgan from 'morgan';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import XLSX from 'xlsx';
+import { groupPallets } from './src/pallet_groups.js';
 import { loadingNotes } from './src/loading_notes.js';
 
 import multer from 'multer';
@@ -787,7 +788,8 @@ app.get('/inventory/pallet/:id', requireConnected, (req, res) => {
     FROM pallets p JOIN skus s ON s.id=p.sku_id JOIN locations l ON l.id=p.location_id LEFT JOIN lots lo ON lo.id=p.lot_id WHERE p.id=?`).get(Number(req.params.id));
   if (!pallet) return res.status(404).send('Pallet not found');
   const movements = db.sqlite.prepare(`SELECT * FROM inventory_movements WHERE to_pallet_id=? OR from_pallet_id=? ORDER BY id DESC LIMIT 20`).all(pallet.id, pallet.id);
-  res.render('inventory_pallet_edit', { pallet, movements, msg: String(req.query.msg || '') });
+  const groupItems = db.physicalPalletItems(pallet.id, true).map(p => ({ ...p, ...db.sqlite.prepare('SELECT name AS sku_name, unit_type FROM skus WHERE id=?').get(p.sku_id) }));
+  res.render('inventory_pallet_edit', { pallet, movements, groupItems, msg: String(req.query.msg || '') });
 });
 app.post('/inventory/pallet/:id', requireConnected, (req, res) => {
   try {
@@ -808,7 +810,7 @@ function buildContainerSlots(containerNo, db) {
   }
   containerNo = Number(containerNo);
   const { leftMax, rightMax, flip } = db.getContainerDepths(containerNo);
-  const pallets = db.listPalletsInContainer(containerNo);
+  const pallets = groupPallets(db.listPalletsInContainer(containerNo));
   const make = (side, max) => Array.from({ length: max }, (_, i) => {
     const depth = i + 1;
     const pallet = pallets.find(p => p.side === side && p.depth === depth) || null;
@@ -836,9 +838,9 @@ app.get('/inventory/map', requireConnected, (req, res) => {
     const { left, right, flip, unmappedPallets } = buildContainerSlots(containerNo, db);
     const c1Mode = db.getContainerDepths(1).mode;
     const slotOptions = db.listValidSlotCodes(containerNo);
-    const walkinPallets = db.listPalletsInWalkin();
+    const walkinPallets = groupPallets(db.listPalletsInWalkin());
     const walkinLoose   = db.listWalkinLoose();
-    const returnsPallets = db.listPalletsInReturns();
+    const returnsPallets = groupPallets(db.listPalletsInReturns());
     res.render('inventory_map', {
       containerNo, c1Mode, containers, left, right, flip, unmappedPallets, layout: db.getContainerDepths(containerNo),
       walkinPallets, walkinLoose, returnsPallets, slotOptions,
@@ -852,7 +854,7 @@ app.get('/inventory/map', requireConnected, (req, res) => {
 // GET /inventory/walkin
 app.get('/inventory/walkin', requireConnected, (req, res) => {
   try {
-    const pallets = db.listPalletsInWalkin();
+    const pallets = groupPallets(db.listPalletsInWalkin());
     const slotGroups = db.listContainers().map(containerNo => {
       const { left, right } = buildContainerSlots(containerNo, db);
       const slots = [...left, ...right];
@@ -868,7 +870,7 @@ app.get('/inventory/walkin', requireConnected, (req, res) => {
 // GET /inventory/returns
 app.get('/inventory/returns', requireConnected, (req, res) => {
   try {
-    const pallets = db.listPalletsInReturns();
+    const pallets = groupPallets(db.listPalletsInReturns());
     res.render('inventory_returns', { pallets });
   } catch (e) {
     res.status(500).send(`Returns error: ${e?.message || e}`);
@@ -886,9 +888,22 @@ app.get('/inventory/yard', requireConnected, (req, res) => {
       return { containerNo, left, right, flip, unmappedPallets, layout: db.getContainerDepths(containerNo) };
     });
     const c1Mode = db.getContainerDepths(1).mode;
-    res.render('inventory_yard', { yard, c1Mode, walkinPallets: db.listPalletsInWalkin(), walkinLoose: db.listWalkinLoose(), returnsPallets: db.listPalletsInReturns(), msg: String(req.query.msg || '') });
+    res.render('inventory_yard', { yard, c1Mode, walkinPallets: groupPallets(db.listPalletsInWalkin()), walkinLoose: db.listWalkinLoose(), returnsPallets: groupPallets(db.listPalletsInReturns()), msg: String(req.query.msg || '') });
   } catch (e) {
     res.status(500).send(`Yard error: ${e?.message || e}`);
+  }
+});
+
+// Receive multiple matching pallets into explicitly selected empty slots.
+app.post('/inventory/copy-pallets', requireConnected, (req, res) => {
+  try {
+    const ids = db.copyPallets({ sourcePalletId: req.body.source_pallet_id,
+      locationCodes: req.body.location_codes, qtyUnits: req.body.qty_units,
+      expectedQty: req.body.expected_qty, expectedLocation: req.body.expected_location, expectedItems: req.body.expected_items,
+      userName: String(req.body.user_name || 'user').slice(0, 100), notes: req.body.notes });
+    res.json({ ok: true, count: ids.length, pallet_ids: ids });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
   }
 });
 
@@ -914,19 +929,21 @@ app.post('/inventory/add-pallet', requireConnected, async (req, res) => {
   try {
     const { sku_id, lot_id, pallet_config_id, location_code, qty_units, pallet_tag, notes, containerNo } = req.body;
     if (!sku_id || !location_code || !qty_units) throw new Error('Missing required fields');
-    db.createPallet({
-      skuId: Number(sku_id),
-      lotId: lot_id ? Number(lot_id) : null,
-      palletConfigId: pallet_config_id ? Number(pallet_config_id) : null,
-      locationCode: String(location_code),
-      qtyUnits: Number(qty_units),
-      palletTag: pallet_tag || null,
-      notes: notes || null,
-      userName: 'admin'
+    const extra = req.body.extra_items || [];
+    if (!Array.isArray(extra)) throw new Error('Invalid product lines.');
+    const ids = db.createMixedPallet({
+      items: [{ sku_id, lot_id, pallet_config_id, qty_units }, ...extra],
+      locationCode: String(location_code), notes: notes || '', userName: 'user'
     });
-    const c = containerNo || req.body.container_no || 1;
-    res.redirect(`/inventory/add-pallet?c=${c}&msg=${encodeURIComponent('Pallet added.')}`);
+    const palletId = ids[0];
+    const c = Number(containerNo || req.body.container_no || 1);
+    const next = req.body.after_add === 'copy'
+      ? `/inventory/yard?copy=${palletId}&msg=` + encodeURIComponent('Pallet added. Select empty slots to copy it.')
+      : `/inventory/add-pallet?c=${c}&msg=${encodeURIComponent('Pallet added.')}`;
+    if (String(req.get('Accept')).includes('application/json')) return res.json({ ok: true, redirect: next });
+    res.redirect(next);
   } catch (e) {
+    if (String(req.get('Accept')).includes('application/json')) return res.status(400).json({ ok: false, error: e.message });
     res.redirect(`/inventory/add-pallet?msg=${encodeURIComponent('Error: ' + (e?.message || e))}`);
   }
 });

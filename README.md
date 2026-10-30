@@ -117,5 +117,21 @@ No production credentials, database exports or production inventory are included
 
 Review the branch before deploying through the existing Render service. Use its
 existing persistent `DB_PATH`; back up that SQLite database before deployment.
-No database schema migration or automatic stock import is required. Existing
+The mixed-pallet update automatically adds a nullable `pallet_group` column and index; existing single-product rows are unchanged. No automatic stock import is performed. Existing
 access behavior is retained; this change does not add team accounts or roles.
+
+### Fast pallet entry and mixed pallets
+
+- Tap **Copy pallet**, select one or more empty slots, then **Add copies**.
+  Single-product pallets allow a quantity override per new pallet. The source
+  remains in place. The whole batch saves atomically; occupied or invalid
+  destinations cannot create partial batches or duplicate stock.
+- **Add & copy more** saves the first pallet and opens the same copy controls.
+- **Add another product to this pallet** creates mixed pallets. Each product has
+  its own basic quantity; there is no new lot-entry or audit-setup step.
+- A mixed pallet occupies one slot and moves/copies as one physical pallet.
+  Existing product rows remain separate internally so the original inventory
+  features continue to work. Quantity edits affect one product line at a time.
+- Copying a mixed pallet retains the quantity of each product. Use Count / notes
+  afterward if a particular copy is short. Unique pallet identities/tags and
+  source-specific notes are not duplicated.

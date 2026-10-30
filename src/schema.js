@@ -219,6 +219,11 @@ CREATE TABLE IF NOT EXISTS sku_aliases (
     CREATE INDEX IF NOT EXISTS idx_movements_sku_lot ON inventory_movements(sku_id, lot_id);
     CREATE INDEX IF NOT EXISTS idx_movements_time ON inventory_movements(created_at);
   `);
+// Additive migration: existing single-product pallet records are unchanged.
+if (!s.prepare('PRAGMA table_info(pallets)').all().some(c => c.name === 'pallet_group')) {
+  s.exec('ALTER TABLE pallets ADD COLUMN pallet_group TEXT NULL');
+}
+s.exec('CREATE INDEX IF NOT EXISTS idx_pallets_group ON pallets(pallet_group)');
 // Customer email columns
 try { db.sqlite.exec('ALTER TABLE customers ADD COLUMN qbo_email TEXT NULL;'); } catch {}
 try { db.sqlite.exec('ALTER TABLE customers ADD COLUMN override_email TEXT NULL;'); } catch {}

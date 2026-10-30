@@ -107,6 +107,7 @@
               <% if (p.lot_number) { %> • Lot <span class="q"><%= p.lot_number %></span><% } %>
             </div>
 
+            <% if(p.items && p.items.length>1){ %><b>Mixed pallet - other products</b><% p.items.slice(1).forEach(item=>{ %><p><%= item.sku_name %>: <%= item.qty_units %> <%= item.unit_type %> <a href="/inventory/pallet/<%= item.id %>">Edit</a></p><% }); } %>
             <div class="actions">
               <form method="post" action="/inventory/move" style="margin:0;">
                 <input type="hidden" name="pallet_id" value="<%= p.id %>"/>
@@ -173,6 +174,7 @@
               Qty: <b><%= p.qty_units %></b> <%= p.unit_type || '' %>
               <% if (p.lot_number) { %> • Lot <span class="q"><%= p.lot_number %></span><% } %>
             </div>
+            <% if(p.items && p.items.length>1){ %><b>Mixed pallet - other products</b><% p.items.slice(1).forEach(item=>{ %><p><%= item.sku_name %>: <%= item.qty_units %> <%= item.unit_type %></p><% }); } %>
           </div>
         <% }) %>
       <% } %>
@@ -204,7 +206,8 @@
               • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
             </div>
 
-            <div class="actions"><a href="/inventory/pallet/<%= s.pallet.id %>">Count / notes</a>
+            <div class="actions"><a href="/inventory/pallet/<%= s.pallet.id %>">Count / notes</a> <a href="/inventory/yard?copy=<%= s.pallet.id %>">Copy pallet</a>
+              <% if(s.pallet.items && s.pallet.items.length>1){ %><div><b>Mixed pallet - additional products</b><% s.pallet.items.slice(1).forEach(item=>{ %><p><%= item.sku_name %>: <%= item.qty_units %> <%= item.unit_type %> <% if(item.lot_number){ %>Lot <%= item.lot_number %><% } %> <a href="/inventory/pallet/<%= item.id %>">Count / notes</a></p><form method="post" action="/inventory/break-to-walkin"><input type="hidden" name="pallet_id" value="<%= item.id %>"><input type="hidden" name="container_no" value="<%= containerNo %>"><input name="qty" type="number" min=".01" step=".01" required placeholder="Qty"><button>Break this product to WALKIN</button></form><% }); %></div><% } %>
               <!-- Move whole pallet -->
               <form method="post" action="/inventory/move">
                 <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
@@ -255,7 +258,8 @@
               • Qty: <%= s.pallet.qty_units %> <%= s.pallet.unit_type %>
             </div>
 
-            <div class="actions"><a href="/inventory/pallet/<%= s.pallet.id %>">Count / notes</a>
+            <div class="actions"><a href="/inventory/pallet/<%= s.pallet.id %>">Count / notes</a> <a href="/inventory/yard?copy=<%= s.pallet.id %>">Copy pallet</a>
+              <% if(s.pallet.items && s.pallet.items.length>1){ %><div><b>Mixed pallet - additional products</b><% s.pallet.items.slice(1).forEach(item=>{ %><p><%= item.sku_name %>: <%= item.qty_units %> <%= item.unit_type %> <% if(item.lot_number){ %>Lot <%= item.lot_number %><% } %> <a href="/inventory/pallet/<%= item.id %>">Count / notes</a></p><form method="post" action="/inventory/break-to-walkin"><input type="hidden" name="pallet_id" value="<%= item.id %>"><input type="hidden" name="container_no" value="<%= containerNo %>"><input name="qty" type="number" min=".01" step=".01" required placeholder="Qty"><button>Break this product to WALKIN</button></form><% }); %></div><% } %>
               <!-- Move whole pallet -->
               <form method="post" action="/inventory/move">
                 <input type="hidden" name="pallet_id" value="<%= s.pallet.id %>"/>
