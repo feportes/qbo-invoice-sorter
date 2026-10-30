@@ -59,4 +59,16 @@ test('settings save retains the selected longer side and rejects invalid values'
  const r=await post('/inventory/settings/containers',{mode_C6:'20-slot',flip_C6:'R_LONG'});assert.equal(r.status,302);assert.equal(db.getContainerDepths(6).rightMax,11);
  const bad=await post('/inventory/settings/containers',{mode_C6:'bogus'});assert.match(decodeURIComponent(bad.headers.get('location')),/Save failed/);assert.equal(db.getContainerDepths(6).rightMax,11);
 });
+test('mixed entry and batch-copy endpoints preserve product lines and reject duplicate stock',async()=>{
+ const second=Number(db.sqlite.prepare("INSERT INTO skus (name,unit_type) VALUES ('Sorbet second flavor','tubs')").run().lastInsertRowid);
+ const received=await post('/inventory/add-pallet',{sku_id:sku,qty_units:20,location_code:'C7-L-09',containerNo:7,'extra_items[0][sku_id]':second,'extra_items[0][qty_units]':30,after_add:'copy'});
+ assert.equal(received.status,302);assert.match(received.headers.get('location'),/yard\?copy=/);
+ const mixed=db.listPalletsInContainer(7).filter(p=>p.location_code==='C7-L-09');assert.equal(mixed.length,2);
+ const {copyFingerprint}=await import('../src/pallet_groups.js');
+ const body={source_pallet_id:mixed[0].id,expected_items:copyFingerprint(mixed),location_codes:['C7-L-08','C7-L-07']};
+ const pasted=await post('/inventory/copy-pallets',body,true);assert.equal(pasted.status,200);assert.equal((await pasted.json()).count,2);
+ const repeat=await post('/inventory/copy-pallets',body,true);assert.equal(repeat.status,400);assert.match((await repeat.json()).error,/occupied/);
+ const html=await(await fetch(base+'/inventory/yard')).text();assert.match(html,/Mixed pallet/);assert.match(html,/Copy pallet/);assert.match(html,/Sorbet second flavor/);
+ const details=await(await fetch(base+'/inventory/map?c=7')).text();assert.match(details,/Mixed pallet - additional products/);
+});
 test.after(async()=>{child.kill();await new Promise(r=>child.exitCode!==null?r():child.once('exit',r));db.sqlite.close();fs.rmSync(dir,{recursive:true,force:true});});
