@@ -1,0 +1,32 @@
+import {randomUUID} from 'node:crypto';
+import {permit,problem,audit} from './warehouse_auth.js';
+import {once} from './warehouse_receiving.js';
+import {copyFingerprint} from './pallet_groups.js';
+import {warehouseReference} from './warehouse_invoice.js';
+const access=user=>permit(user,['admin','office','warehouse'],'warehouse');
+const amount=(n,zero=false)=>{if(typeof n!=='number'||!Number.isFinite(n)||n<(zero?0:0.000001)||n>1000000)problem('Enter a valid quantity in the displayed stock unit.');return Math.round(n*1e6)/1e6;};
+const note=value=>{const s=String(value||'').trim();if(s.length>1000)problem('Keep notes under 1,000 characters.');return s;};
+function location(db,code){const loc=db.getLocationByCode(String(code||''));if(!loc||loc.enabled===0||!(loc.type==='CONTAINER'||['WALKIN','RETURNS'].includes(loc.code)))problem('Choose a current container slot, walk-in freezer or returns/staging.');return loc;}
+function activeItems(db,id,fingerprint){const items=db.physicalPalletItems(Number(id));if(!items.length)problem('Pallet is missing or depleted. Refresh the layout.',409);if(typeof fingerprint!=='string'||copyFingerprint(items)!==fingerprint)problem('This physical pallet changed. Refresh before saving.',409);if(new Set(items.map(p=>p.location_id)).size!==1)problem('This mixed pallet has inconsistent locations. Ask the office to review it.',409);return items;}
+function stockLine(sql,line){const sku=sql.prepare('SELECT * FROM skus WHERE id=? AND active=1').get(Number(line.skuId));if(!sku)problem('Choose an active warehouse product.');return {sku_id:sku.id,lot_id:line.lotId?Number(line.lotId):null,pallet_config_id:line.configId?Number(line.configId):null,qty_units:amount(line.qty)};}
+export function stockCatalog(db,user,source=null,realmId=null){
+ access(user);const sql=db.sqlite,products=sql.prepare('SELECT id,qbo_item_id,qbo_sku,name,unit_type,is_lot_tracked FROM skus WHERE active=1 ORDER BY name').all().map(p=>({...p,barcodes:[]}));let barcodeStatus='Warehouse SKUs available; live barcode catalog not connected.';
+ if(source){if(realmId&&(source.companyScopes?.length!==1||source.companyScopes[0]!==String(realmId)))problem('Barcode catalog company does not match the inventory company.',409);
+  for(const p of source.products||[]){let qboId;try{qboId=p.qboItemId?warehouseReference(p.qboItemId,realmId):null;}catch{continue;}let matches=qboId?products.filter(x=>String(x.qbo_item_id)===qboId):[];
+   if(!matches.length&&p.sku)matches=products.filter(x=>String(x.qbo_sku||'').trim().toUpperCase()===String(p.sku).trim().toUpperCase());if(matches.length!==1)continue;const target=matches[0];target.barcodes=[...new Set([...target.barcodes,p.sku,...(p.codes||[])].filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()))];
+  }barcodeStatus='Live product barcodes and warehouse SKUs loaded.';
+ }
+ return {products,barcodeStatus,palletConfigs:sql.prepare('SELECT id,sku_id,name,units_per_pallet,is_default FROM pallet_configs ORDER BY sku_id,is_default DESC').all(),lots:sql.prepare('SELECT id,sku_id,lot_number,expiration_date FROM lots ORDER BY sku_id,expiration_date').all()};
+}
+export function registerStockPallet(db,user,input){access(user);const sql=db.sqlite;
+ return once(sql,user,input.requestId,input,()=>{if(!Array.isArray(input.items)||!input.items.length||input.items.length>30)problem('Add 1 to 30 product lines.');const items=input.items.map(l=>stockLine(sql,l)),loc=location(db,input.locationCode);const ids=db.createMixedPallet({items,locationCode:loc.code,notes:note(input.notes),userName:user.username||user.displayName});audit(sql,user,'warehouse-pallet-registered','pallet',ids[0],{location:loc.code,items,palletIds:ids,notes:note(input.notes),quickbooksChanged:false});return {palletIds:ids,message:'Pallet registered in '+loc.code,quickbooksChanged:false};});
+}
+export function moveStockPallet(db,user,input){access(user);const sql=db.sqlite;return once(sql,user,input.requestId,input,()=>{const items=activeItems(db,input.palletId,input.expectedItems),loc=location(db,input.locationCode);const before=items.map(p=>({...p}));db.movePallet(Number(input.palletId),loc.id,user.username||user.displayName);audit(sql,user,'warehouse-pallet-moved','pallet',input.palletId,{from:before[0].location_id,to:loc.code,items:before.map(p=>({id:p.id,skuId:p.sku_id,qty:p.qty_units})),reason:note(input.reason)});return {palletId:Number(input.palletId),message:'Whole pallet moved to '+loc.code,quickbooksChanged:false};});}
+export function editStockPallet(db,user,input){access(user);const sql=db.sqlite;const reason=note(input.reason);if(reason.length<5)problem('Explain the pallet count or item correction.');if(!Array.isArray(input.items)||!input.items.length||input.items.length>30)problem('Review the product lines.');
+ return once(sql,user,input.requestId,input,()=>{const current=activeItems(db,input.palletId,input.expectedItems),existing=input.items.filter(l=>l.id),newRows=input.items.filter(l=>!l.id);if(existing.length!==current.length||new Set(existing.map(l=>Number(l.id))).size!==current.length||existing.some(l=>!current.some(p=>p.id===Number(l.id))))problem('Keep each current product line, using quantity zero to remove its stock. Refresh before saving.',409);
+  const additions=newRows.map(l=>stockLine(sql,l));for(const l of existing){const p=current.find(p=>p.id===Number(l.id));amount(l.qty,true);if(String(p.notes||'')!==String(l.expectedNotes||''))problem('Pallet notes changed. Refresh before saving.',409);}
+  let group=current[0].pallet_group;if(additions.length&&!group){group=randomUUID();for(const p of current)sql.prepare('UPDATE pallets SET pallet_group=? WHERE id=?').run(group,p.id);}
+  for(const l of existing){const p=current.find(p=>p.id===Number(l.id));db.updatePalletCount({palletId:p.id,qtyUnits:l.qty,expectedQty:p.qty_units,expectedLocation:p.location_id,expectedNotes:p.notes,notes:note(l.notes),userName:user.username||user.displayName});}
+  const code=sql.prepare('SELECT code FROM locations WHERE id=?').get(current[0].location_id).code,added=[];for(const l of additions)added.push(db.createPallet({skuId:l.sku_id,lotId:l.lot_id,palletConfigId:l.pallet_config_id,qtyUnits:l.qty_units,locationCode:code,notes:reason,userName:user.username||user.displayName,palletGroup:group}));
+  audit(sql,user,'warehouse-pallet-edited','pallet',input.palletId,{reason,before:current,after:input.items,addedPalletIds:added});return {palletIds:[...current.map(p=>p.id),...added],message:'Pallet quantities and notes saved.',quickbooksChanged:false};});
+}

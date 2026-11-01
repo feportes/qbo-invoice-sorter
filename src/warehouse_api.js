@@ -5,6 +5,7 @@ import {authenticate,bootstrap,login,addUser,disableUser,safeUser,permit,problem
 import {createPurchaseOrder,recordReceipt,readPO,readReceipt,suggestPutaway,confirmPutaway,approveReceipt,frozenStockLocations,once} from './warehouse_receiving.js';
 import {driverRoute,importRoute,saveDriverEvents} from './warehouse_driver.js';
 import {createWarehouseSource} from './warehouse_source.js';
+import {stockCatalog,registerStockPallet,moveStockPallet,editStockPallet} from './warehouse_stock.js';
 
 const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next);
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
@@ -34,7 +35,7 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/logout',run((req,res)=>{sql.prepare('DELETE FROM wh_sessions WHERE token_hash=?').run(req.whUser.sessionHash);res.clearCookie('__Host-wh_session',{secure:true,httpOnly:true,sameSite:'strict',path:'/'});res.json({signedOut:true});}));
   r.post('/password',run(async(req,res)=>res.json(await changePassword(sql,req.whUser,req.body))));
   r.use((req,res,next)=>{try{
-    const feature=req.path.startsWith('/catalog')?'products':req.path.startsWith('/vendors')?'vendors':/^\/(qbo-purchase-orders|purchase-orders|receipts|stock)(\/|$)/.test(req.path)?'receiving':req.path.startsWith('/audit')?'reports':null;
+    const feature=/^\/stock\/(catalog|pallets)(\/|$)/.test(req.path)?'warehouse':req.path.startsWith('/catalog')?'products':req.path.startsWith('/vendors')?'vendors':/^\/(qbo-purchase-orders|purchase-orders|receipts|stock)(\/|$)/.test(req.path)?'receiving':req.path.startsWith('/audit')?'reports':null;
     if(feature)permit(req.whUser,['admin','office','warehouse'],feature);next();
   }catch(e){next(e);}});
   r.get('/users',run((req,res)=>{permit(req.whUser,['admin']);res.json({users:sql.prepare('SELECT * FROM wh_users ORDER BY display_name').all().map(safeUser)});}));
@@ -43,6 +44,10 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/users/:id/disable',run((req,res)=>res.json(disableUser(sql,req.whUser,req.params.id))));
   r.post('/users/:id',run(async(req,res)=>res.json(await updateUser(sql,req.whUser,req.params.id,req.body))));
   r.get('/driver-catalog',run(async(req,res)=>{permit(req.whUser,['admin','office','driver'],'deliveries');res.json(await source.catalog(req.whUser,String(req.query.version||''),req.query.force==='true'));}));
+  r.get('/stock/catalog',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');let catalog=null,warning='';try{catalog=await source.request('/api/mobile-warehouse-catalog',req.whUser);}catch{warning='Live barcode lookup is unavailable. Search by product name or warehouse SKU.';}try{res.json({...stockCatalog(db,req.whUser,catalog,db.getConnection?.()?.realm_id),warning});}catch(error){if(error.status!==409)throw error;res.json({...stockCatalog(db,req.whUser),warning:error.message});}}));
+  r.post('/stock/pallets',run((req,res)=>res.status(201).json(registerStockPallet(db,req.whUser,req.body))));
+  r.post('/stock/pallets/:id/move',run((req,res)=>res.json(moveStockPallet(db,req.whUser,{...req.body,palletId:Number(req.params.id)}))));
+  r.post('/stock/pallets/:id/edit',run((req,res)=>res.json(editStockPallet(db,req.whUser,{...req.body,palletId:Number(req.params.id)}))));
   r.get('/container-layout',run((req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');if(!readContainerLayout)problem('Container layout is not configured.',503);res.json(readContainerLayout());}));
   r.get('/picking',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');res.json(await source.request('/api/mobile-warehouse',req.whUser));}));
   r.post('/picking',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');const result=await source.request('/api/mobile-warehouse',req.whUser,req.body);audit(sql,req.whUser,'warehouse-action','route',String(req.body.command?.args?.[0]||''),{requestId:req.body.requestId,action:req.body.command?.name});res.json(result);}));
