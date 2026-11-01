@@ -1,3 +1,4 @@
+import {routeWindow} from './warehouse_telemetry.js';
 import {applyDriverEvent} from './web/driver-state.js';
 import {attachReferenceGuides,ensureGuideSchema} from './warehouse_guides.js';
 import {randomUUID} from 'node:crypto';
@@ -11,7 +12,7 @@ export function driverRoute(sql,user,id){
   const row=sql.prepare('SELECT * FROM wh_routes WHERE id=?').get(id);if(!row)problem('Route not found.',404);
   permit(user,['driver','office','admin'],'deliveries');
   if(!['admin','manager','office'].includes(user.role)&&sql.prepare('SELECT user_id FROM wh_source_access_cache WHERE user_id=?').get(user.id)&&!sql.prepare('SELECT route_id FROM wh_source_access WHERE user_id=? AND route_id=?').get(user.id,id))problem('This route is no longer assigned to you.',403);
-  const snapshot=JSON.parse(row.snapshot);
+  const snapshot=routeWindow(sql,{...row,snapshot:JSON.parse(row.snapshot)});
   if(!['admin','manager','office'].includes(user.role)&&(!user.teamId||![row.driver_id,snapshot.helperId,...(snapshot.helperIds||[])].includes(user.teamId)))problem('This route is not assigned to you.',403);
   ensureGuideSchema(sql);return {...row,snapshot:attachReferenceGuides(sql,overlayDriverCatalog(sql,user,snapshot))};
 }
