@@ -1,3 +1,4 @@
+import {ensureGuideSchema,saveReferenceGuide,saveReferenceMedia,referenceMedia,guideMedia,attachReferenceGuides} from './warehouse_guides.js';
 import express from 'express';
 import {randomUUID} from 'node:crypto';
 import {ensureWarehouseSchema} from './warehouse_schema.js';
@@ -10,7 +11,7 @@ import {stockCatalog,registerStockPallet,moveStockPallet,editStockPallet} from '
 const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next);
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
 export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,sourceFetch,readContainerLayout}){
-  const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);
+  const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureGuideSchema(sql);
   const source=createWarehouseSource({sql,env,readInvoice,...(sourceFetch?{fetchImpl:sourceFetch}:{})});
   const timer=setInterval(()=>source.kickAll(),30000);timer.unref();r.stopWarehouseSync=()=>clearInterval(timer);
   r.use((req,res,next)=>{
@@ -38,6 +39,10 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
     const feature=/^\/stock\/(catalog|pallets)(\/|$)/.test(req.path)?'warehouse':req.path.startsWith('/catalog')?'products':req.path.startsWith('/vendors')?'vendors':/^\/(qbo-purchase-orders|purchase-orders|receipts|stock)(\/|$)/.test(req.path)?'receiving':req.path.startsWith('/audit')?'reports':null;
     if(feature)permit(req.whUser,['admin','office','warehouse'],feature);next();
   }catch(e){next(e);}});
+  r.post('/reference-guides',run((req,res)=>res.json(saveReferenceGuide(sql,req.whUser,req.body))));
+  r.post('/reference-media/:id',express.raw({type:['video/mp4','image/jpeg','audio/ogg'],limit:'35mb'}),run((req,res)=>res.json(saveReferenceMedia(sql,req.whUser,req.params.id,req.query,req.body,req.get('content-type')?.split(';')[0]))));
+  r.get('/reference-media/:id',run((req,res)=>{const m=referenceMedia(sql,req.whUser,req.params.id,req.query.routeId,driverRoute);res.type(m.mime_type).set('Content-Length',String(m.bytes.length)).send(m.bytes);}));
+  r.get('/reference-guides',run((req,res)=>{permit(req.whUser,['admin','office'],'deliveries');res.json({guides:sql.prepare('SELECT * FROM wh_reference_guides ORDER BY title').all().map(g=>({...g,media:guideMedia(sql,g.id)}))});}));
   r.get('/users',run((req,res)=>{permit(req.whUser,['admin']);res.json({users:sql.prepare('SELECT * FROM wh_users ORDER BY display_name').all().map(safeUser)});}));
   r.get('/team-identities',run(async(req,res)=>{permit(req.whUser,['admin']);await source.refresh(req.whUser);res.json({team:sql.prepare('SELECT id,name FROM wh_source_team ORDER BY name').all()});}));
   r.post('/users',run(async(req,res)=>{permit(req.whUser,['admin']);res.status(201).json({user:await addUser(sql,req.whUser,req.body)});}));
@@ -80,7 +85,7 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
     if(req.query.date){if(!/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date)))problem('Choose a route date.');where.push('route_date=?');values.push(req.query.date);}
     if(req.query.includeCompleted!=='true')where.push("status IN ('loaded','delivering')");
     const rows=sql.prepare('SELECT * FROM wh_routes'+(where.length?' WHERE '+where.join(' AND '):'')+' ORDER BY route_date DESC,id LIMIT 100').all(...values);
-    const routes=rows.map(r=>{const pending=sql.prepare("SELECT COUNT(*) n FROM wh_driver_events WHERE route_id=? AND status='pending-office'").get(r.id).n,conflicts=sql.prepare("SELECT COUNT(*) n FROM wh_source_jobs WHERE route_id=? AND status='conflict'").get(r.id).n;return {...r,snapshot:JSON.parse(r.snapshot),officeSyncStatus:conflicts?'Office sync needs review':pending?'Saved; office handoff pending':'Office connected',officePending:pending,officeConflicts:conflicts};});
+    const routes=rows.map(r=>{const pending=sql.prepare("SELECT COUNT(*) n FROM wh_driver_events WHERE route_id=? AND status='pending-office'").get(r.id).n,conflicts=sql.prepare("SELECT COUNT(*) n FROM wh_source_jobs WHERE route_id=? AND status='conflict'").get(r.id).n;return {...r,snapshot:attachReferenceGuides(sql,JSON.parse(r.snapshot)),officeSyncStatus:conflicts?'Office sync needs review':pending?'Saved; office handoff pending':'Office connected',officePending:pending,officeConflicts:conflicts};});
     const assignedRouteIds=source.configured()?sql.prepare('SELECT route_id FROM wh_source_access WHERE user_id=?').all(req.whUser.id).map(r=>r.route_id):undefined;
     res.json({routes,assignedRouteIds,officePending:routes.reduce((n,r)=>n+r.officePending,0),officeConflicts:routes.reduce((n,r)=>n+r.officeConflicts,0),preparedAt:new Date().toISOString(),officeConnection:source.configured()?'automatic':'not-configured'});
   }));
