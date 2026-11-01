@@ -71,3 +71,5 @@ test('loading notes preserve partial counts without inventing full-pallet quanti
  assert.equal(loadingNotes.find(p=>p.product==='Alohana').quantity,null);
 });
 test.after(()=>{db.sqlite.close();fs.rmSync(dir,{recursive:true,force:true});});
+
+test('standard pallet orientation is explicit in the 20 and 9 pallet layouts',()=>{for(const [n,mode,long,short] of [[2,'20-slot',11,9],[1,'9-slot',5,4]])for(const side of ['L_LONG','R_LONG']){const layout=containerLayout(n,mode,side);assert.equal(layout.leftMax,side==='L_LONG'?long:short);assert.equal(layout.rightMax,side==='R_LONG'?long:short);assert.equal(layout.leftOrientation,side==='L_LONG'?'sideways':'straight');assert.equal(layout.rightOrientation,side==='R_LONG'?'sideways':'straight');assert.deepEqual(layout.palletInches,{width:40,length:48});}});

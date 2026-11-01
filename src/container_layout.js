@@ -13,7 +13,7 @@ export function containerLayout(containerNo, mode, flip) {
   const extended = mode !== normal;
   const leftMax = extended && flip === 'L_LONG' ? long : base;
   const rightMax = extended && flip === 'R_LONG' ? long : base;
-  return { mode, flip, leftMax, rightMax, label: `${leftMax + rightMax} pallets (${leftMax} left / ${rightMax} right)` };
+  return { mode, flip, leftMax, rightMax, leftOrientation:extended&&flip==='L_LONG'?'sideways':'straight',rightOrientation:extended&&flip==='R_LONG'?'sideways':'straight',palletInches:{width:40,length:48},label: `${leftMax + rightMax} pallets (${leftMax} left / ${rightMax} right)` };
 }
 
 export function slotKey(containerNo, side, depth) {
