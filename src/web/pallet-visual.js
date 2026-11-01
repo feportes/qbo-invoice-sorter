@@ -15,8 +15,9 @@ export function palletPattern(pallet){
 export function palletPacking(item){
  const kind=palletPattern(item),profiles={tubs20:{unitsPerLayer:20,unit:'tubs',shape:'round-tub'},tubs12:{unitsPerLayer:12,unit:'tubs',shape:'large-round-tub'},rectTubs15:{unitsPerLayer:15,fullPalletUnits:105,unit:'tubs',shape:'rectangular-tub'},whiteBoxes12:{unitsPerLayer:12,fullPalletUnits:168,unit:'cases',shape:'white-case'},boxes10:{unitsPerLayer:10,unit:'cases',shape:'brown-case'}};
  const profile=profiles[kind];if(!profile)return null;
+ if(kind==='tubs20'&&/ACAI/.test(text(item.sku_name||item.name)))Object.assign(profile,{diameterInches:10,layerHeightInches:10,dimensionsApproximate:true});
  const qty=Number(item.qty_units),known=Number.isFinite(qty)&&qty>=0;
- return {kind,...profile,layerHeightInches:null,...(known?{quantity:qty,fullLayers:Math.floor(qty/profile.unitsPerLayer),topLayerUnits:qty%profile.unitsPerLayer,layers:Math.ceil(qty/profile.unitsPerLayer)}:{})};
+ return {kind,layerHeightInches:null,...profile,...(known?{quantity:qty,fullLayers:Math.floor(qty/profile.unitsPerLayer),topLayerUnits:qty%profile.unitsPerLayer,layers:Math.ceil(qty/profile.unitsPerLayer),...(profile.layerHeightInches?{loadHeightExcludingPalletInches:Math.ceil(qty/profile.unitsPerLayer)*profile.layerHeightInches}:{})}:{})};
 }
 export function palletSVG(pallet,orientation='straight'){
  const kind=palletPattern(pallet),sideways=orientation==='sideways',labels={empty:'Empty pallet',tubs20:'Layer pattern: 20 sorbet tubs',tubs12:'Layer pattern: 12 large acai tubs',rectTubs15:'Layer pattern: 15 rectangular sorbet tubs, 105 per full pallet',whiteBoxes12:'Layer pattern: 12 white pack cases, 168 per full pallet',boxes10:'Layer pattern: 10 frozen fruit or gelato boxes',mixed:'Mixed product pallet',stock:'Occupied pallet'},label=labels[kind];
