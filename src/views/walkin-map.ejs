@@ -1,0 +1,7 @@
+<link rel="stylesheet" href="/workspaces-assets/walkin-map.css">
+<div id="walkin-inventory-map"></div>
+<script id="walkin-stock-data" type="application/json"><%- JSON.stringify(mapPallets).replace(/</g,'\\u003c') %></script>
+<script type="module">
+import {renderWalkinMap} from '/workspaces-assets/walkin-map.js';
+renderWalkinMap(document.getElementById('walkin-inventory-map'),JSON.parse(document.getElementById('walkin-stock-data').textContent),{onEdit:p=>location.href='/inventory/pallet/'+encodeURIComponent(p.id),onMove:()=>location.href='/warehouse-yard'});
+</script>

@@ -19,6 +19,7 @@
 <% p.items.forEach(i=>{ %><div class="product"><%= i.sku_name %></div><div class="qty"><%= i.qty_units %> <%= i.unit_type %> &middot; <%= i.status %><% if(i.lot_number) { %> &middot; Lot <%= i.lot_number %><% } %></div><% if(i.notes) { %><div class="notes"><%= i.notes %></div><% } %><% }); %>
 <div class="actions"><button type="button" data-select-pallet="<%= p.id %>">Move</button><button type="button" data-copy-pallet="<%= p.id %>">Copy pallet</button><a href="/inventory/pallet/<%= p.id %>">Count / notes</a><span>#<%= p.id %></span></div></div>
 <% }; %>
+<%- include('walkin-map', {mapPallets: walkinMapPallets}) %>
 <div class="specials">
 <section class="special" data-slot="WALKIN"><h2>Walk-in freezer</h2><div class="muted">Move whole pallets here, or use the detailed map to break quantities into loose stock.</div><div class="cards"><% walkinPallets.forEach(drawPallet); %></div>
 <% if(walkinLoose.length) { %><table><thead><tr><th>Loose product</th><th>Lot</th><th>Quantity</th></tr></thead><tbody><% walkinLoose.forEach(p=>{ %><tr><td><%= p.sku_name %></td><td><%= p.lot_number || '' %></td><td><%= p.qty_units %> <%= p.unit_type %></td></tr><% }); %></tbody></table><% } %>

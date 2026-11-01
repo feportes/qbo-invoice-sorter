@@ -11,4 +11,28 @@ test('single pallet becomes mixed; correction retains history and zero depletes 
 test('invalid mixed entry and stale notes roll back all changes',()=>{const before=db.sqlite.prepare('SELECT count(*) n FROM pallets').get().n;assert.throws(()=>create([{skuId:a,qty:1},{skuId:-1,qty:2}]),/active/);assert.equal(db.sqlite.prepare('SELECT count(*) n FROM pallets').get().n,before);const id=create([{skuId:a,qty:8}]).palletIds[0];assert.throws(()=>editStockPallet(db,user,{requestId:randomUUID(),palletId:id,expectedItems:fp(id),reason:'Test correction',items:[{id,qty:9,expectedNotes:'stale'}]}),/notes changed/);assert.equal(db.physicalPalletItems(id)[0].qty_units,8);});
 test('warehouse-only work function allowed; driver or revoked function denied',()=>{assert.ok(stockCatalog(db,user).products.length);assert.throws(()=>stockCatalog(db,{...user,role:'driver',functions:['deliveries']}),/function/);assert.throws(()=>createStockAs({...user,functions:[]}),/function/);function createStockAs(u){return registerStockPallet(db,u,{requestId:randomUUID(),locationCode:'WALKIN',items:[{skuId:a,qty:1}]});}});
 test('barcode catalog preserves leading zeros and requires connected company match',()=>{const source={companyScopes:['123'],products:[{qboItemId:'1001',sku:'F001',codes:['001234567890','f001']}]};const c=stockCatalog(db,user,source,'123');assert.ok(c.products.find(p=>p.id===a).barcodes.includes('001234567890'));assert.equal('price' in c.products[0],false);assert.throws(()=>stockCatalog(db,user,{...source,companyScopes:['999']},'123'),/company/);});
+test('walk-in placement shares existing inventory, rejects occupied positions and preserves mixed rows',()=>{
+ const input={requestId:randomUUID(),items:[{skuId:a,qty:60},{skuId:b,qty:10}],locationCode:'WF-B1-floor'};
+ const r=registerStockPallet(db,user,input),id=r.palletIds[0];
+ assert.ok(db.physicalPalletItems(id).every(p=>p.location_id===db.getWalkinLocation().id&&p.walkin_position==='WF-B1-floor'));
+ assert.ok(db.listPalletsInWalkin().some(p=>p.id===id));
+ assert.equal(registerStockPallet(db,user,input).duplicate,true);
+ const count=db.sqlite.prepare('SELECT count(*) n FROM pallets').get().n;
+ assert.throws(()=>registerStockPallet(db,user,{...input,requestId:randomUUID()}),/occupied/);
+ assert.equal(db.sqlite.prepare('SELECT count(*) n FROM pallets').get().n,count);
+ const before=fp(id);moveStockPallet(db,user,{requestId:randomUUID(),palletId:id,expectedItems:before,locationCode:'WF-C01-floor'});
+ assert.ok(db.physicalPalletItems(id).every(p=>p.walkin_position==='WF-C01-floor'));
+ assert.throws(()=>moveStockPallet(db,user,{requestId:randomUUID(),palletId:id,expectedItems:before,locationCode:'WF-C02-floor'}),/changed/);
+ moveStockPallet(db,user,{requestId:randomUUID(),palletId:id,expectedItems:fp(id),locationCode:'C3-L-01'});
+ assert.ok(db.physicalPalletItems(id).every(p=>p.walkin_position===null));
+ assert.ok(!db.listPalletsInWalkin().some(p=>p.id===id));
+ const log=db.sqlite.prepare("SELECT detail FROM wh_audit WHERE action='warehouse-pallet-moved' AND entity_id=? ORDER BY rowid DESC LIMIT 1").get(String(id));
+ assert.ok(log);
+});
+test('new mixed product inherits its freezer position; invalid levels cannot create stock',()=>{
+ const id=create([{skuId:a,qty:12}],'WF-B2-upper').palletIds[0];
+ editStockPallet(db,user,{requestId:randomUUID(),palletId:id,expectedItems:fp(id),reason:'Added verified mixed product',items:[{id,qty:12,expectedNotes:'',notes:''},{skuId:b,qty:4}]});
+ assert.ok(db.physicalPalletItems(id).every(p=>p.walkin_position==='WF-B2-upper'));
+ assert.throws(()=>create([{skuId:a,qty:1}],'WF-B1-middle'),/Choose a current/);
+});
 test.after(()=>{db.sqlite.close();fs.rmSync(dir,{recursive:true,force:true});});

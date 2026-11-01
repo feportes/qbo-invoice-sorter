@@ -1438,7 +1438,7 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
       for (const p of items) {
         const from = sqlite.prepare('SELECT code FROM locations WHERE id=?').get(p.location_id);
         const sku = sqlite.prepare('SELECT unit_type FROM skus WHERE id=?').get(p.sku_id);
-        sqlite.prepare('UPDATE pallets SET location_id=? WHERE id=?').run(toLoc.id, p.id);
+        sqlite.prepare('UPDATE pallets SET location_id=?,walkin_position=NULL WHERE id=?').run(toLoc.id, p.id);
         sqlite.prepare(`INSERT INTO inventory_movements (user_name,sku_id,lot_id,qty_units,unit_type,from_location_id,to_location_id,from_pallet_id,to_pallet_id,type,reference_type,note)
           VALUES (?,?,?,0,?,?,?,?,?,'MOVE_PALLET','MANUAL',?)`)
           .run(userName,p.sku_id,p.lot_id,sku.unit_type,p.location_id,toLoc.id,p.id,p.id,`Moved physical pallet from ${from.code} to ${toLoc.code}`);

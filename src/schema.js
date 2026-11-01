@@ -224,6 +224,10 @@ if (!s.prepare('PRAGMA table_info(pallets)').all().some(c => c.name === 'pallet_
   s.exec('ALTER TABLE pallets ADD COLUMN pallet_group TEXT NULL');
 }
 s.exec('CREATE INDEX IF NOT EXISTS idx_pallets_group ON pallets(pallet_group)');
+if (!s.prepare('PRAGMA table_info(pallets)').all().some(c => c.name === 'walkin_position')) {
+  s.exec('ALTER TABLE pallets ADD COLUMN walkin_position TEXT NULL');
+}
+s.exec('CREATE INDEX IF NOT EXISTS idx_pallets_walkin_position ON pallets(walkin_position)');
 // Customer email columns
 try { db.sqlite.exec('ALTER TABLE customers ADD COLUMN qbo_email TEXT NULL;'); } catch {}
 try { db.sqlite.exec('ALTER TABLE customers ADD COLUMN override_email TEXT NULL;'); } catch {}

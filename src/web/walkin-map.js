@@ -1,0 +1,38 @@
+import {zones,rackFrames,walkinPositions} from './walkin-layout.js';
+import {palletSVG} from './pallet-visual.js';
+import {drawStockVolume} from './pallet-volume.js';
+export function renderWalkinMap(host,pallets,{onMove,onAdd,onEdit}={}){
+ const el=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
+ const button=(text,fn)=>{const b=el('button',text);b.type='button';b.onclick=fn;return b;};
+ let level=host.dataset.level||'floor',view=host.dataset.view||'plan',selected=host.dataset.selected||'WF-B1-floor';
+ const rows=pallets||[],at=code=>rows.filter(p=>p.walkin_position===code),known=new Set(walkinPositions.map(p=>p.code));
+ function detail(parent,position){
+  parent.append(el('h3',position.label));const ps=at(position.code);
+  if(!ps.length){parent.append(el('p','No stock recorded here.'));if(onAdd)parent.append(button('Register here',()=>onAdd(position.code)));return;}
+  for(const p of ps){const box=el('section',undefined,'wm-stock');box.append(el('b','Pallet #'+p.id));
+   for(const item of p.items||[p]){box.append(el('p',item.sku_name||item.name||'Product'),el('p',item.qty_units+' '+(item.unit_type||'units')+(item.lot_number?' · Lot '+item.lot_number:'')));const art=el('div',undefined,'wm-volume');drawStockVolume(art,item);box.append(art);if(item.palletPacking)box.append(el('small',item.palletPacking.unitsPerLayer+' per layer · '+item.palletPacking.layers+' layers'+(item.palletPacking.topLayerUnits?' · '+item.palletPacking.topLayerUnits+' on top':'')));}
+   const actions=el('div',undefined,'wm-controls');if(onMove)actions.append(button('Move / change position',()=>onMove(p)));if(onEdit)actions.append(button('Edit / mixed pallet',()=>onEdit(p)));box.append(actions);parent.append(box);
+  }
+ }
+ function draw(){
+  host.dataset.level=level;host.dataset.view=view;host.dataset.selected=selected;host.replaceChildren();host.className='wm';
+  host.append(el('h2','Walk-in freezer'),el('p','25 × 25 ft exterior · approx. 24 × 24 ft inside · 6-inch walls assumed','wm-muted'));
+  const views=el('div',undefined,'wm-controls');for(const [value,label] of [['plan','Floor plan'],['racks','Rack levels'],['angled','Angled view']]){const b=button(label,()=>{view=value;draw();});b.setAttribute('aria-pressed',String(view===value));views.append(b);}host.append(views);
+  const levels=el('div',undefined,'wm-controls');for(const [value,label] of [['floor','Floor'],['middle','Middle shelf'],['upper','Upper rack']]){const b=button(label,()=>{level=value;draw();});b.setAttribute('aria-pressed',String(level===value));levels.append(b);}host.append(levels);
+  const workspace=el('div',undefined,'wm-workspace'),drawing=el('div'),panel=el('aside',undefined,'wm-detail');panel.setAttribute('aria-live','polite');workspace.append(drawing,panel);host.append(workspace);
+  const choose=position=>{selected=position.code;draw();};
+  function tile(z,position){const p=at(position.code),b=button('',()=>choose(position));b.className='wm-position '+(p.length?'wm-occupied ':'')+(selected===position.code?'wm-selected ':'')+'wm-'+position.type;b.setAttribute('aria-label',position.label+' · '+(p.length?p.length+' recorded pallet'+(p.length>1?'s':''):'No stock recorded'));b.setAttribute('aria-pressed',String(selected===position.code));if(p.length){const art=el('span',undefined,'wm-icon');art.innerHTML=palletSVG(p[0]);b.append(art);}b.append(el('span',z.id));return b;}
+  if(view==='racks'){
+   for(const wall of ['Back wall','Left wall','Right wall']){drawing.append(el('h3',wall));const grid=el('div',undefined,'wm-racks'),columns=zones.filter(z=>z.wall===wall);grid.style.gridTemplateColumns='55px repeat('+columns.length+',minmax(0,1fr))';for(const l of ['upper','middle','floor']){grid.append(el('small',l==='upper'?'Upper':l==='middle'?'Middle':'Floor'));for(const z of columns){const pos=walkinPositions.find(p=>p.id===z.id&&p.level===l);grid.append(pos?tile(z,pos):el('span','No shelf','wm-absent'));}}drawing.append(grid);}
+  }else{
+   const wrap=el('div',undefined,'wm-map-wrap'),room=el('div',undefined,'wm-room'+(view==='angled'?' wm-angled':''));room.setAttribute('aria-label','Walk-in freezer storage positions, sliding door at bottom');
+   for(const f of rackFrames){const frame=el('div',undefined,'wm-rack-frame');const [x,y,w,h]=f.bounds;Object.assign(frame.style,{left:x/2.88+'%',top:y/2.88+'%',width:w/2.88+'%',height:h/2.88+'%'});for(const edge of [0,1]){const post=el('i',undefined,'wm-upright');Object.assign(post.style,f.axis==='x'?{top:0,bottom:0,width:3/f.bounds[2]*100+'%',...(edge?{right:0}:{left:0})}:{left:0,right:0,height:3/f.bounds[3]*100+'%',...(edge?{bottom:0}:{top:0})});frame.append(post);}room.append(frame);}
+   room.append(el('div','Dead corner','wm-dead'),el('span','Center floor','wm-center'));
+   for(const z of zones){const pos=walkinPositions.find(p=>p.id===z.id&&p.level===level);if(!pos||z.center&&!at(pos.code).length)continue;const b=tile(z,pos),[x,y,w,h]=z.rect;Object.assign(b.style,{left:x+'%',top:y+'%',width:w+'%',height:h+'%'});room.append(b);}room.append(el('span','Sliding door · ~10 ft','wm-door'));wrap.append(room);drawing.append(wrap);
+  }
+  const label=el('label','Choose storage position'),picker=el('select');picker.setAttribute('aria-label','Walk-in storage position');for(const p of walkinPositions.filter(p=>p.level===level)){const o=el('option',p.label+(at(p.code).length?' · occupied':''));o.value=p.code;picker.append(o);}if(!walkinPositions.some(p=>p.code===selected&&p.level===level))selected=picker.options[0]?.value;picker.value=selected;picker.onchange=()=>{selected=picker.value;draw();};label.append(picker);drawing.append(label);const position=walkinPositions.find(p=>p.code===selected);if(position)detail(panel,position);
+  const unassigned=rows.filter(p=>!known.has(p.walkin_position));if(unassigned.length){const section=el('section',undefined,'wm-unassigned');section.append(el('h3','Position not assigned · '+unassigned.length));for(const p of unassigned){const row=el('div',undefined,'wm-unassigned-row');row.append(el('span',(p.items||[p]).map(i=>(i.sku_name||'Product')+' · '+i.qty_units+' '+(i.unit_type||'units')).join(' + ')));if(onMove)row.append(button('Place on map',()=>onMove(p)));else{const a=el('a','Edit pallet');a.href='/inventory/pallet/'+encodeURIComponent(p.id);row.append(a);}section.append(row);}host.append(section);}
+  host.append(el('small','Empty center positions stay hidden. Use Choose storage position to register stock there.','wm-muted'));
+ }
+ draw();
+}

@@ -1,3 +1,4 @@
+import {decoratePalletLayout} from './src/warehouse_pallet_visuals.js';
 import {mountWarehouseWebApp} from './src/warehouse_web_app.js';
 import 'dotenv/config';
 import express from 'express';
@@ -884,7 +885,7 @@ app.get('/inventory/walkin', requireConnected, (req, res) => {
       return { containerNo, label: db.getContainerDepths(containerNo).label, slots, occupiedCount: slots.filter(s => s.occupied).length };
     });
     const rows = db.listWalkinLoose();
-    res.render('inventory_walkin', { pallets, slotGroups, rows });
+    res.render('inventory_walkin', { pallets, slotGroups, rows,walkinMapPallets:decoratePalletLayout(db.sqlite,{walkin:pallets}).walkin });
   } catch (e) {
     res.status(500).send(`Walk-in error: ${e?.message || e}`);
   }
@@ -911,7 +912,7 @@ app.get('/inventory/yard', requireConnected, (req, res) => {
       return { containerNo, left, right, flip, unmappedPallets, layout: db.getContainerDepths(containerNo) };
     });
     const c1Mode = db.getContainerDepths(1).mode;
-    res.render('inventory_yard', { yard, c1Mode, walkinPallets: groupPallets(db.listPalletsInWalkin()), walkinLoose: db.listWalkinLoose(), returnsPallets: groupPallets(db.listPalletsInReturns()), msg: String(req.query.msg || '') });
+    res.render('inventory_yard', { yard, c1Mode,walkinMapPallets:decoratePalletLayout(db.sqlite,{walkin:groupPallets(db.listPalletsInWalkin())}).walkin, walkinPallets: groupPallets(db.listPalletsInWalkin()), walkinLoose: db.listWalkinLoose(), returnsPallets: groupPallets(db.listPalletsInReturns()), msg: String(req.query.msg || '') });
   } catch (e) {
     res.status(500).send(`Yard error: ${e?.message || e}`);
   }

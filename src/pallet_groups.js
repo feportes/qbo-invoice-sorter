@@ -1,6 +1,6 @@
 // Each product remains its own stock/lot row; a group occupies one physical slot.
 export function copyFingerprint(items) {
-  return JSON.stringify([...items].sort((a,b)=>a.id-b.id).map(p=>[p.id,p.sku_id,p.lot_id,p.pallet_config_id,p.location_id,p.qty_units]));
+  return JSON.stringify([...items].sort((a,b)=>a.id-b.id).map(p=>[p.id,p.sku_id,p.lot_id,p.pallet_config_id,p.location_id,p.qty_units,p.walkin_position||null]));
 }
 export function groupPallets(rows) {
   const groups = new Map();
