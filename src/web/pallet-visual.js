@@ -14,10 +14,11 @@ export function palletSVG(pallet,orientation='straight'){
  let art='<rect x="3" y="3" width="94" height="114" rx="3" fill="#b48b57" stroke="#8b683f"/>';
  for(let x=7;x<94;x+=18)art+=`<rect x="${x}" y="6" width="13" height="108" rx="1" fill="#dfc498"/>`;
  const tub=(x,y,r)=>`<circle cx="${x}" cy="${y}" r="${r}" fill="#f7f7f2" stroke="#a9b4ba" stroke-width="1.2"/><circle cx="${x}" cy="${y}" r="${r*.66}" fill="none" stroke="#d5dbdd"/><circle cx="${x}" cy="${y}" r="${r*.25}" fill="#58287e"/>`;
- const box=(x,y,w,h)=>`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1" fill="#bb8754" stroke="#845b33"/><path d="M${x+w/2} ${y+1}v${h-2}" stroke="#e7c795" stroke-width="4"/>`;
- if(kind==='tubs20'||kind==='tubs12'){const cols=kind==='tubs20'?4:3,rows=kind==='tubs20'?5:4,dx=86/cols,dy=106/rows;for(let y=0;y<rows;y++)for(let x=0;x<cols;x++)art+=tub(7+(x+.5)*dx,7+(y+.5)*dy,Math.min(dx,dy)*.43);}
- if(kind==='boxes10')for(let y=0;y<5;y++)for(let x=0;x<2;x++)art+=box(8+x*43,8+y*21,40,19);
+ const box=(x,y,w,h)=>`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1" fill="#bb8754" stroke="#845b33"/><path d="${w>h?`M${x+1} ${y+h/2}h${w-2}`:`M${x+w/2} ${y+1}v${h-2}`}" stroke="#e7c795" stroke-width="4"/>`;
+ if(kind==='tubs20'||kind==='tubs12'){const cols=kind==='tubs20'?4:3,rows=kind==='tubs20'?5:4,dx=90/cols,dy=110/rows;for(let y=0;y<rows;y++)for(let x=0;x<cols;x++)art+=tub(5+(x+.5)*dx,5+(y+.5)*dy,Math.min(dx,dy)*.49);}
+ // Two columns of three long cases, plus four turned sideways down the edge.
+ if(kind==='boxes10'){for(let x=0;x<2;x++)for(let y=0;y<3;y++)art+=box(5+x*28,5+y*36.6,27.5,36);for(let y=0;y<4;y++)art+=box(61,5+y*27.5,34,27);}
  if(kind==='mixed'){for(let y=0;y<3;y++)for(let x=0;x<3;x++)art+=tub(22+x*28,21+y*25,10);art+=box(9,88,39,22)+box(51,88,39,22);}
  if(kind==='stock')art+='<rect x="12" y="17" width="76" height="87" rx="7" fill="#e9e0f2" stroke="#75518e"/><path d="M26 60h48M50 36v48" stroke="#75518e" stroke-width="5"/>';
- return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${sideways?'120 100':'100 120'}" width="${sideways?110:92}" height="${sideways?92:110}" role="img" aria-label="${label}. 40 by 48 inch pallet, ${sideways?'sideways':'straight'}"><title>${label} · illustration, not stock quantity</title><g${sideways?' transform="translate(120 0) rotate(90)"':''}>${art}</g></svg>`;
+ return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${sideways?'120 100':'100 120'}" width="${sideways?58:48}" height="${sideways?48:58}" role="img" aria-label="${label}. 40 by 48 inch pallet, ${sideways?'sideways':'straight'}"><title>${label} · illustration, not stock quantity</title><g${sideways?' transform="translate(120 0) rotate(90)"':''}>${art}</g></svg>`;
 }
