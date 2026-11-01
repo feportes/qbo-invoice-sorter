@@ -1,3 +1,4 @@
+import {ensureInstructionUpdateSchema,instructionCustomers,createInstructionUpdate,uploadInstructionUpdateMedia,submitInstructionUpdate,readInstructionUpdates,instructionUpdateMedia,reviewInstructionUpdate} from './warehouse_instruction_updates.js';
 import {ensureGuideSchema,saveReferenceGuide,saveReferenceMedia,referenceMedia,guideMedia,attachReferenceGuides} from './warehouse_guides.js';
 import express from 'express';
 import {randomUUID} from 'node:crypto';
@@ -9,9 +10,11 @@ import {createWarehouseSource} from './warehouse_source.js';
 import {stockCatalog,registerStockPallet,moveStockPallet,editStockPallet} from './warehouse_stock.js';
 
 const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next);
+
+function serveInstructionMedia(req,res,m){const total=m.bytes.length;res.type(m.mime_type).set('Accept-Ranges','bytes');if(req.get('range')){const match=/^bytes=(\d*)-(\d*)$/.exec(req.get('range'));if(!match||!match[1]&&!match[2])return res.status(416).set('Content-Range','bytes */'+total).end();let start=match[1]?Number(match[1]):Math.max(0,total-Number(match[2])),end=match[1]&&match[2]?Math.min(total-1,Number(match[2])):total-1;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=total||end<start)return res.status(416).set('Content-Range','bytes */'+total).end();res.status(206).set('Content-Range','bytes '+start+'-'+end+'/'+total).send(m.bytes.subarray(start,end+1));}else res.send(m.bytes);}
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
 export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,sourceFetch,readContainerLayout}){
-  const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureGuideSchema(sql);
+  const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureGuideSchema(sql);ensureInstructionUpdateSchema(sql);
   const source=createWarehouseSource({sql,env,readInvoice,...(sourceFetch?{fetchImpl:sourceFetch}:{})});
   const timer=setInterval(()=>source.kickAll(),30000);timer.unref();r.stopWarehouseSync=()=>clearInterval(timer);
   r.use((req,res,next)=>{
@@ -39,9 +42,16 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
     const feature=/^\/stock\/(catalog|pallets)(\/|$)/.test(req.path)?'warehouse':req.path.startsWith('/catalog')?'products':req.path.startsWith('/vendors')?'vendors':/^\/(qbo-purchase-orders|purchase-orders|receipts|stock)(\/|$)/.test(req.path)?'receiving':req.path.startsWith('/audit')?'reports':null;
     if(feature)permit(req.whUser,['admin','office','warehouse'],feature);next();
   }catch(e){next(e);}});
+  r.get('/instruction-customers',run((req,res)=>{permit(req.whUser,['admin','office'],'deliveries');res.json({customers:instructionCustomers(sql)});}));
+  r.get('/instruction-updates',run((req,res)=>res.json({updates:readInstructionUpdates(sql,req.whUser)})));
+  r.post('/instruction-updates',run((req,res)=>res.json(createInstructionUpdate(sql,req.whUser,req.body,driverRoute))));
+  r.post('/instruction-updates/:id/media/:mediaId',express.raw({type:['video/mp4','image/jpeg'],limit:'35mb'}),run((req,res)=>res.json(uploadInstructionUpdateMedia(sql,req.whUser,req.params.id,req.params.mediaId,req.body,req.get('content-type')?.split(';')[0]))));
+  r.get('/instruction-updates/:id/media/:mediaId',run((req,res)=>{const m=instructionUpdateMedia(sql,req.whUser,req.params.id,req.params.mediaId);serveInstructionMedia(req,res,m);}));
+  r.post('/instruction-updates/:id/submit',run((req,res)=>res.json(submitInstructionUpdate(sql,req.whUser,req.params.id))));
+  r.post('/instruction-updates/:id/review',run((req,res)=>res.json(reviewInstructionUpdate(sql,req.whUser,req.params.id,req.body))));
   r.post('/reference-guides',run((req,res)=>res.json(saveReferenceGuide(sql,req.whUser,req.body))));
   r.post('/reference-media/:id',express.raw({type:['video/mp4','image/jpeg','audio/ogg'],limit:'35mb'}),run((req,res)=>res.json(saveReferenceMedia(sql,req.whUser,req.params.id,req.query,req.body,req.get('content-type')?.split(';')[0]))));
-  r.get('/reference-media/:id',run((req,res)=>{const m=referenceMedia(sql,req.whUser,req.params.id,req.query.routeId,driverRoute);res.type(m.mime_type).set('Content-Length',String(m.bytes.length)).send(m.bytes);}));
+  r.get('/reference-media/:id',run((req,res)=>{const m=referenceMedia(sql,req.whUser,req.params.id,req.query.routeId,driverRoute);serveInstructionMedia(req,res,m);}));
   r.get('/reference-guides',run((req,res)=>{permit(req.whUser,['admin','office'],'deliveries');res.json({guides:sql.prepare('SELECT * FROM wh_reference_guides ORDER BY title').all().map(g=>({...g,media:guideMedia(sql,g.id)}))});}));
   r.get('/users',run((req,res)=>{permit(req.whUser,['admin']);res.json({users:sql.prepare('SELECT * FROM wh_users ORDER BY display_name').all().map(safeUser)});}));
   r.get('/team-identities',run(async(req,res)=>{permit(req.whUser,['admin']);await source.refresh(req.whUser);res.json({team:sql.prepare('SELECT id,name FROM wh_source_team ORDER BY name').all()});}));

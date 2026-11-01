@@ -61,7 +61,8 @@ app.use('/api/warehouse',createWarehouseRouter({db,
 }));
 app.get('/warehouse',(req,res)=>res.render('warehouse'));
 app.get('/warehouse-picking',(req,res)=>res.render('warehouse_picking'));
-app.get('/warehouse-yard',(req,res)=>res.render('warehouse_yard')); 
+app.get('/warehouse-yard',(req,res)=>res.render('warehouse_yard'));
+app.get('/warehouse-instructions',(req,res)=>res.render('warehouse_instructions')); 
 app.use(express.urlencoded({ extended: true, limit: '5mb', parameterLimit: 100000 }));
 
 async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
