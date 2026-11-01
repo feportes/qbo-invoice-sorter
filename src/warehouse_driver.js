@@ -6,7 +6,7 @@ import {once} from './warehouse_receiving.js';
 import {overlayDriverCatalog,driverBarcodeProof} from './warehouse_mobile_catalog.js';
 const clean=v=>String(v??'').trim();
 const code=v=>clean(v).toUpperCase();
-const qty=v=>{if(typeof v!=='number'||!Number.isFinite(v)||v<=0||v>1000000)problem('Review the product quantity.');};
+const qty=(v,min=0)=>{if(typeof v!=='number'||!Number.isFinite(v)||v<min||v>1000000)problem('Review the product quantity.');return Math.round(v*1e6)/1e6;};
 export function driverRoute(sql,user,id){
   const row=sql.prepare('SELECT * FROM wh_routes WHERE id=?').get(id);if(!row)problem('Route not found.',404);
   permit(user,['driver','office','admin'],'deliveries');

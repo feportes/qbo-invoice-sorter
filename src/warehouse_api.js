@@ -1,5 +1,6 @@
 import {sessionPolicy,saveSessionPolicy} from './warehouse_session_policy.js';
 import {saveBinding,importTelemetry,temperatures,motiveEvidence,fetchMotive,ensureTelemetry} from './warehouse_telemetry.js';
+import {importCameraEvents,saveCameraMedia,cameraEvents,cameraMedia} from './warehouse_motive_camera.js';
 import {ensureInstructionUpdateSchema,instructionCustomers,createInstructionUpdate,uploadInstructionUpdateMedia,submitInstructionUpdate,readInstructionUpdates,instructionUpdateMedia,reviewInstructionUpdate} from './warehouse_instruction_updates.js';
 import {ensureGuideSchema,saveReferenceGuide,saveReferenceMedia,referenceMedia,guideMedia,attachReferenceGuides} from './warehouse_guides.js';
 import express from 'express';
@@ -39,6 +40,10 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.use((req,res,next)=>{try{req.whUser=authenticate(sql,req);next();}catch(e){next(e);}});
   r.get('/session',run((req,res)=>res.json({user:viewUser(req.whUser),csrf:req.whUser.csrf,expiresAt:req.whUser.expiresAt})));
   r.get('/temperatures',run((req,res)=>res.json(temperatures(sql,req.whUser))));
+  r.get('/connections/camera-events',run((req,res)=>res.json(cameraEvents(sql,req.whUser,{date:req.query.date}))));
+  r.post('/connections/camera-events',run((req,res)=>res.json(importCameraEvents(sql,req.whUser,req.body))));
+  r.post('/connections/camera-events/:id/:position',express.raw({type:['image/jpeg','video/mp4'],limit:'35mb'}),run((req,res)=>res.json(saveCameraMedia(sql,req.whUser,req.params.id,req.params.position,req.body,req.get('content-type')?.split(';')[0]))));
+  r.get('/connections/camera-events/:id/:position',run((req,res)=>serveInstructionMedia(req,res,cameraMedia(sql,req.whUser,req.params.id,req.params.position,req.query.type==='video'?'video/mp4':'image/jpeg'))));
   r.get('/connections',run((req,res)=>{permit(req.whUser,['admin','office'],'reports');ensureTelemetry(sql);res.json({motiveAutomaticConfigured:!!env.MOTIVE_API_KEY,temperatureAutomaticConfigured:false,bindings:sql.prepare('SELECT * FROM wh_telemetry_bindings ORDER BY provider,target_id').all().map(b=>({...b,settings:JSON.parse(b.settings)})),records:sql.prepare('SELECT provider,COUNT(*) count,MAX(fetched_at) lastFetchedAt FROM wh_telemetry_records GROUP BY provider').all()});}));
   r.post('/connections/bindings',run((req,res)=>res.json(saveBinding(sql,req.whUser,req.body))));
   r.post('/connections/import',run((req,res)=>res.json(importTelemetry(sql,req.whUser,req.body))));
@@ -119,7 +124,7 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
     const route=driverRoute(sql,req.whUser,req.params.id);
     const events=sql.prepare('SELECT e.*,u.display_name FROM wh_driver_events e JOIN wh_users u ON u.id=e.user_id WHERE e.route_id=? ORDER BY e.sequence').all(route.id).map(e=>({id:e.id,kind:e.kind,payload:JSON.parse(e.payload),recordedAt:e.device_at,receivedAt:e.received_at,status:e.status,displayName:e.display_name}));
     const syncIssues=sql.prepare("SELECT event_id,status,error,updated_at FROM wh_source_jobs WHERE route_id=? AND status<>'applied' ORDER BY updated_at").all(route.id);
-    res.json({route,events,syncIssues,officeConnection:source.configured()?'automatic':'not-configured'});
+    res.json({route,events,motive:motiveEvidence(sql,req.whUser,route),syncIssues,officeConnection:source.configured()?'automatic':'not-configured'});
   }));
   r.post('/routes/:id/events',run((req,res)=>{const result=saveDriverEvents(sql,req.whUser,{...req.body,routeId:req.params.id});source.kick(req.params.id);res.json(result);}));
   r.post('/media',express.raw({type:['image/jpeg','image/png','image/webp'],limit:'8mb'}),run((req,res)=>{
