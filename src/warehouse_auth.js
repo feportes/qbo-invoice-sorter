@@ -14,7 +14,7 @@ export function audit(sql,user,action,entityType,entityId,detail={}) {
 export function safeUser(user){return {id:user.id,username:user.username,displayName:user.display_name,role:user.role,teamId:user.team_id,enabled:!!user.enabled,functions:JSON.parse(user.functions||'[]'),mustChangePassword:!!user.must_change_password};}
 function selectedFunctions(input,role){const f=input??defaultFunctions(role);if(!Array.isArray(f)||f.some(x=>!functionNames.includes(x)))problem('Choose valid work functions.');return role==='admin'?[...functionNames]:[...new Set(f)];}
 export async function hashPassword(password){
-  if(typeof password!=='string'||password.length<12||password.length>200)problem('Use a password between 12 and 200 characters.');
+  if(typeof password!=='string'||password.length<8||password.length>200)problem('Use a password between 8 and 200 characters.');
   const salt=randomBytes(16).toString('hex');
   return 'scrypt:'+salt+':'+Buffer.from(await scrypt(password,salt,64)).toString('hex');
 }

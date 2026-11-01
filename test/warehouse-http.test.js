@@ -11,7 +11,7 @@ test('individual office and driver sessions enforce access at the HTTP boundary'
   const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>{server.close();sql.close();});
   const base='http://127.0.0.1:'+server.address().port+'/api/warehouse';
   async function call(path,body,auth,extra={}){const headers={...extra};if(body!==undefined)headers['Content-Type']='application/json';if(auth)headers.Authorization='Bearer '+auth.token;const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers,body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,data:await r.json(),headers:r.headers};}
-  const password='Synthetic password 123!';
+  const password='24682468';
   assert.equal((await call('/bootstrap',{token:'wrong',username:'owner.admin',displayName:'Owner',password})).status,403);
   assert.equal((await call('/bootstrap',{token:env.WAREHOUSE_BOOTSTRAP_TOKEN,username:'owner.admin',displayName:'Owner',password})).status,201);
   const owner=(await call('/login',{username:'OWNER.ADMIN',password})).data;
@@ -58,5 +58,9 @@ test('individual office and driver sessions enforce access at the HTTP boundary'
   assert.equal((await call('/routes',undefined,b)).status,401,'disabled user cannot reuse a session');
   const audit=(await call('/audit',undefined,owner)).data.records;
   assert.ok(audit.some(x=>x.action==='user-access-updated'));assert.ok(!JSON.stringify(audit).includes(password));assert.ok(!JSON.stringify(audit).includes(owner.token));
+  assert.equal((await call('/password',{currentPassword:password,newPassword:'1234567'},owner)).status,400,'reject fewer than eight characters');
+  assert.equal((await call('/password',{currentPassword:password,newPassword:'86428642'},owner)).status,200,'allow an eight-digit password');
   assert.equal((await call('/logout',{},owner)).status,200);assert.equal((await call('/users',undefined,owner)).status,401);
+  const changedOwner=(await call('/login',{username:'owner.admin',password:'86428642'})).data;
+  assert.equal(changedOwner.user.role,'admin');assert.equal(changedOwner.user.mustChangePassword,false);await call('/logout',{},changedOwner);
 });
