@@ -8,7 +8,7 @@ import {createWarehouseSource} from './warehouse_source.js';
 
 const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next);
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
-export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,sourceFetch}){
+export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,sourceFetch,readContainerLayout}){
   const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);
   const source=createWarehouseSource({sql,env,readInvoice,...(sourceFetch?{fetchImpl:sourceFetch}:{})});
   const timer=setInterval(()=>source.kickAll(),30000);timer.unref();r.stopWarehouseSync=()=>clearInterval(timer);
@@ -43,6 +43,9 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/users/:id/disable',run((req,res)=>res.json(disableUser(sql,req.whUser,req.params.id))));
   r.post('/users/:id',run(async(req,res)=>res.json(await updateUser(sql,req.whUser,req.params.id,req.body))));
   r.get('/driver-catalog',run(async(req,res)=>{permit(req.whUser,['admin','office','driver'],'deliveries');res.json(await source.catalog(req.whUser,String(req.query.version||''),req.query.force==='true'));}));
+  r.get('/container-layout',run((req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');if(!readContainerLayout)problem('Container layout is not configured.',503);res.json(readContainerLayout());}));
+  r.get('/picking',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');res.json(await source.request('/api/mobile-warehouse',req.whUser));}));
+  r.post('/picking',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');const result=await source.request('/api/mobile-warehouse',req.whUser,req.body);audit(sql,req.whUser,'warehouse-action','route',String(req.body.command?.args?.[0]||''),{requestId:req.body.requestId,action:req.body.command?.name});res.json(result);}));
   r.get('/catalog',run((req,res)=>{permit(req.whUser,['admin','office','warehouse']);res.json({products:sql.prepare('SELECT id,qbo_item_id,qbo_sku,name,unit_type FROM skus WHERE active=1 ORDER BY name').all(),palletConfigs:sql.prepare('SELECT id,sku_id,name,units_per_pallet,is_default FROM pallet_configs ORDER BY sku_id,is_default DESC').all()});}));
   r.get('/vendors',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse']);if(!readVendors)problem('Vendor lookup is not configured.',503);res.json({vendors:await readVendors()});}));
   r.get('/qbo-purchase-orders',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse']);if(!readPurchaseOrders)problem('QuickBooks PO lookup is not configured.',503);res.json({purchaseOrders:await readPurchaseOrders(String(req.query.vendorId||''))});}));

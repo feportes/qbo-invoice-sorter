@@ -51,6 +51,10 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
   if(event.kind==='defer'||event.kind==='skip'){stop.previousStatus=stop.status||'pending';stop.status=event.kind==='defer'?'deferred':'skipped';stop.visitReason=reason(x.reason);stop.visitAt=at;return;}
   if(event.kind==='arrive'){if(!['pending',undefined].includes(stop.status))problem('This stop is already in progress.');stop.status='arrived';stop.arrivedAt=at;return;}
   if(event.kind==='start-picking'){if(stop.status!=='arrived')problem('Confirm arrival first.');stop.status='picking';stop.pickingAt=at;return;}
+  if(event.kind==='manual-pick'){
+    if(stop.status!=='picking')problem('Start picking before recording a manual pick.');const p=stop.products.find(p=>p.id===x.productId);if(!p)problem('Choose a product at this stop.');const q=x.qty,picked=stop.counts?.[p.id]||0,left=Math.ceil(round(p.qty))-picked;
+    if(!Number.isInteger(q)||q<1||q>left||String(x.reason||'').trim().length<5)problem('Review manual quantity and give a reason.');stop.counts??={};stop.counts[p.id]=picked+q;stop.history??=[];stop.history.push({eventId:event.id,productId:p.id,qty:q,at,source:'admin-manual-pick',reason:x.reason});if(stop.shortages)delete stop.shortages[p.id];return;
+  }
   if(event.kind==='scan'){
     if(stop.status!=='picking')problem('Start picking at this stop before scanning.');
     const matches=stop.products.filter(p=>verifiedProductKey?p.id===verifiedProductKey:[...(p.barcodes||[]),p.sku].filter(Boolean).some(c=>code(c)===code(x.barcode)));
@@ -93,6 +97,7 @@ export function saveDriverEvents(sql,user,input){
       if(!/^[A-Za-z0-9_-]{8,100}$/.test(event.id||'')||ids.has(event.id)||!Number.isFinite(Date.parse(event.recordedAt)))problem('Review saved action identifiers and timestamps.');ids.add(event.id);
       if(sql.prepare('SELECT id FROM wh_driver_events WHERE id=?').get(event.id))problem('This action was already received in another batch. Refresh before syncing.',409);
       if(event.kind==='photo')for(const id of event.payload?.mediaIds||[]){const media=sql.prepare('SELECT * FROM wh_media WHERE id=?').get(id);if(!media||media.route_id!==row.id||media.user_id!==user.id||String(media.stop_id||'')!==String(event.payload.stopId||''))problem('Upload the matching route photos before syncing the log.');}
+      if(event.kind==='manual-pick'&&user.role!=='admin')problem('Manual picking requires administrator access.',403);
       const at=new Date().toISOString(),proof=event.kind==='scan'?driverBarcodeProof(sql,user,route,event):null;applyDriverEvent(route,event,at,proof);
       sql.prepare('INSERT INTO wh_driver_events (id,route_id,user_id,device_id,device_at,received_at,kind,payload,status) VALUES (?,?,?,?,?,?,?,?,?)').run(event.id,row.id,user.id,input.deviceId,event.recordedAt,at,event.kind,JSON.stringify(event.payload||{}),'pending-office');
       audit(sql,user,'driver-'+event.kind,'route',row.id,{eventId:event.id,deviceAt:event.recordedAt,stopId:event.payload?.stopId||null,payload:event.payload||{}});

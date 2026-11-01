@@ -53,12 +53,15 @@ const warehouseQboQuery = async query => { const {conn,oauthClient}=await withFr
 const warehouseQboId = value => { if(!/^\d{1,30}$/.test(value))throw Object.assign(Error('Choose a valid QuickBooks record.'),{status:400});return value; };
 app.use('/api/warehouse',createWarehouseRouter({db,
   readInvoice:async stop=>{const {conn,oauthClient}=await withFreshClient();const id=warehouseReference(stop.qboInvoiceId,conn.realm_id);const invoice=await qboReadInvoiceWithRetry(oauthClient,conn.realm_id,id,2);return nativeInvoiceBaseline(invoice.Invoice||invoice,stop,conn.realm_id);},
+  readContainerLayout:()=>({yard:db.listContainers().map(cont=>{const n=typeof cont==='object'?(cont.containerNo??cont.container_no??cont.id):Number(cont);return {containerNo:n,...buildContainerSlots(n,db),layout:db.getContainerDepths(n)};}),walkin:groupPallets(db.listPalletsInWalkin()),loose:db.listWalkinLoose(),returns:groupPallets(db.listPalletsInReturns())}),
   readVendors:async()=>((await warehouseQboQuery('select * from Vendor where Active = true maxresults 1000'))?.QueryResponse?.Vendor||[]).map(v=>({id:String(v.Id),name:v.DisplayName})),
   readVendor:async id=>(await warehouseQboQuery(`select * from Vendor where Id = '${warehouseQboId(id)}'`))?.QueryResponse?.Vendor?.[0],
   readPurchaseOrders:async vendorId=>((await warehouseQboQuery('select * from PurchaseOrder orderby TxnDate desc maxresults 1000'))?.QueryResponse?.PurchaseOrder||[]).filter(p=>!vendorId||String(p.VendorRef?.value)===vendorId).map(p=>({id:String(p.Id),number:p.DocNumber,date:p.TxnDate,vendorId:p.VendorRef?.value,vendor:p.VendorRef?.name,closed:!!p.POStatus&&p.POStatus==='Closed'})),
   readPurchaseOrder:async id=>(await warehouseQboQuery(`select * from PurchaseOrder where Id = '${warehouseQboId(id)}'`))?.QueryResponse?.PurchaseOrder?.[0]
 }));
 app.get('/warehouse',(req,res)=>res.render('warehouse'));
+app.get('/warehouse-picking',(req,res)=>res.render('warehouse_picking'));
+app.get('/warehouse-yard',(req,res)=>res.render('warehouse_yard')); 
 app.use(express.urlencoded({ extended: true, limit: '5mb', parameterLimit: 100000 }));
 
 async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {

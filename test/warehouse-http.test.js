@@ -7,7 +7,7 @@ import {createWarehouseRouter} from '../src/warehouse_api.js';
 
 test('individual office and driver sessions enforce access at the HTTP boundary',async t=>{
   const sql=new Database(':memory:'),env={WAREHOUSE_ENABLED:'true',WAREHOUSE_BOOTSTRAP_TOKEN:'setup-'.repeat(8),WAREHOUSE_BRIDGE_KEY:'bridge-'.repeat(8)};
-  const app=express();app.use(express.json());app.use('/api/warehouse',createWarehouseRouter({db:{sqlite:sql},env}));
+  const app=express();app.use(express.json());app.use('/api/warehouse',createWarehouseRouter({db:{sqlite:sql},env,readContainerLayout:()=>({yard:[{containerNo:1,left:[],right:[]}]})}));
   const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>{server.close();sql.close();});
   const base='http://127.0.0.1:'+server.address().port+'/api/warehouse';
   async function call(path,body,auth,extra={}){const headers={...extra};if(body!==undefined)headers['Content-Type']='application/json';if(auth)headers.Authorization='Bearer '+auth.token;const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers,body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,data:await r.json(),headers:r.headers};}
@@ -29,6 +29,13 @@ test('individual office and driver sessions enforce access at the HTTP boundary'
   assert.equal((await call('/users',undefined,tempAdmin)).status,403,'temporary administrator must also change password');
   const alice=await make('alice.driver','driver','TEAM-A'),bob=await make('bob.driver','driver','TEAM-B');
   const a=await activate(alice.username),b=await activate(bob.username);
+  assert.equal((await call('/container-layout',undefined,a)).status,403,'drivers cannot read warehouse container stock');
+  assert.equal((await call('/container-layout',undefined,managerAuth)).status,200,'management can read container layout');
+  const picker=await make('casey.warehouse','warehouse');const pickerAuth=await activate(picker.username);assert.equal((await call('/container-layout',undefined,pickerAuth)).status,200,'warehouse can read container layout');
+  const manual={id:'HTTP-MANUAL',name:'Synthetic manual pick',date:'2026-10-31',driverId:'TEAM-UNRELATED',status:'delivering',stops:[{id:'STOP-M',customerName:'Test customer',status:'picking',products:[{id:'NO-CODE',name:'Test case without barcode',barcodes:[],qty:1}]}]};
+  assert.equal((await call('/bridge/routes',{requestId:randomUUID(),sourceRevision:'v1',route:manual},{token:env.WAREHOUSE_BRIDGE_KEY})).status,200);
+  const manualBody={requestId:randomUUID(),deviceId:'TEST-DEVICE',expectedRevision:1,events:[{id:randomUUID(),kind:'manual-pick',payload:{stopId:'STOP-M',productId:'NO-CODE',qty:1,reason:'No barcode on product'},recordedAt:new Date().toISOString()}]};
+  assert.equal((await call('/routes/HTTP-MANUAL/events',manualBody,a)).status,403);assert.equal((await call('/routes/HTTP-MANUAL/events',manualBody,managerAuth)).status,403);const manualSaved=await call('/routes/HTTP-MANUAL/events',manualBody,owner);assert.equal(manualSaved.status,200);assert.equal(manualSaved.data.route.snapshot.stops[0].counts['NO-CODE'],1);
   const route={id:'HTTP-TEST',name:'Synthetic test',date:'2026-10-31',driverId:'TEAM-A',status:'loaded',stops:[{id:'STOP-A',customerName:'Synthetic customer',status:'pending',products:[{id:'PRODUCT-A',name:'Synthetic case',sku:'CASE-A',barcodes:['000123'],qty:1}]}]};
   const bridge={token:env.WAREHOUSE_BRIDGE_KEY};
   assert.equal((await call('/bridge/routes',{requestId:randomUUID(),sourceRevision:'v1',route},a)).status,403);
