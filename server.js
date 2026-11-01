@@ -1,3 +1,4 @@
+import {mountWarehouseWebApp} from './src/warehouse_web_app.js';
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -59,10 +60,13 @@ app.use('/api/warehouse',createWarehouseRouter({db,
   readPurchaseOrders:async vendorId=>((await warehouseQboQuery('select * from PurchaseOrder orderby TxnDate desc maxresults 1000'))?.QueryResponse?.PurchaseOrder||[]).filter(p=>!vendorId||String(p.VendorRef?.value)===vendorId).map(p=>({id:String(p.Id),number:p.DocNumber,date:p.TxnDate,vendorId:p.VendorRef?.value,vendor:p.VendorRef?.name,closed:!!p.POStatus&&p.POStatus==='Closed'})),
   readPurchaseOrder:async id=>(await warehouseQboQuery(`select * from PurchaseOrder where Id = '${warehouseQboId(id)}'`))?.QueryResponse?.PurchaseOrder?.[0]
 }));
+mountWarehouseWebApp(app);
 app.get('/warehouse',(req,res)=>res.render('warehouse'));
 app.get('/warehouse-picking',(req,res)=>res.render('warehouse_picking'));
 app.get('/warehouse-yard',(req,res)=>res.render('warehouse_yard'));
-app.get('/warehouse-instructions',(req,res)=>res.render('warehouse_instructions')); 
+app.get('/warehouse-instructions',(req,res)=>res.render('warehouse_instructions'));
+app.get('/warehouse-security',(req,res)=>res.render('warehouse_security'));
+app.get('/warehouse-ui.css',(req,res)=>res.type('css').sendFile(path.join(__dirname,'src','views','warehouse-ui.css'))); 
 app.use(express.urlencoded({ extended: true, limit: '5mb', parameterLimit: 100000 }));
 
 async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {

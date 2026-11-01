@@ -14,8 +14,8 @@ export function once(sql,user,requestId,payload,work){
     const result=work();sql.prepare('INSERT INTO wh_idempotency VALUES (?,?,?,?,?)').run(requestId,user.id,signature,JSON.stringify(result),now());return result;
   })();
 }
-export function createPurchaseOrder(db,user,input){
-  permit(user,['admin','office'],'receiving');const sql=db.sqlite;
+export function createPurchaseOrder(db,user,input,directReceipt=false){
+  permit(user,directReceipt?['admin','office','warehouse']:['admin','office'],'receiving');const sql=db.sqlite;
   const vendorId=text(input.vendorId,'the vendor account',100),vendorName=text(input.vendorName,'the vendor name'),poNumber=text(input.poNumber,'the PO number',100);
   if(!Array.isArray(input.lines)||!input.lines.length||input.lines.length>200)problem('Add between 1 and 200 product lines.');
   const seen=new Set(),lines=input.lines.map((x,index)=>{const id=text(x.id||'LINE-'+(index+1),'the line ID',100);if(seen.has(id))problem('PO line IDs must be unique.');seen.add(id);const sku=sql.prepare('SELECT * FROM skus WHERE id=? AND active=1').get(Number(x.skuId));if(!sku)problem('Choose an active product.');if(!['frozen','dry','refrigerated'].includes(x.area))problem('Choose the product storage area.');return {id,skuId:sku.id,qboItemId:sku.qbo_item_id||null,name:sku.name,unit:sku.unit_type,orderedQty:quantity(x.orderedQty,'ordered quantity',false),area:x.area};});

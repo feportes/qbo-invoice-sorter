@@ -1,3 +1,5 @@
+import {sessionPolicy,saveSessionPolicy} from './warehouse_session_policy.js';
+import {saveBinding,importTelemetry,temperatures,motiveEvidence,fetchMotive,ensureTelemetry} from './warehouse_telemetry.js';
 import {ensureInstructionUpdateSchema,instructionCustomers,createInstructionUpdate,uploadInstructionUpdateMedia,submitInstructionUpdate,readInstructionUpdates,instructionUpdateMedia,reviewInstructionUpdate} from './warehouse_instruction_updates.js';
 import {ensureGuideSchema,saveReferenceGuide,saveReferenceMedia,referenceMedia,guideMedia,attachReferenceGuides} from './warehouse_guides.js';
 import express from 'express';
@@ -36,13 +38,26 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
 
   r.use((req,res,next)=>{try{req.whUser=authenticate(sql,req);next();}catch(e){next(e);}});
   r.get('/session',run((req,res)=>res.json({user:viewUser(req.whUser),csrf:req.whUser.csrf,expiresAt:req.whUser.expiresAt})));
+  r.get('/temperatures',run((req,res)=>res.json(temperatures(sql,req.whUser))));
+  r.get('/connections',run((req,res)=>{permit(req.whUser,['admin','office'],'reports');ensureTelemetry(sql);res.json({motiveAutomaticConfigured:!!env.MOTIVE_API_KEY,temperatureAutomaticConfigured:false,bindings:sql.prepare('SELECT * FROM wh_telemetry_bindings ORDER BY provider,target_id').all().map(b=>({...b,settings:JSON.parse(b.settings)})),records:sql.prepare('SELECT provider,COUNT(*) count,MAX(fetched_at) lastFetchedAt FROM wh_telemetry_records GROUP BY provider').all()});}));
+  r.post('/connections/bindings',run((req,res)=>res.json(saveBinding(sql,req.whUser,req.body))));
+  r.post('/connections/import',run((req,res)=>res.json(importTelemetry(sql,req.whUser,req.body))));
+  r.post('/connections/motive-refresh',run(async(req,res)=>res.json(await fetchMotive(sql,req.whUser,env,req.body))));
+  r.get('/routes/:id/motive',run((req,res)=>res.json(motiveEvidence(sql,req.whUser,driverRoute(sql,req.whUser,req.params.id)))));
+  r.get('/session-policy',run((req,res)=>res.json(sessionPolicy(sql))));
+  r.post('/session-policy',run((req,res)=>res.json(saveSessionPolicy(sql,req.whUser,req.body))));
+  r.get('/login-directory',run((req,res)=>{permit(req.whUser,['admin','office','warehouse','driver']);res.json({users:sql.prepare('SELECT username,display_name AS displayName FROM wh_users WHERE enabled=1 ORDER BY display_name').all()});}));
+  r.get('/products',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');res.json(await source.request('/api/mobile-products',req.whUser));}));
+  r.get('/receiving-lookups',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'receiving');if(!readVendors)problem('Vendor lookup is not configured.',503);res.json({vendors:await readVendors(),products:sql.prepare('SELECT id,qbo_sku,name,unit_type FROM skus WHERE active=1 ORDER BY name').all(),palletConfigs:sql.prepare('SELECT * FROM pallet_configs').all()});}));
+  r.post('/receipts/direct',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'receiving');if(!readVendor)problem('Vendor lookup is not configured.',503);const vendor=await readVendor(String(req.body.vendorId||''));if(!vendor?.Id||vendor.Active===false)problem('Choose an active QuickBooks vendor.');res.json(once(sql,req.whUser,req.body.requestId,req.body,()=>{const lines=(req.body.lines||[]).map((line,index)=>({...line,id:'DIRECT-'+index,orderedQty:line.receivedQty})),po=createPurchaseOrder(db,req.whUser,{requestId:req.body.requestId+'-po',vendorId:String(vendor.Id),vendorName:vendor.DisplayName,poNumber:'DIRECT-'+req.body.requestId.slice(0,12),lines},true).purchaseOrder;return recordReceipt(db,req.whUser,{requestId:req.body.requestId+'-receipt',poId:po.id,expectedPORevision:po.revision,mode:req.body.mode,notes:req.body.notes,lines:lines.map(l=>({...l,poLineId:l.id}))});}));}));
+  r.post('/products',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');res.json(await source.request('/api/mobile-products',req.whUser,req.body));}));
   r.post('/logout',run((req,res)=>{sql.prepare('DELETE FROM wh_sessions WHERE token_hash=?').run(req.whUser.sessionHash);res.clearCookie('__Host-wh_session',{secure:true,httpOnly:true,sameSite:'strict',path:'/'});res.json({signedOut:true});}));
   r.post('/password',run(async(req,res)=>res.json(await changePassword(sql,req.whUser,req.body))));
   r.use((req,res,next)=>{try{
     const feature=/^\/stock\/(catalog|pallets)(\/|$)/.test(req.path)?'warehouse':req.path.startsWith('/catalog')?'products':req.path.startsWith('/vendors')?'vendors':/^\/(qbo-purchase-orders|purchase-orders|receipts|stock)(\/|$)/.test(req.path)?'receiving':req.path.startsWith('/audit')?'reports':null;
     if(feature)permit(req.whUser,['admin','office','warehouse'],feature);next();
   }catch(e){next(e);}});
-  r.get('/instruction-customers',run((req,res)=>{permit(req.whUser,['admin','office'],'deliveries');res.json({customers:instructionCustomers(sql)});}));
+  r.get('/instruction-customers',run(async(req,res)=>{permit(req.whUser,['admin','office'],'deliveries');try{const choices=await source.request('/api/mobile-guide-customers',req.whUser);if(Array.isArray(choices.customers)&&choices.customers.length<=2000)sql.transaction(()=>{const put=sql.prepare('INSERT OR REPLACE INTO wh_instruction_customer_choices VALUES(?,?,?,?)');for(const c of choices.customers)if(typeof c.customerId==='string'&&c.customerId.length<=200&&typeof c.referenceId==='string'&&c.referenceId.length<=100&&typeof c.name==='string'&&c.name.length<=300)put.run(c.customerId,c.referenceId,c.name,String(c.address||'').slice(0,500));})();}catch{}res.json({customers:instructionCustomers(sql)});}));
   r.get('/instruction-updates',run((req,res)=>res.json({updates:readInstructionUpdates(sql,req.whUser)})));
   r.post('/instruction-updates',run((req,res)=>res.json(createInstructionUpdate(sql,req.whUser,req.body,driverRoute))));
   r.post('/instruction-updates/:id/media/:mediaId',express.raw({type:['video/mp4','image/jpeg'],limit:'35mb'}),run((req,res)=>res.json(uploadInstructionUpdateMedia(sql,req.whUser,req.params.id,req.params.mediaId,req.body,req.get('content-type')?.split(';')[0]))));
