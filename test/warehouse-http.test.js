@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import Database from 'better-sqlite3';
+import express from 'express';
+import {createWarehouseRouter} from '../src/warehouse_api.js';
+
+test('individual office and driver sessions enforce access at the HTTP boundary',async t=>{
+  const sql=new Database(':memory:'),env={WAREHOUSE_ENABLED:'true',WAREHOUSE_BOOTSTRAP_TOKEN:'setup-'.repeat(8),WAREHOUSE_BRIDGE_KEY:'bridge-'.repeat(8)};
+  const app=express();app.use(express.json());app.use('/api/warehouse',createWarehouseRouter({db:{sqlite:sql},env}));
+  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>{server.close();sql.close();});
+  const base='http://127.0.0.1:'+server.address().port+'/api/warehouse';
+  async function call(path,body,auth,extra={}){const headers={...extra};if(body!==undefined)headers['Content-Type']='application/json';if(auth)headers.Authorization='Bearer '+auth.token;const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers,body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,data:await r.json(),headers:r.headers};}
+  const password='Synthetic password 123!';
+  assert.equal((await call('/bootstrap',{token:'wrong',username:'owner.admin',displayName:'Owner',password})).status,403);
+  assert.equal((await call('/bootstrap',{token:env.WAREHOUSE_BOOTSTRAP_TOKEN,username:'owner.admin',displayName:'Owner',password})).status,201);
+  const owner=(await call('/login',{username:'OWNER.ADMIN',password})).data;
+  assert.equal((await call('/users',undefined,owner)).status,200);
+  assert.equal((await call('/users')).status,401);
+  async function make(username,role,teamId,functions){const result=await call('/users',{username,role,teamId,functions,displayName:username,password},owner);assert.equal(result.status,201);return result.data.user;}
+  async function activate(username){const auth=(await call('/login',{username,password})).data;assert.equal((await call('/routes',undefined,auth)).status,403);const changed=await call('/password',{currentPassword:password,newPassword:'Changed password 123!'},auth);assert.equal(changed.status,200);return auth;}
+  const manager=await make('ops.manager','manager');const managerAuth=await activate(manager.username);
+  assert.equal((await call('/users',undefined,managerAuth)).status,403);
+  assert.equal((await call('/users',{username:'intruder.admin',role:'admin',displayName:'Intruder',password},managerAuth)).status,403);
+  assert.equal((await call('/users/'+owner.user.id,{enabled:false},managerAuth)).status,403);
+  assert.equal((await call('/audit',undefined,managerAuth)).status,200);
+  assert.equal((await call('/routes',undefined,managerAuth)).status,200);
+  await make('temporary.admin','admin');const tempAdmin=(await call('/login',{username:'temporary.admin',password})).data;
+  assert.equal((await call('/users',undefined,tempAdmin)).status,403,'temporary administrator must also change password');
+  const alice=await make('alice.driver','driver','TEAM-A'),bob=await make('bob.driver','driver','TEAM-B');
+  const a=await activate(alice.username),b=await activate(bob.username);
+  const route={id:'HTTP-TEST',name:'Synthetic test',date:'2026-10-31',driverId:'TEAM-A',status:'loaded',stops:[{id:'STOP-A',customerName:'Synthetic customer',status:'pending',products:[{id:'PRODUCT-A',name:'Synthetic case',sku:'CASE-A',barcodes:['000123'],qty:1}]}]};
+  const bridge={token:env.WAREHOUSE_BRIDGE_KEY};
+  assert.equal((await call('/bridge/routes',{requestId:randomUUID(),sourceRevision:'v1',route},a)).status,403);
+  assert.equal((await call('/bridge/routes',{requestId:randomUUID(),sourceRevision:'v1',route},bridge)).status,200);
+  assert.equal((await call('/routes',undefined,a)).data.routes.length,1);assert.equal((await call('/routes',undefined,b)).data.routes.length,0);
+  assert.equal((await call('/routes/HTTP-TEST',undefined,b)).status,403);
+  const event={id:randomUUID(),kind:'depart',recordedAt:new Date().toISOString(),payload:{confirmedLoad:true}};
+  const batch={requestId:randomUUID(),deviceId:'TEST-DEVICE',expectedRevision:1,events:[event]};
+  assert.equal((await call('/routes/HTTP-TEST/events',batch,b)).status,403);
+  assert.equal((await call('/routes/HTTP-TEST/events',batch,a)).status,200);
+  assert.equal((await call('/routes/HTTP-TEST/events',batch,a)).data.duplicate,true);
+  const activity=await call('/routes/HTTP-TEST/activity',undefined,managerAuth);assert.equal(activity.status,200);assert.equal(activity.data.events.length,1);assert.equal(activity.data.events[0].displayName,alice.displayName);assert.equal(activity.data.events[0].recordedAt,event.recordedAt);
+  assert.equal((await call('/routes/HTTP-TEST/activity',undefined,b)).status,403);
+  const helperRoute={...route,id:'HTTP-HELPER',helperId:'TEAM-B'};
+  assert.equal((await call('/bridge/routes',{requestId:randomUUID(),sourceRevision:'v1',route:helperRoute},bridge)).status,200);
+  assert.equal((await call('/routes/HTTP-HELPER',undefined,b)).status,200,'assigned helper can open the shared route');
+  assert.equal((await call('/routes',undefined,b)).data.routes.length,1,'helper sees only the route it is assigned to');
+  assert.equal((await call('/users/'+owner.user.id,{role:'manager'},owner)).status,400,'main administrator cannot demote itself');
+  assert.equal((await call('/users/'+alice.id,{functions:[]},owner)).status,200);
+  assert.equal((await call('/routes',undefined,a)).status,401,'permission changes revoke old sessions');
+  const a2=(await call('/login',{username:alice.username,password:'Changed password 123!'})).data;
+  assert.equal((await call('/routes',undefined,a2)).status,403,'removed function remains denied after signing in again');
+  const cookie='__Host-wh_session='+owner.token;
+  assert.equal((await call('/users/'+bob.id,{enabled:false},null,{Cookie:cookie})).status,403,'cookie write requires CSRF');
+  assert.equal((await call('/users/'+bob.id,{enabled:false},null,{Cookie:cookie,'x-warehouse-csrf':owner.csrf,Origin:'https://other.invalid'})).status,403,'cross-origin write denied');
+  assert.equal((await call('/users/'+bob.id,{enabled:false},null,{Cookie:cookie,'x-warehouse-csrf':owner.csrf})).status,200);
+  assert.equal((await call('/routes',undefined,b)).status,401,'disabled user cannot reuse a session');
+  const audit=(await call('/audit',undefined,owner)).data.records;
+  assert.ok(audit.some(x=>x.action==='user-access-updated'));assert.ok(!JSON.stringify(audit).includes(password));assert.ok(!JSON.stringify(audit).includes(owner.token));
+  assert.equal((await call('/logout',{},owner)).status,200);assert.equal((await call('/users',undefined,owner)).status,401);
+});

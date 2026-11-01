@@ -1,0 +1,11 @@
+import test from 'node:test';import assert from 'node:assert/strict';import Database from 'better-sqlite3';import {randomUUID} from 'node:crypto';import {ensureWarehouseSchema} from '../src/warehouse_schema.js';import {saveDriverCatalog} from '../src/warehouse_mobile_catalog.js';import {importRoute,saveDriverEvents,driverRoute} from '../src/warehouse_driver.js';
+test('catalog refresh changes codes independently of counts, accepts queued historical scans, and rejects older catalog responses',()=>{
+ const sql=new Database(':memory:');ensureWarehouseSchema(sql);const user={id:'DRIVER',username:'test.driver',displayName:'Driver',role:'driver',teamId:'TEAM-A',functions:['deliveries']},admin={id:'ADMIN',role:'admin'};
+ const route={id:'LIVE-TEST',name:'Test route',date:'2026-11-01',status:'delivering',driverId:'TEAM-A',stops:[{id:'STOP',status:'picking',products:[{id:'P::case',productId:'P',packId:'case',name:'Case',sku:'CASE-A',barcodes:['OLD'],qty:2}]}]};
+ importRoute(sql,admin,{route,sourceRevision:'one',requestId:randomUUID()});const version='a'.repeat(64),next='b'.repeat(64),item=code=>({id:'P',name:'Case updated',sku:'CASE-A',defaultPack:'case',aliases:[{code,packId:'case'}]});
+ saveDriverCatalog(sql,user,{version,barcodeVersion:version,catalogRevision:1,checkedAt:new Date().toISOString(),products:[item('OLD')]});const base=driverRoute(sql,user,route.id).snapshot;
+ saveDriverCatalog(sql,user,{version:next,barcodeVersion:next,catalogRevision:2,checkedAt:new Date().toISOString(),products:[item('NEW')]});assert.deepEqual(driverRoute(sql,user,route.id).snapshot.stops[0].products[0].barcodes,['NEW']);assert.equal(driverRoute(sql,user,route.id).revision,1);
+ const event=(barcode,catalogVersion)=>({id:randomUUID(),kind:'scan',recordedAt:new Date().toISOString(),payload:{stopId:'STOP',barcode,catalogVersion,acceptedProductId:'P::case'}});
+ const result=saveDriverEvents(sql,user,{routeId:route.id,deviceId:'TEST-DEVICE',requestId:randomUUID(),expectedRevision:1,baseState:base,events:[event('old',version),event('new',next)]});assert.equal(result.route.snapshot.stops[0].counts['P::case'],2);
+ saveDriverCatalog(sql,user,{version,barcodeVersion:version,catalogRevision:1,checkedAt:new Date().toISOString(),products:[item('OLD')]});assert.equal(sql.prepare('SELECT version FROM wh_driver_catalog').get().version,next);sql.close();
+});
