@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import XLSX from 'xlsx';
 import { groupPallets } from './src/pallet_groups.js';
 import { loadingNotes } from './src/loading_notes.js';
+import { createWarehouseRouter } from './src/warehouse_api.js';
 
 import multer from 'multer';
 import { createRequire } from 'module';
@@ -46,6 +47,16 @@ app.use(morgan('dev'));
 
 // Body parsing (webhooks need raw body)
 app.use(express.json({ verify: rawBodySaver, limit: '2mb' }));
+// Authenticated native driver / receiving API. Existing routes keep their behavior.
+const warehouseQboQuery = async query => { const {conn,oauthClient}=await withFreshClient();return qboQuery(oauthClient,conn.realm_id,query); };
+const warehouseQboId = value => { if(!/^\d{1,30}$/.test(value))throw Object.assign(Error('Choose a valid QuickBooks record.'),{status:400});return value; };
+app.use('/api/warehouse',createWarehouseRouter({db,
+  readVendors:async()=>((await warehouseQboQuery('select * from Vendor where Active = true maxresults 1000'))?.QueryResponse?.Vendor||[]).map(v=>({id:String(v.Id),name:v.DisplayName})),
+  readVendor:async id=>(await warehouseQboQuery(`select * from Vendor where Id = '${warehouseQboId(id)}'`))?.QueryResponse?.Vendor?.[0],
+  readPurchaseOrders:async vendorId=>((await warehouseQboQuery('select * from PurchaseOrder orderby TxnDate desc maxresults 1000'))?.QueryResponse?.PurchaseOrder||[]).filter(p=>!vendorId||String(p.VendorRef?.value)===vendorId).map(p=>({id:String(p.Id),number:p.DocNumber,date:p.TxnDate,vendorId:p.VendorRef?.value,vendor:p.VendorRef?.name,closed:!!p.POStatus&&p.POStatus==='Closed'})),
+  readPurchaseOrder:async id=>(await warehouseQboQuery(`select * from PurchaseOrder where Id = '${warehouseQboId(id)}'`))?.QueryResponse?.PurchaseOrder?.[0]
+}));
+app.get('/warehouse',(req,res)=>res.render('warehouse'));
 app.use(express.urlencoded({ extended: true, limit: '5mb', parameterLimit: 100000 }));
 
 async function resolveInvoiceId(oauthClient, realmId, invoiceIdOrDocNumber) {
