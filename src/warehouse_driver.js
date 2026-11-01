@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {audit,permit,problem} from './warehouse_auth.js';
 import {once} from './warehouse_receiving.js';
+import {overlayDriverCatalog,driverBarcodeProof} from './warehouse_mobile_catalog.js';
 const clean=v=>String(v??'').trim();
 const code=v=>clean(v).toUpperCase();
 const round=v=>Math.round(v*1e6)/1e6;
@@ -10,9 +11,10 @@ const reason=v=>{v=clean(v);if(v.length<5||v.length>1000)problem('Explain why th
 export function driverRoute(sql,user,id){
   const row=sql.prepare('SELECT * FROM wh_routes WHERE id=?').get(id);if(!row)problem('Route not found.',404);
   permit(user,['driver','office','admin'],'deliveries');
+  if(!['admin','manager','office'].includes(user.role)&&sql.prepare('SELECT user_id FROM wh_source_access_cache WHERE user_id=?').get(user.id)&&!sql.prepare('SELECT route_id FROM wh_source_access WHERE user_id=? AND route_id=?').get(user.id,id))problem('This route is no longer assigned to you.',403);
   const snapshot=JSON.parse(row.snapshot);
   if(!['admin','manager','office'].includes(user.role)&&(!user.teamId||![row.driver_id,snapshot.helperId,...(snapshot.helperIds||[])].includes(user.teamId)))problem('This route is not assigned to you.',403);
-  return {...row,snapshot};
+  return {...row,snapshot:overlayDriverCatalog(sql,user,snapshot)};
 }
 export function validateRoute(input){
   if(input.helperId!==undefined&&(typeof input.helperId!=='string'||input.helperId.length>100))problem('Review the assigned route helper.');
@@ -25,14 +27,14 @@ export function importRoute(sql,actor,input){
   const route=validateRoute(input.route),sourceRevision=clean(input.sourceRevision);if(!sourceRevision||sourceRevision.length>200)problem('Source revision is required.');
   return once(sql,actor,input.requestId,input,()=>{
     const old=sql.prepare('SELECT * FROM wh_routes WHERE id=?').get(route.id);
-    if(old?.source_revision===sourceRevision)return {routeId:route.id,unchanged:true};
+    if(old?.source_revision===sourceRevision&&!input.refreshContent)return {routeId:route.id,unchanged:true};
     if(old&&sql.prepare("SELECT id FROM wh_driver_events WHERE route_id=? AND status='pending-office' LIMIT 1").get(route.id))problem('Sync the driver events before replacing this route packet.',409);
     const revision=(old?.revision||0)+1,at=new Date().toISOString();
-    sql.prepare('INSERT INTO wh_routes VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET route_date=excluded.route_date,driver_id=excluded.driver_id,status=excluded.status,revision=excluded.revision,snapshot=excluded.snapshot,source_revision=excluded.source_revision,updated_at=excluded.updated_at').run(route.id,route.date,route.driverId,route.status,revision,JSON.stringify(route),sourceRevision,at);
+    sql.prepare('INSERT INTO wh_routes(id,route_date,driver_id,status,revision,snapshot,source_revision,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET route_date=excluded.route_date,driver_id=excluded.driver_id,status=excluded.status,revision=excluded.revision,snapshot=excluded.snapshot,source_revision=excluded.source_revision,updated_at=excluded.updated_at').run(route.id,route.date,route.driverId,route.status,revision,JSON.stringify(route),sourceRevision,at);
     audit(sql,actor,'route-imported','route',route.id,{sourceRevision,revision,stops:route.stops.length});return {routeId:route.id,revision};
   });
 }
-export function applyDriverEvent(route,event,at=new Date().toISOString()){
+export function applyDriverEvent(route,event,at=new Date().toISOString(),verifiedProductKey=null){
   const x=event.payload||{};if(route.status==='delivered')problem('This route is finalized. Ask the office to review a correction.',409);
   const stop=route.stops.find(s=>s.id===x.stopId),active=()=>{if(!stop||['completed','skipped','deferred'].includes(stop.status))problem('Choose an open stop.');return stop;};
   if(event.kind==='depart'){
@@ -51,7 +53,7 @@ export function applyDriverEvent(route,event,at=new Date().toISOString()){
   if(event.kind==='start-picking'){if(stop.status!=='arrived')problem('Confirm arrival first.');stop.status='picking';stop.pickingAt=at;return;}
   if(event.kind==='scan'){
     if(stop.status!=='picking')problem('Start picking at this stop before scanning.');
-    const matches=stop.products.filter(p=>[...(p.barcodes||[]),p.sku].filter(Boolean).some(c=>code(c)===code(x.barcode)));
+    const matches=stop.products.filter(p=>verifiedProductKey?p.id===verifiedProductKey:[...(p.barcodes||[]),p.sku].filter(Boolean).some(c=>code(c)===code(x.barcode)));
     if(matches.length!==1)problem('That barcode does not identify one product at this stop.');
     const p=matches[0],count=Math.ceil(p.qty-0.000001),picked=stop.counts?.[p.id]||0,left=count-picked,q=qty(x.qty??1,1);
     if(!Number.isInteger(q)||q>left)problem('Only '+left+' units remain.');if(q>1&&(x.bulk!==true||left<=(p.scanLimit??10)))problem('Scan each remaining unit individually.');
@@ -86,16 +88,28 @@ export function saveDriverEvents(sql,user,input){
   if(!/^[A-Za-z0-9_-]{8,100}$/.test(input.deviceId||''))problem('A stable device ID is required.');
   return once(sql,user,input.requestId,input,()=>{
     const row=driverRoute(sql,user,input.routeId),route=row.snapshot;
-    if(row.revision!==input.expectedRevision)problem('This route changed. Keep the device work for conflict review.',409);
+    if(row.revision!==input.expectedRevision&&(!input.baseState||JSON.stringify(driverReplayGuard(row.snapshot,input.events))!==JSON.stringify(driverReplayGuard(input.baseState,input.events))))problem('This stop or route changed. Keep the device work for conflict review.',409);
     const ids=new Set();for(const event of input.events){
       if(!/^[A-Za-z0-9_-]{8,100}$/.test(event.id||'')||ids.has(event.id)||!Number.isFinite(Date.parse(event.recordedAt)))problem('Review saved action identifiers and timestamps.');ids.add(event.id);
       if(sql.prepare('SELECT id FROM wh_driver_events WHERE id=?').get(event.id))problem('This action was already received in another batch. Refresh before syncing.',409);
       if(event.kind==='photo')for(const id of event.payload?.mediaIds||[]){const media=sql.prepare('SELECT * FROM wh_media WHERE id=?').get(id);if(!media||media.route_id!==row.id||media.user_id!==user.id||String(media.stop_id||'')!==String(event.payload.stopId||''))problem('Upload the matching route photos before syncing the log.');}
-      const at=new Date().toISOString();applyDriverEvent(route,event,at);
+      const at=new Date().toISOString(),proof=event.kind==='scan'?driverBarcodeProof(sql,user,route,event):null;applyDriverEvent(route,event,at,proof);
       sql.prepare('INSERT INTO wh_driver_events (id,route_id,user_id,device_id,device_at,received_at,kind,payload,status) VALUES (?,?,?,?,?,?,?,?,?)').run(event.id,row.id,user.id,input.deviceId,event.recordedAt,at,event.kind,JSON.stringify(event.payload||{}),'pending-office');
       audit(sql,user,'driver-'+event.kind,'route',row.id,{eventId:event.id,deviceAt:event.recordedAt,stopId:event.payload?.stopId||null,payload:event.payload||{}});
     }
     sql.prepare('UPDATE wh_routes SET revision=revision+1,status=?,snapshot=?,updated_at=? WHERE id=?').run(route.status,JSON.stringify(route),new Date().toISOString(),row.id);
     return {route:driverRoute(sql,user,row.id),acknowledged:input.events.map(e=>e.id),quickbooksChanged:false};
   });
+}
+
+// Compare only the work this batch can change. Office approval of another stop
+// must not strand a driver's offline scans; changes to this stop still conflict.
+export function driverReplayGuard(route,events){
+ const whole=events.some(e=>['depart','finalize'].includes(e.kind)),ids=new Set(events.filter(e=>!['note','photo'].includes(e.kind)).map(e=>e.payload?.stopId).filter(Boolean));
+ const financial=events.some(e=>e.kind==='edit-line');
+ const dictionary=(value,fn)=>Object.keys(value||{}).sort().map(k=>[k,fn(value[k])]);
+ const stops=route.stops||[];return {
+  route:[route.id,route.date,route.driverId,route.helperId||'',route.status],plan:stops.map(s=>[s.id,s.address||'']),
+  stops:stops.filter(s=>whole||ids.has(s.id)).map(s=>({id:s.id,status:s.status||'pending',invoice:s.qboInvoiceId||'',customer:s.qboCustomerId||'',products:(s.products||[]).map(p=>[p.id,p.qty,...(financial?[p.unitPrice??null]:[])]),counts:dictionary(s.counts,n=>n),history:(s.history||[]).slice(-200).map(h=>[h.productId,h.qty,!!h.reversedAt]),shortages:dictionary(s.shortages,x=>[x.missing,x.reason,x.notes||'']),...(!whole?{officeReview:s.officeReview||'draft',proposedChanges:dictionary(s.proposedChanges,x=>[x.qty,x.unitPrice,x.reason||'']),payments:(s.payments||[]).map(x=>[x.id,x.amount,x.method,x.reference||''])}:{})}))
+ };
 }

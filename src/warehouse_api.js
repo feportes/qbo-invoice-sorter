@@ -4,11 +4,14 @@ import {ensureWarehouseSchema} from './warehouse_schema.js';
 import {authenticate,bootstrap,login,addUser,disableUser,safeUser,permit,problem,equal,audit,changePassword,updateUser} from './warehouse_auth.js';
 import {createPurchaseOrder,recordReceipt,readPO,readReceipt,suggestPutaway,confirmPutaway,approveReceipt,frozenStockLocations,once} from './warehouse_receiving.js';
 import {driverRoute,importRoute,saveDriverEvents} from './warehouse_driver.js';
+import {createWarehouseSource} from './warehouse_source.js';
 
 const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next);
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
-export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder}){
+export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,sourceFetch}){
   const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);
+  const source=createWarehouseSource({sql,env,readInvoice,...(sourceFetch?{fetchImpl:sourceFetch}:{})});
+  const timer=setInterval(()=>source.kickAll(),30000);timer.unref();r.stopWarehouseSync=()=>clearInterval(timer);
   r.use((req,res,next)=>{
     res.set('Cache-Control','private, no-store');res.set('X-Content-Type-Options','nosniff');
     if(env.WAREHOUSE_ENABLED!=='true')return res.status(503).json({error:'The warehouse pilot has not been enabled.'});
@@ -35,9 +38,11 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
     if(feature)permit(req.whUser,['admin','office','warehouse'],feature);next();
   }catch(e){next(e);}});
   r.get('/users',run((req,res)=>{permit(req.whUser,['admin']);res.json({users:sql.prepare('SELECT * FROM wh_users ORDER BY display_name').all().map(safeUser)});}));
+  r.get('/team-identities',run(async(req,res)=>{permit(req.whUser,['admin']);await source.refresh(req.whUser);res.json({team:sql.prepare('SELECT id,name FROM wh_source_team ORDER BY name').all()});}));
   r.post('/users',run(async(req,res)=>{permit(req.whUser,['admin']);res.status(201).json({user:await addUser(sql,req.whUser,req.body)});}));
   r.post('/users/:id/disable',run((req,res)=>res.json(disableUser(sql,req.whUser,req.params.id))));
   r.post('/users/:id',run(async(req,res)=>res.json(await updateUser(sql,req.whUser,req.params.id,req.body))));
+  r.get('/driver-catalog',run(async(req,res)=>{permit(req.whUser,['admin','office','driver'],'deliveries');res.json(await source.catalog(req.whUser,String(req.query.version||''),req.query.force==='true'));}));
   r.get('/catalog',run((req,res)=>{permit(req.whUser,['admin','office','warehouse']);res.json({products:sql.prepare('SELECT id,qbo_item_id,qbo_sku,name,unit_type FROM skus WHERE active=1 ORDER BY name').all(),palletConfigs:sql.prepare('SELECT id,sku_id,name,units_per_pallet,is_default FROM pallet_configs ORDER BY sku_id,is_default DESC').all()});}));
   r.get('/vendors',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse']);if(!readVendors)problem('Vendor lookup is not configured.',503);res.json({vendors:await readVendors()});}));
   r.get('/qbo-purchase-orders',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse']);if(!readPurchaseOrders)problem('QuickBooks PO lookup is not configured.',503);res.json({purchaseOrders:await readPurchaseOrders(String(req.query.vendorId||''))});}));
@@ -56,24 +61,29 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/receipts/:id/putaway',run((req,res)=>res.json(confirmPutaway(db,req.whUser,{...req.body,receiptId:req.params.id}))));
   r.post('/receipts/:id/approve',run((req,res)=>res.json(approveReceipt(db,req.whUser,{...req.body,receiptId:req.params.id}))));
   r.get('/stock',run((req,res)=>{permit(req.whUser,['admin','office','warehouse']);res.json(frozenStockLocations(db));}));
-  r.get('/routes',run((req,res)=>{
+  r.get('/routes',run(async(req,res)=>{
     permit(req.whUser,['admin','office','driver'],'deliveries');const values=[],where=[];
+    await source.refresh(req.whUser);source.kickAll();
     if(!['admin','manager','office'].includes(req.whUser.role)){
       where.push("(driver_id=? OR json_extract(snapshot,'$.helperId')=? OR EXISTS (SELECT 1 FROM json_each(json_extract(snapshot,'$.helperIds')) WHERE value=?))");
       values.push(...Array(3).fill(req.whUser.teamId||'no-assignment'));
+      if(sql.prepare('SELECT user_id FROM wh_source_access_cache WHERE user_id=?').get(req.whUser.id)){where.push('EXISTS (SELECT 1 FROM wh_source_access a WHERE a.route_id=wh_routes.id AND a.user_id=?)');values.push(req.whUser.id);}
     }
     if(req.query.date){if(!/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date)))problem('Choose a route date.');where.push('route_date=?');values.push(req.query.date);}
     if(req.query.includeCompleted!=='true')where.push("status IN ('loaded','delivering')");
     const rows=sql.prepare('SELECT * FROM wh_routes'+(where.length?' WHERE '+where.join(' AND '):'')+' ORDER BY route_date DESC,id LIMIT 100').all(...values);
-    res.json({routes:rows.map(r=>({...r,snapshot:JSON.parse(r.snapshot)})),preparedAt:new Date().toISOString()});
+    const routes=rows.map(r=>{const pending=sql.prepare("SELECT COUNT(*) n FROM wh_driver_events WHERE route_id=? AND status='pending-office'").get(r.id).n,conflicts=sql.prepare("SELECT COUNT(*) n FROM wh_source_jobs WHERE route_id=? AND status='conflict'").get(r.id).n;return {...r,snapshot:JSON.parse(r.snapshot),officeSyncStatus:conflicts?'Office sync needs review':pending?'Saved; office handoff pending':'Office connected',officePending:pending,officeConflicts:conflicts};});
+    const assignedRouteIds=source.configured()?sql.prepare('SELECT route_id FROM wh_source_access WHERE user_id=?').all(req.whUser.id).map(r=>r.route_id):undefined;
+    res.json({routes,assignedRouteIds,officePending:routes.reduce((n,r)=>n+r.officePending,0),officeConflicts:routes.reduce((n,r)=>n+r.officeConflicts,0),preparedAt:new Date().toISOString(),officeConnection:source.configured()?'automatic':'not-configured'});
   }));
   r.get('/routes/:id',run((req,res)=>res.json({route:driverRoute(sql,req.whUser,req.params.id)})));
   r.get('/routes/:id/activity',run((req,res)=>{
     const route=driverRoute(sql,req.whUser,req.params.id);
     const events=sql.prepare('SELECT e.*,u.display_name FROM wh_driver_events e JOIN wh_users u ON u.id=e.user_id WHERE e.route_id=? ORDER BY e.sequence').all(route.id).map(e=>({id:e.id,kind:e.kind,payload:JSON.parse(e.payload),recordedAt:e.device_at,receivedAt:e.received_at,status:e.status,displayName:e.display_name}));
-    res.json({route,events});
+    const syncIssues=sql.prepare("SELECT event_id,status,error,updated_at FROM wh_source_jobs WHERE route_id=? AND status<>'applied' ORDER BY updated_at").all(route.id);
+    res.json({route,events,syncIssues,officeConnection:source.configured()?'automatic':'not-configured'});
   }));
-  r.post('/routes/:id/events',run((req,res)=>res.json(saveDriverEvents(sql,req.whUser,{...req.body,routeId:req.params.id}))));
+  r.post('/routes/:id/events',run((req,res)=>{const result=saveDriverEvents(sql,req.whUser,{...req.body,routeId:req.params.id});source.kick(req.params.id);res.json(result);}));
   r.post('/media',express.raw({type:['image/jpeg','image/png','image/webp'],limit:'8mb'}),run((req,res)=>{
     const bytes=req.body;if(!Buffer.isBuffer(bytes)||bytes.length<12)problem('Choose a JPG, PNG or WebP photo.');
     const type=bytes[0]===255&&bytes[1]===216&&bytes[2]===255?'image/jpeg':bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'image/png':bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP'?'image/webp':null;

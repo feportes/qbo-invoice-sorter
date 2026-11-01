@@ -57,8 +57,20 @@ export function ensureWarehouseSchema(sql) {
       stop_id TEXT, mime_type TEXT NOT NULL, bytes BLOB NOT NULL,
       device_at TEXT NOT NULL, received_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS wh_source_jobs (
+      event_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, route_id TEXT NOT NULL,
+      operation TEXT, status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS wh_source_team (id TEXT PRIMARY KEY,name TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS wh_source_access (user_id TEXT NOT NULL,route_id TEXT NOT NULL,PRIMARY KEY(user_id,route_id));
+    CREATE TABLE IF NOT EXISTS wh_source_access_cache (user_id TEXT PRIMARY KEY,refreshed_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS wh_driver_catalog (user_id TEXT PRIMARY KEY,version TEXT NOT NULL,barcode_version TEXT NOT NULL,products TEXT NOT NULL,checked_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS wh_barcode_versions (version TEXT PRIMARY KEY,products TEXT NOT NULL,created_at TEXT NOT NULL);
   `);
   const columns=new Set(sql.prepare('PRAGMA table_info(wh_users)').all().map(c=>c.name));
   if(!columns.has('functions'))sql.exec("ALTER TABLE wh_users ADD COLUMN functions TEXT NOT NULL DEFAULT '[]'");
   if(!columns.has('must_change_password'))sql.exec('ALTER TABLE wh_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 1');
+  if(!sql.prepare('PRAGMA table_info(wh_routes)').all().some(c=>c.name==='source_stop_revisions'))sql.exec("ALTER TABLE wh_routes ADD COLUMN source_stop_revisions TEXT NOT NULL DEFAULT '{}'");
+  if(!sql.prepare('PRAGMA table_info(wh_driver_catalog)').all().some(c=>c.name==='source_revision'))sql.exec('ALTER TABLE wh_driver_catalog ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0');
 }
