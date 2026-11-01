@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {routePoints} from '../src/web/route-map.js';
+test('offline route map preserves stop numbering while excluding absent or invalid coordinates',()=>{const route={stops:[{id:'A',lat:34,lng:-118},{id:'B'},{id:'C',lat:33,lng:-117},{id:'D',lat:null,lng:null},{id:'E',lat:95,lng:0}]},before=JSON.stringify(route);assert.deepEqual(routePoints(route).map(p=>[p.id,p.number]),[['A',1],['C',3]]);assert.equal(JSON.stringify(route),before);});

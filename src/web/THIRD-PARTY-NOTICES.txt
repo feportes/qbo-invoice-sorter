@@ -267,3 +267,5 @@ POSSIBILITY OF SUCH DAMAGES.
 You acknowledge that this software is not designed or intended for
 use in the design, construction, operation or maintenance of any
 nuclear facility.
+
+Leaflet — BSD 2-Clause license. Copyright (c) 2010–2023 Volodymyr Agafonkin; Copyright (c) 2010–2011 CloudMade. Full license: /workspaces-assets/vendor/leaflet/LICENSE
