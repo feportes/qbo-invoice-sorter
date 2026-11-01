@@ -11,11 +11,13 @@ export function palletPattern(pallet){
   return 'stock';
  }));return kinds.size>1?'mixed':kinds.values().next().value||'empty';
 }
-// Packing rules confirmed by the operator. Heights stay unknown until measured.
+// Packing rules and dimensions confirmed by the operator; unspecified heights stay unknown.
 export function palletPacking(item){
  const kind=palletPattern(item),profiles={tubs20:{unitsPerLayer:20,unit:'tubs',shape:'round-tub'},tubs12:{unitsPerLayer:12,unit:'tubs',shape:'large-round-tub'},rectTubs15:{unitsPerLayer:15,fullPalletUnits:105,unit:'tubs',shape:'rectangular-tub'},whiteBoxes12:{unitsPerLayer:12,fullPalletUnits:168,unit:'cases',shape:'white-case'},boxes10:{unitsPerLayer:10,unit:'cases',shape:'brown-case'}};
  const profile=profiles[kind];if(!profile)return null;
  if(kind==='tubs20'&&/ACAI/.test(text(item.sku_name||item.name)))Object.assign(profile,{diameterInches:10,layerHeightInches:10,dimensionsApproximate:true});
+ const frozenFruit=/FROZEN FRUIT/.test(text(item.category)),weight=/(?:^|\D)(20|30)\s*(?:LBS?\b|POUNDS?\b)/.exec(text(item.sku_name||item.name));
+ if(kind==='boxes10'&&frozenFruit&&weight)Object.assign(profile,{caseWeightLb:Number(weight[1]),caseLengthInches:16,caseWidthInches:11,layerHeightInches:weight[1]==='30'?9:7,caseHeightInches:weight[1]==='30'?9:7,dimensionsApproximate:false});
  const qty=Number(item.qty_units),known=Number.isFinite(qty)&&qty>=0;
  return {kind,layerHeightInches:null,...profile,...(known?{quantity:qty,fullLayers:Math.floor(qty/profile.unitsPerLayer),topLayerUnits:qty%profile.unitsPerLayer,layers:Math.ceil(qty/profile.unitsPerLayer),...(profile.layerHeightInches?{loadHeightExcludingPalletInches:Math.ceil(qty/profile.unitsPerLayer)*profile.layerHeightInches}:{})}:{})};
 }
