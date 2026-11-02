@@ -7,3 +7,5 @@
 .wm-room.wm-angled .wm-position.wm-occupied{overflow:visible;z-index:4}.wm-room.wm-angled .wm-position.wm-occupied:focus,.wm-room.wm-angled .wm-position.wm-selected{z-index:20}.wm-onspot{position:absolute;width:130%;left:-15%;bottom:12px;pointer-events:none}.wm-onspot svg{display:block;width:100%;height:auto;overflow:visible}.wm-room.wm-angled .wm-position>span:last-child{position:relative;z-index:2}.wm-room .wm-copy-target{outline:3px solid #72a51c;z-index:25}@media(max-width:400px){.wm-room .wm-onspot{display:block}}
 
 .wm-room.wm-angled .wm-position.wm-occupied{z-index:var(--wm-depth,4)}.wm-room.wm-angled .wm-position.wm-selected{z-index:200}
+
+.wm-quick-summary{position:absolute;z-index:1000;width:min(280px,85%);padding:14px;background:#fffdf9;color:#251044;border:1px solid #d9cce6;border-radius:12px;box-shadow:0 6px 24px #25104433;overflow-wrap:anywhere}.wm-quick-summary strong{display:block}.wm-quick-summary .wm-controls{margin-bottom:0}.wm-quick-summary button{font-size:13px;padding:8px}@media(max-width:760px){.wm-quick-summary{left:5%!important;width:90%}}

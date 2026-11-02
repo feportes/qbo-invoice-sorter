@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 export function mountWarehouseWebApp(app){
   const root=path.dirname(fileURLToPath(import.meta.url));
   app.get('/workspaces',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_mobile'));
+  app.get('/warehouse-map-settings',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_map_settings'));
   app.get('/warehouse-connections',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_connections'));
   app.get('/warehouse-products',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_products'));
   app.get('/warehouse-planning',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_planning'));

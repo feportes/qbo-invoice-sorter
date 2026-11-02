@@ -1,3 +1,5 @@
+import {mapSettings,saveMapSettings,prepareRoadRoute} from './warehouse_maps.js';
+import {ensureProductPhotos,decorateProductPhotos,saveProductPhoto,readProductPhoto} from './warehouse_product_photos.js';
 import {invoiceDate} from './warehouse_planning_invoices.js';
 import {sessionPolicy,saveSessionPolicy} from './warehouse_session_policy.js';
 import {ensureProductRequests,createProductRequest,productRequests,reviewProductRequest} from './warehouse_product_requests.js';
@@ -20,7 +22,7 @@ const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next
 function serveInstructionMedia(req,res,m){const total=m.bytes.length;res.type(m.mime_type).set('Accept-Ranges','bytes');if(req.get('range')){const match=/^bytes=(\d*)-(\d*)$/.exec(req.get('range'));if(!match||!match[1]&&!match[2])return res.status(416).set('Content-Range','bytes */'+total).end();let start=match[1]?Number(match[1]):Math.max(0,total-Number(match[2])),end=match[1]&&match[2]?Math.min(total-1,Number(match[2])):total-1;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=total||end<start)return res.status(416).set('Content-Range','bytes */'+total).end();res.status(206).set('Content-Range','bytes '+start+'-'+end+'/'+total).send(m.bytes.subarray(start,end+1));}else res.send(m.bytes);}
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
 export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,readPlanningInvoices,sourceFetch,readContainerLayout}){
-  const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureGuideSchema(sql);ensureInstructionUpdateSchema(sql);ensureProductRequests(sql);
+  const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureProductPhotos(sql);ensureGuideSchema(sql);ensureInstructionUpdateSchema(sql);ensureProductRequests(sql);
   const source=createWarehouseSource({sql,env,readInvoice,...(sourceFetch?{fetchImpl:sourceFetch}:{})});
   const timer=setInterval(()=>source.kickAll(),30000);timer.unref();r.stopWarehouseSync=()=>clearInterval(timer);
   r.use((req,res,next)=>{
@@ -56,10 +58,13 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/connections/import',run((req,res)=>res.json(importTelemetry(sql,req.whUser,req.body))));
   r.post('/connections/motive-refresh',run(async(req,res)=>res.json(await fetchMotive(sql,req.whUser,env,req.body))));
   r.get('/routes/:id/motive',run((req,res)=>res.json(motiveEvidence(sql,req.whUser,driverRoute(sql,req.whUser,req.params.id)))));
+  r.get('/map-settings',run((req,res)=>{permit(req.whUser,['admin']);res.json(mapSettings(sql));}));
+  r.post('/map-settings',run((req,res)=>res.json(saveMapSettings(sql,req.whUser,req.body))));
+  r.get('/routes/:id/road-route',run(async(req,res)=>res.json(await prepareRoadRoute(sql,driverRoute(sql,req.whUser,req.params.id).snapshot))));
   r.get('/session-policy',run((req,res)=>res.json(sessionPolicy(sql))));
   r.post('/session-policy',run((req,res)=>res.json(saveSessionPolicy(sql,req.whUser,req.body))));
   r.get('/login-directory',run((req,res)=>{permit(req.whUser,['admin','office','warehouse','driver']);res.json({users:sql.prepare('SELECT username,display_name AS displayName FROM wh_users WHERE enabled=1 ORDER BY display_name').all()});}));
-  r.get('/products',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');res.json(await source.request('/api/mobile-products',req.whUser));}));
+  r.get('/products',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');res.json(decorateProductPhotos(sql,await source.request('/api/mobile-products',req.whUser)));}));
   r.get('/product-requests',run((req,res)=>res.json({requests:productRequests(sql,req.whUser)})));
   r.post('/product-requests',run((req,res)=>res.json(createProductRequest(sql,req.whUser,req.body,driverRoute))));
   r.post('/product-requests/:id/review',run(async(req,res)=>res.json(await reviewProductRequest(sql,req.whUser,req.params.id,req.body,source))));
@@ -68,7 +73,9 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/planning',run(async(req,res)=>{permit(req.whUser,['admin','office'],'planning');res.json(await source.request('/api/mobile-planning',req.whUser,req.body));}));
   r.get('/receiving-lookups',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'receiving');if(!readVendors)problem('Vendor lookup is not configured.',503);res.json({vendors:await readVendors(),products:sql.prepare('SELECT id,qbo_sku,name,unit_type FROM skus WHERE active=1 ORDER BY name').all(),palletConfigs:sql.prepare('SELECT * FROM pallet_configs').all()});}));
   r.post('/receipts/direct',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'receiving');if(!readVendor)problem('Vendor lookup is not configured.',503);const vendor=await readVendor(String(req.body.vendorId||''));if(!vendor?.Id||vendor.Active===false)problem('Choose an active QuickBooks vendor.');res.json(once(sql,req.whUser,req.body.requestId,req.body,()=>{const lines=(req.body.lines||[]).map((line,index)=>({...line,id:'DIRECT-'+index,orderedQty:line.receivedQty})),po=createPurchaseOrder(db,req.whUser,{requestId:req.body.requestId+'-po',vendorId:String(vendor.Id),vendorName:vendor.DisplayName,poNumber:String(req.body.poNumber||'').trim()||'DIRECT-'+req.body.requestId.slice(0,12),lines},true).purchaseOrder;return recordReceipt(db,req.whUser,{requestId:req.body.requestId+'-receipt',poId:po.id,expectedPORevision:po.revision,mode:req.body.mode,notes:req.body.notes,lines:lines.map(l=>({...l,poLineId:l.id}))});}));}));
-  r.post('/products',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');res.json(await source.request('/api/mobile-products',req.whUser,req.body));}));
+  r.post('/products',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');if(req.body.command?.name==='saveInternalSku'||req.body.command?.name==='saveWarehouseProduct'&&Object.hasOwn(req.body.command.args?.[1]||{},'sku'))problem('SKU is read-only. Update it in QuickBooks and refresh the catalog.');res.json(decorateProductPhotos(sql,await source.request('/api/mobile-products',req.whUser,req.body)));}));
+  r.post('/products/:id/photo',express.raw({type:'image/jpeg',limit:'3mb'}),run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');const packet=await source.request('/api/mobile-products',req.whUser);if(!packet.products.some(p=>p.id===req.params.id))problem('Choose a current product.');res.json(saveProductPhoto(sql,req.whUser,req.params.id,req.body,req.get('content-type')?.split(';')[0]));}));
+  r.get('/product-photos/:id',run((req,res)=>{const media=readProductPhoto(sql,req.whUser,req.params.id,null,driverRoute);serveInstructionMedia(req,res,media);}));
   r.post('/logout',run((req,res)=>{sql.prepare('DELETE FROM wh_sessions WHERE token_hash=?').run(req.whUser.sessionHash);res.clearCookie('__Host-wh_session',{secure:true,httpOnly:true,sameSite:'strict',path:'/'});res.json({signedOut:true});}));
   r.post('/password',run(async(req,res)=>res.json(await changePassword(sql,req.whUser,req.body))));
   r.use((req,res,next)=>{try{
@@ -84,7 +91,7 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/instruction-updates/:id/review',run((req,res)=>res.json(reviewInstructionUpdate(sql,req.whUser,req.params.id,req.body))));
   r.post('/reference-guides',run((req,res)=>res.json(saveReferenceGuide(sql,req.whUser,req.body))));
   r.post('/reference-media/:id',express.raw({type:['video/mp4','image/jpeg','audio/ogg'],limit:'35mb'}),run((req,res)=>res.json(saveReferenceMedia(sql,req.whUser,req.params.id,req.query,req.body,req.get('content-type')?.split(';')[0]))));
-  r.get('/reference-media/:id',run((req,res)=>{const m=referenceMedia(sql,req.whUser,req.params.id,req.query.routeId,driverRoute);serveInstructionMedia(req,res,m);}));
+  r.get('/reference-media/:id',run((req,res)=>{const m=sql.prepare('SELECT id FROM wh_product_photos WHERE id=?').get(req.params.id)?readProductPhoto(sql,req.whUser,req.params.id,req.query.routeId,driverRoute):referenceMedia(sql,req.whUser,req.params.id,req.query.routeId,driverRoute);serveInstructionMedia(req,res,m);}));
   r.get('/reference-guides',run((req,res)=>{permit(req.whUser,['admin','office'],'deliveries');res.json({guides:sql.prepare('SELECT * FROM wh_reference_guides ORDER BY title').all().map(g=>({...g,media:guideMedia(sql,g.id)}))});}));
   r.get('/users',run((req,res)=>{permit(req.whUser,['admin']);res.json({users:sql.prepare('SELECT * FROM wh_users ORDER BY display_name').all().map(safeUser)});}));
   r.get('/team-identities',run(async(req,res)=>{permit(req.whUser,['admin']);await source.refresh(req.whUser);res.json({team:sql.prepare('SELECT id,name FROM wh_source_team ORDER BY name').all()});}));
@@ -130,6 +137,7 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
     if(req.query.includeCompleted!=='true')where.push("status IN ('loaded','delivering')");
     const rows=sql.prepare('SELECT * FROM wh_routes'+(where.length?' WHERE '+where.join(' AND '):'')+' ORDER BY route_date DESC,id LIMIT 100').all(...values);
     const routes=rows.map(r=>{const pending=sql.prepare("SELECT COUNT(*) n FROM wh_driver_events WHERE route_id=? AND status='pending-office'").get(r.id).n,conflicts=sql.prepare("SELECT COUNT(*) n FROM wh_source_jobs WHERE route_id=? AND status='conflict'").get(r.id).n;return {...r,snapshot:driverRoute(sql,req.whUser,r.id).snapshot,officeSyncStatus:conflicts?'Office sync needs review':pending?'Saved; office handoff pending':'Office connected',officePending:pending,officeConflicts:conflicts};});
+    if(req.whUser.role==='driver')for(const row of routes.filter(r=>['loaded','delivering'].includes(r.status)).slice(0,3))prepareRoadRoute(sql,row.snapshot).catch(()=>{});
     const assignedRouteIds=source.configured()?sql.prepare('SELECT route_id FROM wh_source_access WHERE user_id=?').all(req.whUser.id).map(r=>r.route_id):undefined;
     res.json({routes,assignedRouteIds,officePending:routes.reduce((n,r)=>n+r.officePending,0),officeConflicts:routes.reduce((n,r)=>n+r.officeConflicts,0),preparedAt:new Date().toISOString(),officeConnection:source.configured()?'automatic':'not-configured'});
   }));

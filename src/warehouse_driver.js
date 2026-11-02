@@ -1,4 +1,6 @@
+import {attachRoadRoute} from './warehouse_maps.js';
 import {routeWindow} from './warehouse_telemetry.js';
+import {attachProductPhotos} from './warehouse_product_photos.js';
 import {applyDriverEvent} from './web/driver-state.js';
 import {attachReferenceGuides,ensureGuideSchema} from './warehouse_guides.js';
 import {randomUUID} from 'node:crypto';
@@ -14,7 +16,7 @@ export function driverRoute(sql,user,id){
   if(!['admin','manager','office'].includes(user.role)&&sql.prepare('SELECT user_id FROM wh_source_access_cache WHERE user_id=?').get(user.id)&&!sql.prepare('SELECT route_id FROM wh_source_access WHERE user_id=? AND route_id=?').get(user.id,id))problem('This route is no longer assigned to you.',403);
   const snapshot=routeWindow(sql,{...row,snapshot:JSON.parse(row.snapshot)});
   if(!['admin','manager','office'].includes(user.role)&&(!user.teamId||![row.driver_id,snapshot.helperId,...(snapshot.helperIds||[])].includes(user.teamId)))problem('This route is not assigned to you.',403);
-  ensureGuideSchema(sql);return {...row,snapshot:attachReferenceGuides(sql,overlayDriverCatalog(sql,user,snapshot))};
+  ensureGuideSchema(sql);return {...row,snapshot:attachRoadRoute(sql,attachProductPhotos(sql,attachReferenceGuides(sql,overlayDriverCatalog(sql,user,snapshot))))};
 }
 export function validateRoute(input){
   if(input.helperId!==undefined&&(typeof input.helperId!=='string'||input.helperId.length>100))problem('Review the assigned route helper.');
