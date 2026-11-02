@@ -1,4 +1,4 @@
-import {googleMaps} from './route-map.js';
+import {googleMaps} from './planning-google-maps.js';
 const colors=['#7025a8','#d64427','#147e73','#285ab3','#ad3379','#827100','#2c8041','#793d24'];
 export function createPlanningMap({host,choices,status,count,section,roadToggle,readRoad}){
  let packet,date,map,G,mapPromise,roadBounds=[],layers=[],signature='',generation=0,timer,roads=new Map(),known=new Set(),hidden=new Set();
