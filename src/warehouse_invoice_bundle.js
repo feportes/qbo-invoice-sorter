@@ -6,6 +6,26 @@ export function bundleOptions(query={}){
   if(![1,2,3].includes(copies)||!['stop','reverse'].includes(order))problem('Choose 1–3 copies and a route order.');
   return {copies,order};
 }
+export function routeInvoiceIds(value){
+ let ids=value;try{if(typeof value==='string')ids=JSON.parse(value);}catch{problem('Choose routes to print.');}
+ if(!Array.isArray(ids)||ids.length<1||ids.length>20||ids.some(id=>typeof id!=='string'||!id||id.length>200||/[\x00-\x1f]/.test(id)))problem('Choose between 1 and 20 routes to print.');
+ return [...new Set(ids)];
+}
+export async function routeInvoiceSelection(packets,options,readPdf){
+ if(!packets.length||packets.length>20)problem('Choose between 1 and 20 routes to print.');
+ if(packets.reduce((n,p)=>n+p.invoices.length,0)>300)problem('Print up to 300 invoices in one selection.',413);
+ const output=await PDFDocument.create(),routes=[];let totalBytes=0;
+ for(const packet of packets){
+  let bundle;try{bundle=await routeInvoiceBundle(packet,options,readPdf);}catch(error){problem(packet.route.name+': '+error.message,error.status||502);}
+  totalBytes+=bundle.bytes.length;if(totalBytes>100*1024*1024)problem('This print selection is too large. Select fewer routes.',413);
+  const source=await PDFDocument.load(bundle.bytes),startPage=output.getPageCount()+1;
+  if(output.getPageCount()+source.getPageCount()>1000)problem('Select fewer routes; this bundle exceeds 1,000 pages.',413);
+  for(const page of await output.copyPages(source,source.getPageIndices()))output.addPage(page);
+  routes.push({id:packet.route.id,name:packet.route.name,startPage,pages:bundle.pages,summaryPages:bundle.summaryPages,invoiceCount:bundle.invoiceCount});
+ }
+ output.setTitle('D RAW · Selected route invoice bundles');
+ return {bytes:Buffer.from(await output.save()),pages:output.getPageCount(),routes};
+}
 const printable=value=>String(value??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,' ').replace(/\s+/g,' ').trim();
 async function loadingChecklist(pdf,packet){
  const font=await pdf.embedFont(StandardFonts.Helvetica),bold=await pdf.embedFont(StandardFonts.HelveticaBold),ink=rgb(.08,.08,.08),line=rgb(.75,.75,.75);let page,y;
