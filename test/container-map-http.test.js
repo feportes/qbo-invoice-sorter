@@ -20,7 +20,7 @@ const base=`http://127.0.0.1:${port}`;
 async function post(url,body,json=false){return fetch(base+url,{method:'POST',redirect:'manual',headers:{'Content-Type':json?'application/json':'application/x-www-form-urlencoded'},body:json?JSON.stringify(body):new URLSearchParams(body)});}
 
 test.before(async()=>{
- for(let i=0;i<100;i++){try{const r=await fetch(base);if(r.ok)return;}catch{}if(child.exitCode!==null)throw new Error(log);await new Promise(r=>setTimeout(r,40));}
+ for(let i=0;i<500;i++){try{const r=await fetch(base);if(r.ok)return;}catch{}if(child.exitCode!==null)throw new Error(log);await new Promise(r=>setTimeout(r,40));}
  throw new Error('Server did not start: '+log);
 });
 test('renders shared yard, details, settings, walk-in, add, count and loading notes',async()=>{

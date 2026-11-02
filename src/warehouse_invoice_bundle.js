@@ -67,7 +67,7 @@ export async function routeInvoiceBundle(packet,options,readPdf){
   if(!invoices.length)problem('This route has no QuickBooks invoices to print.',409);
   if(invoices.length>100)problem('Print routes with no more than 100 invoices per bundle.',413);
   if(order==='reverse')invoices.reverse();
-  const output=await PDFDocument.create(),summaryPages=await loadingChecklist(output,packet);let bytesRead=0;
+  const output=await PDFDocument.create(),summaryPages=options.includeChecklist===false?0:await loadingChecklist(output,packet);let bytesRead=0;
   for(const invoice of invoices){
     if(!invoice.qboInvoiceId)problem('Invoice #'+invoice.invoice+' is missing its QuickBooks link. Nothing was printed.',409);
     try{
