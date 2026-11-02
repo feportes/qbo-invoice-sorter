@@ -11,13 +11,15 @@ async function loadingChecklist(pdf,packet){
  const font=await pdf.embedFont(StandardFonts.Helvetica),bold=await pdf.embedFont(StandardFonts.HelveticaBold),ink=rgb(.13,.04,.28);let page,y;
  const text=(s,x,at,size=11,strong=false)=>page.drawText(printable(s),{x,y:at,size,font:strong?bold:font,color:ink});
  const wrap=(s,width,size=11)=>{const lines=[];let line='';for(const word of printable(s).split(' ')){if(line&&font.widthOfTextAtSize(line+' '+word,size)>width){lines.push(line);line=word;}else line+=(line?' ':'')+word;}if(line)lines.push(line);return lines;};
- function sheet(continued=false){page=pdf.addPage([612,792]);text("D' RAW | DRIVER LOADING CHECKLIST"+(continued?' - continued':''),36,754,15,true);text(packet.route.name,36,726,14,true);text('Date: '+packet.route.date,36,704);text('Driver: '+(packet.route.driver||'________________________'),36,684);text('Vehicle: '+(packet.route.vehicle||'________________________'),36,664);text('Check each product and its total quantity before leaving.',36,636);text('Quantities are combined across all customer invoices on this route.',36,620,10);text('Use the listed case / pack size; do not count individual cans as cases.',36,604,10);text('Total cases / packs',477,584,9,true);y=558;}
+ function sheet(continued=false){page=pdf.addPage([612,792]);text("D' RAW | DRIVER LOADING CHECKLIST"+(continued?' - continued':''),36,754,15,true);text(packet.route.name,36,726,14,true);text('Date: '+packet.route.date,36,704);text('Driver: '+(packet.route.driver||'Not assigned'),36,684);text('Vehicle: '+(packet.route.vehicle||'Not assigned'),36,664);text('Check each product and its total quantity before leaving.',36,636);text('Quantities are combined across all customer invoices on this route.',36,620,10);text('Use the listed case / pack size; do not count individual cans as cases.',36,604,10);text('Total cases / packs',477,584,9,true);y=558;}
  sheet();let group='';
- for(const item of packet.checklist||[]){const name=String(item.name).replace(/^\d+\.\s*[^:]+:/,'').trim(),lines=wrap(name,425,10),pack=/^(1 invoice unit|case)$/i.test(item.pack||'case')?[]:wrap(item.pack,425,8),height=lines.length*13+pack.length*10+11+(item.group!==group?25:0);if(y-height<64){sheet(true);group='';}if(group!==item.group){group=item.group;text(group,36,y,12,true);y-=25;}
+ const reminder=(packet.checklist||[]).filter(item=>['Fresh fruit / produce','Juices'].includes(item.group));
+ if(!reminder.length)text('No fresh fruit or juices on this route.',36,y);
+ for(const item of reminder){const name=String(item.name).replace(/^\d+\.\s*[^:]+:/,'').trim(),lines=wrap(name,425,10),pack=/^(1 invoice unit|case)$/i.test(item.pack||'case')?[]:wrap(item.pack,425,8),height=lines.length*13+pack.length*10+11+(item.group!==group?25:0);if(y-height<64){sheet(true);group='';}if(group!==item.group){group=item.group;text(group,36,y,12,true);y-=25;}
   page.drawRectangle({x:37,y:y-4,width:13,height:13,borderColor:ink,borderWidth:1});
   lines.forEach((line,i)=>text(line,60,y-i*13,10));text(Number(item.qty.toFixed(3)).toLocaleString('en-US'),510,y,12,true);y-=lines.length*13;pack.forEach((line,i)=>text(line,60,y-i*10,8));y-=pack.length*10+11;
  }
- if(y<80)sheet(true);text('Driver initials: __________     Checked at: __________',36,Math.min(y-10,90),11);text('Loading aid only. Any shortages or changes must also be recorded in the app.',36,38,9);
+ text('Loading reminder only.',36,38,9);
  return pdf.getPageCount();
 }
 export async function routeInvoiceBundle(packet,options,readPdf){
