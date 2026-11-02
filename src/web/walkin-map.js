@@ -4,6 +4,7 @@ import {drawStockVolume} from './pallet-volume.js';
 export function renderWalkinMap(host,pallets,{onMove,onAdd,onEdit,onCopy,onPickPosition}={}){
  const el=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
  const button=(text,fn)=>{const b=el('button',text);b.type='button';b.onclick=fn;return b;};
+ host._dismissQuick?.();const dismiss=e=>{if(e.target.closest('.wm-quick-summary,[data-walkin-code]'))return;host.dataset.quick='';host.querySelector('.wm-quick-summary')?.remove();};document.addEventListener('click',dismiss);host._dismissQuick=()=>document.removeEventListener('click',dismiss);
  let level=host.dataset.level||'floor',view=host.dataset.view||'plan',selected=host.dataset.selected||'WF-B1-floor';
  const rows=pallets||[],at=code=>rows.filter(p=>p.walkin_position===code),known=new Set(walkinPositions.map(p=>p.code));
  function detail(parent,position){
