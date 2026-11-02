@@ -8,15 +8,17 @@ export function renderWalkinMap(host,pallets,{onMove,onAdd,onEdit}={}){
  const rows=pallets||[],at=code=>rows.filter(p=>p.walkin_position===code),known=new Set(walkinPositions.map(p=>p.code));
  function detail(parent,position){
   parent.append(el('h3',position.label));const ps=at(position.code);
-  if(!ps.length){parent.append(el('p','No stock recorded here.'));if(onAdd)parent.append(button('Register here',()=>onAdd(position.code)));return;}
+  if(!ps.length){parent.append(el('p','No stock recorded here.'));if(onAdd){const add=button('Add products here',()=>onAdd(position.code));add.className='wm-add';parent.append(add);}return;}
   for(const p of ps){const box=el('section',undefined,'wm-stock');box.append(el('b','Pallet #'+p.id));
+   const actions=el('div',undefined,'wm-controls');if(onEdit)actions.append(button('Add product / edit pallet',()=>onEdit(p)));if(onMove)actions.append(button('Move / change position',()=>onMove(p)));box.append(actions);
    for(const item of p.items||[p]){box.append(el('p',item.sku_name||item.name||'Product'),el('p',item.qty_units+' '+(item.unit_type||'units')+(item.lot_number?' · Lot '+item.lot_number:'')));const art=el('div',undefined,'wm-volume');drawStockVolume(art,item);box.append(art);if(item.palletPacking)box.append(el('small',item.palletPacking.unitsPerLayer+' per layer · '+item.palletPacking.layers+' layers'+(item.palletPacking.topLayerUnits?' · '+item.palletPacking.topLayerUnits+' on top':'')));}
-   const actions=el('div',undefined,'wm-controls');if(onMove)actions.append(button('Move / change position',()=>onMove(p)));if(onEdit)actions.append(button('Edit / mixed pallet',()=>onEdit(p)));box.append(actions);parent.append(box);
+   parent.append(box);
   }
  }
  function draw(){
   host.dataset.level=level;host.dataset.view=view;host.dataset.selected=selected;host.replaceChildren();host.className='wm';
   host.append(el('h2','Walk-in freezer'),el('p','25 × 25 ft exterior · approx. 24 × 24 ft inside · 6-inch walls assumed','wm-muted'));
+  if(onAdd){const actions=el('div',undefined,'wm-controls'),add=button('Add products',()=>{const pos=walkinPositions.find(p=>p.code===selected);onAdd(pos&&(!pos.single||!at(pos.code).length)?pos.code:'');});add.className='wm-add';actions.append(add);host.append(actions,el('p','Scan or search a product, enter its quantity, then save it to a freezer position. To add to an existing pallet, select it and use Add product / edit pallet.','wm-muted'));}
   const views=el('div',undefined,'wm-controls');for(const [value,label] of [['plan','Floor plan'],['racks','Rack levels'],['angled','Angled view']]){const b=button(label,()=>{view=value;draw();});b.setAttribute('aria-pressed',String(view===value));views.append(b);}host.append(views);
   const levels=el('div',undefined,'wm-controls');for(const [value,label] of [['floor','Floor'],['middle','Middle shelf'],['upper','Upper rack']]){const b=button(label,()=>{level=value;draw();});b.setAttribute('aria-pressed',String(level===value));levels.append(b);}host.append(levels);
   const workspace=el('div',undefined,'wm-workspace'),drawing=el('div'),panel=el('aside',undefined,'wm-detail');panel.setAttribute('aria-live','polite');workspace.append(drawing,panel);host.append(workspace);
