@@ -1,3 +1,4 @@
+import {readProductCatalog} from './src/warehouse_qbo_catalog.js';
 import {decoratePalletLayout} from './src/warehouse_pallet_visuals.js';
 import {mountWarehouseWebApp} from './src/warehouse_web_app.js';
 import 'dotenv/config';
@@ -55,6 +56,7 @@ app.use(express.json({ verify: rawBodySaver, limit: '2mb' }));
 const warehouseQboQuery = async query => { const {conn,oauthClient}=await withFreshClient();return qboQuery(oauthClient,conn.realm_id,query); };
 const warehouseQboId = value => { if(!/^\d{1,30}$/.test(value))throw Object.assign(Error('Choose a valid QuickBooks record.'),{status:400});return value; };
 app.use('/api/warehouse',createWarehouseRouter({db,
+  readProducts:()=>readProductCatalog(warehouseQboQuery),
   readPlanningInvoices:async(date,planning)=>{const {conn,oauthClient}=await withFreshClient();const result=await qboQuery(oauthClient,conn.realm_id,`select * from Invoice where TxnDate = '${date}' orderby DocNumber desc maxresults 1000`);return projectPlanningInvoices(result?.QueryResponse?.Invoice||[],date,conn.realm_id,planning);},
   readCustomerAddress:async ref=>{const {conn,oauthClient}=await withFreshClient();const result=await qboReadCustomer(oauthClient,conn.realm_id,warehouseReference(ref,conn.realm_id)),customer=result.Customer||result;return {name:customer.DisplayName,address:quickBooksAddress(customer.ShipAddr)||quickBooksAddress(customer.BillAddr)};},
   readInvoicePdf:async stop=>{const {conn,oauthClient}=await withFreshClient();return qboInvoicePdf(oauthClient,conn.realm_id,warehouseReference(stop.qboInvoiceId,conn.realm_id));},

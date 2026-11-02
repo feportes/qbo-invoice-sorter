@@ -1,3 +1,4 @@
+import {productCatalogRefresher} from './warehouse_qbo_catalog.js';
 import {bundleOptions,routeInvoiceBundle,routeInvoiceIds,routeInvoiceSelection} from './warehouse_invoice_bundle.js';
 import {mapSettings,saveMapSettings,prepareRoadRoute} from './warehouse_maps.js';
 import {ensureProductPhotos,decorateProductPhotos,saveProductPhoto,readProductPhoto} from './warehouse_product_photos.js';
@@ -22,9 +23,10 @@ const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next
 
 function serveInstructionMedia(req,res,m){const total=m.bytes.length;res.type(m.mime_type).set('Accept-Ranges','bytes');if(req.get('range')){const match=/^bytes=(\d*)-(\d*)$/.exec(req.get('range'));if(!match||!match[1]&&!match[2])return res.status(416).set('Content-Range','bytes */'+total).end();let start=match[1]?Number(match[1]):Math.max(0,total-Number(match[2])),end=match[1]&&match[2]?Math.min(total-1,Number(match[2])):total-1;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=total||end<start)return res.status(416).set('Content-Range','bytes */'+total).end();res.status(206).set('Content-Range','bytes '+start+'-'+end+'/'+total).send(m.bytes.subarray(start,end+1));}else res.send(m.bytes);}
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
-export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,readInvoicePdf,readCustomerAddress,readPlanningInvoices,sourceFetch,readContainerLayout}){
+export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,readInvoicePdf,readCustomerAddress,readPlanningInvoices,readProducts,sourceFetch,readContainerLayout}){
   const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureProductPhotos(sql);ensureGuideSchema(sql);ensureInstructionUpdateSchema(sql);ensureProductRequests(sql);
   const source=createWarehouseSource({sql,env,readInvoice,...(sourceFetch?{fetchImpl:sourceFetch}:{})});
+  const refreshProductCatalog=productCatalogRefresher(readProducts,(user,report)=>source.request('/api/mobile-product-catalog',user,{report}));
   const timer=setInterval(()=>source.kickAll(),30000);timer.unref();r.stopWarehouseSync=()=>clearInterval(timer);
   r.use((req,res,next)=>{
     res.set('Cache-Control','private, no-store');res.set('X-Content-Type-Options','nosniff');
@@ -67,7 +69,8 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.get('/session-policy',run((req,res)=>res.json(sessionPolicy(sql))));
   r.post('/session-policy',run((req,res)=>res.json(saveSessionPolicy(sql,req.whUser,req.body))));
   r.get('/login-directory',run((req,res)=>{permit(req.whUser,['admin','office','warehouse','driver']);res.json({users:sql.prepare('SELECT username,display_name AS displayName FROM wh_users WHERE enabled=1 ORDER BY display_name').all()});}));
-  r.get('/products',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');res.json(decorateProductPhotos(sql,await source.request('/api/mobile-products',req.whUser)));}));
+  r.get('/products',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');let refreshWarning;try{await refreshProductCatalog(req.whUser);}catch(e){refreshWarning=e.message;}res.json({...decorateProductPhotos(sql,await source.request('/api/mobile-products',req.whUser)),...(refreshWarning?{refreshWarning}:{})});}));
+  r.post('/products/refresh',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'products');if(!readProducts)problem('QuickBooks product refresh is not configured.',503);await refreshProductCatalog(req.whUser,true);res.json(decorateProductPhotos(sql,await source.request('/api/mobile-products',req.whUser)));}));
   r.get('/product-requests',run((req,res)=>res.json({requests:productRequests(sql,req.whUser)})));
   r.post('/product-requests',run((req,res)=>res.json(createProductRequest(sql,req.whUser,req.body,driverRoute))));
   r.post('/product-requests/:id/review',run(async(req,res)=>res.json(await reviewProductRequest(sql,req.whUser,req.params.id,req.body,source))));
