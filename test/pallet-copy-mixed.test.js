@@ -29,7 +29,7 @@ test('copy is atomic and rejects occupied, duplicate, invalid and stale destinat
  assert.equal(db.sqlite.prepare('SELECT count(*) AS n FROM pallets').get().n,before);
  assert.throws(()=>copy(source,['C2-R-09','C2-R09'],140),/only once/);
  assert.throws(()=>copy(source,['C2-R-11'],140),/outside/);
- assert.throws(()=>copy(source,['WALKIN'],140),/container slots/);
+ assert.throws(()=>copy(source,['WF-B1-middle'],140),/valid container or walk-in/);
  assert.throws(()=>copy(source,['C2-R-09'],0),/greater than zero/);
  assert.throws(()=>db.copyPallets({sourcePalletId:source,locationCodes:['C2-R-09'],qtyUnits:140,expectedItems:'stale'}),/changed/);
 });
@@ -69,4 +69,7 @@ test('existing schema migration is idempotent and old single pallets retain thei
  ensureSchema();assert.equal(db.sqlite.prepare('PRAGMA table_info(pallets)').all().filter(c=>c.name==='pallet_group').length,1);
  assert.equal(db.physicalPalletItems(source)[0].notes,'Source-only note');
 });
+test('copy receives stock into walk-in positions without moving its source and rejects occupied targets atomically',()=>{const sourceBefore=db.physicalPalletItems(source)[0],ids=copy(source,['WF-B1-floor','WF-C01-floor'],60);assert.equal(ids.length,2);assert.equal(db.physicalPalletItems(ids[0])[0].walkin_position,'WF-B1-floor');assert.equal(db.physicalPalletItems(ids[1])[0].walkin_position,'WF-C01-floor');assert.equal(db.listPalletsInWalkin().filter(p=>ids.includes(p.id)).length,2);assert.deepEqual(db.physicalPalletItems(source)[0],sourceBefore);const count=db.sqlite.prepare('SELECT count(*) n FROM pallets').get().n;assert.throws(()=>copy(source,['WF-C02-floor','WF-B1-floor'],60),/occupied/);assert.equal(db.sqlite.prepare('SELECT count(*) n FROM pallets').get().n,count);const unassigned=copy(source,['WALKIN'],10)[0];assert.equal(db.physicalPalletItems(unassigned)[0].walkin_position,null);});
+
 test.after(()=>{db.sqlite.close();fs.rmSync(dir,{recursive:true,force:true});});
+

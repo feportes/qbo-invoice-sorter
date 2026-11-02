@@ -13,7 +13,7 @@ import {authenticate,bootstrap,login,addUser,disableUser,safeUser,permit,problem
 import {createPurchaseOrder,recordReceipt,readPO,readReceipt,suggestPutaway,confirmPutaway,approveReceipt,frozenStockLocations,once} from './warehouse_receiving.js';
 import {driverRoute,importRoute,saveDriverEvents} from './warehouse_driver.js';
 import {createWarehouseSource} from './warehouse_source.js';
-import {stockCatalog,registerStockPallet,moveStockPallet,editStockPallet} from './warehouse_stock.js';
+import {stockCatalog,registerStockPallet,moveStockPallet,editStockPallet,copyStockPallet} from './warehouse_stock.js';
 
 const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next);
 
@@ -96,6 +96,7 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/stock/pallets',run((req,res)=>res.status(201).json(registerStockPallet(db,req.whUser,req.body))));
   r.post('/stock/pallets/:id/move',run((req,res)=>res.json(moveStockPallet(db,req.whUser,{...req.body,palletId:Number(req.params.id)}))));
   r.post('/stock/pallets/:id/edit',run((req,res)=>res.json(editStockPallet(db,req.whUser,{...req.body,palletId:Number(req.params.id)}))));
+  r.post('/stock/pallets/:id/copy',run((req,res)=>res.json(copyStockPallet(db,req.whUser,{...req.body,palletId:Number(req.params.id)}))));
   r.get('/container-layout',run((req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');if(!readContainerLayout)problem('Container layout is not configured.',503);res.json(decoratePalletLayout(sql,readContainerLayout()));}));
   r.get('/picking',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');res.json(await source.request('/api/mobile-warehouse',req.whUser));}));
   r.post('/picking',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');const result=await source.request('/api/mobile-warehouse',req.whUser,req.body);audit(sql,req.whUser,'warehouse-action','route',String(req.body.command?.args?.[0]||''),{requestId:req.body.requestId,action:req.body.command?.name});res.json(result);}));

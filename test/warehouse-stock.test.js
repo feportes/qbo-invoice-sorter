@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {randomUUID} from 'node:crypto';
-import {ensureWarehouseSchema} from '../src/warehouse_schema.js';import {registerStockPallet,moveStockPallet,editStockPallet,stockCatalog} from '../src/warehouse_stock.js';import {copyFingerprint} from '../src/pallet_groups.js';
+import {ensureWarehouseSchema} from '../src/warehouse_schema.js';import {registerStockPallet,moveStockPallet,editStockPallet,copyStockPallet,stockCatalog} from '../src/warehouse_stock.js';import {copyFingerprint} from '../src/pallet_groups.js';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'warehouse-stock-'));process.env.DB_PATH=path.join(dir,'test.db');const {db}=await import('../src/db.js');const {ensureSchema,seedDefaults,seedLocations}=await import('../src/schema.js');ensureSchema();seedDefaults();seedLocations();ensureWarehouseSchema(db.sqlite);
 const user={id:'stock-worker',username:'test.worker',role:'warehouse',functions:['warehouse']},other={...user,id:'other-worker'};
 const a=Number(db.sqlite.prepare("INSERT INTO skus(qbo_item_id,qbo_sku,name,unit_type) VALUES ('1001','F001','Test Acai','cases')").run().lastInsertRowid),b=Number(db.sqlite.prepare("INSERT INTO skus(qbo_item_id,qbo_sku,name,unit_type) VALUES ('1002','F002','Test Mango','cases')").run().lastInsertRowid);
@@ -35,4 +35,5 @@ test('new mixed product inherits its freezer position; invalid levels cannot cre
  assert.ok(db.physicalPalletItems(id).every(p=>p.walkin_position==='WF-B2-upper'));
  assert.throws(()=>create([{skuId:a,qty:1}],'WF-B1-middle'),/Choose a current/);
 });
+test('worker copy to walk-in is idempotent, audited, and leaves the source unchanged',()=>{const id=create([{skuId:a,qty:20}],'C4-L-01').palletIds[0],input={requestId:randomUUID(),palletId:id,expectedItems:fp(id),locationCode:'WF-P1-floor',qty:10},before=fp(id),r=copyStockPallet(db,user,input);assert.equal(copyStockPallet(db,user,input).duplicate,true);assert.equal(fp(id),before);const newStock=db.physicalPalletItems(r.palletIds[0])[0];assert.equal(newStock.qty_units,10);assert.equal(newStock.walkin_position,'WF-P1-floor');assert.equal(db.sqlite.prepare("SELECT count(*) n FROM wh_audit WHERE action='warehouse-pallet-copied'").get().n,1);assert.throws(()=>copyStockPallet(db,{...user,role:'driver',functions:['deliveries']},{...input,requestId:randomUUID()}),/function/);});
 test.after(()=>{db.sqlite.close();fs.rmSync(dir,{recursive:true,force:true});});

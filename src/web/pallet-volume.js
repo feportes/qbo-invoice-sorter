@@ -1,11 +1,11 @@
 import {palletPacking} from './pallet-visual.js';
-export function renderPalletVolume(stack,p,n){
+export function renderPalletVolume(stack,p,n,{onMap=false}={}){
  const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');
- svg.setAttribute('viewBox','0 0 400 310');svg.setAttribute('aria-hidden','true');
+ svg.setAttribute('aria-hidden','true');
  const add=(tag,attrs,parent=svg)=>{const e=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,String(v));parent.append(e);return e;};
  const layers=Math.ceil(n/p.perLayer),unitHeight=p.layerHeight||(p.shape==='large'?12:10);
- const scale=Math.min(4,240/(39+layers*unitHeight*.8));
- const pt=(x,y,z)=>[205+(x-20-(y-24)*.58)*scale,260+((x-20)*.28+(y-24)*.48-z*.8)*scale];
+ const height=onMap?Math.max(150,80+layers*unitHeight*2.4):310;svg.setAttribute('viewBox','0 0 '+(onMap?280:400)+' '+height);const baseY=onMap?height-44:260,centerX=onMap?145:205;const scale=onMap?3:Math.min(4,240/(39+layers*unitHeight*.8));
+ const pt=(x,y,z)=>[centerX+(x-20-(y-24)*.58)*scale,baseY+((x-20)*.28+(y-24)*.48-z*.8)*scale];
  const points=a=>a.map(v=>pt(...v).join(',')).join(' ');
  const face=(a,fill,stroke='#a8afb0')=>add('polygon',{points:points(a),fill,stroke,'stroke-width':.55,'stroke-linejoin':'round'});
  const defs=add('defs',{});
@@ -13,7 +13,7 @@ export function renderPalletVolume(stack,p,n){
   const gradient=add('linearGradient',{id,x1:'0%',y1:'0%',x2:'100%',y2:'0%'},defs);
   colors.forEach((color,i)=>add('stop',{offset:(i/(colors.length-1)*100)+'%','stop-color':color},gradient));
  }
- add('ellipse',{cx:205,cy:272,rx:35*scale,ry:10*scale,fill:'#302238',opacity:.12});
+ add('ellipse',{cx:centerX,cy:baseY+12,rx:35*scale,ry:10*scale,fill:'#302238',opacity:.12});
  // Timber deck, open fork pockets, and separate boards.
  face([[0,0,0],[40,0,0],[40,48,0],[0,48,0]],'#bd9867','#8e6c45');
  face([[0,48,0],[40,48,0],[40,48,-3],[0,48,-3]],'#a77a48','#795832');
@@ -78,4 +78,4 @@ export function renderPalletVolume(stack,p,n){
  stack.replaceChildren(svg);
 }
 
-export function drawStockVolume(host,item){const p=item.palletPacking||palletPacking(item);if(!p){host.textContent='No layer pattern configured';return;}const shapes={tubs20:'round',tubs12:'large',rectTubs15:'rect',whiteBoxes12:'white',boxes10:'brown'};renderPalletVolume(host,{shape:shapes[p.kind],perLayer:p.unitsPerLayer,cols:p.kind==='tubs20'?4:3,layerHeight:p.layerHeightInches||null},Number(item.qty_units)||0);host.setAttribute('role','img');host.setAttribute('aria-label',(item.sku_name||'Product')+' · '+item.qty_units+' '+(item.unit_type||'units')+' · '+p.layers+' layers');}
+export function drawStockVolume(host,item,options={}){const p=item.palletPacking||palletPacking(item);if(!p){host.textContent='No layer pattern configured';return;}const shapes={tubs20:'round',tubs12:'large',rectTubs15:'rect',whiteBoxes12:'white',boxes10:'brown'};renderPalletVolume(host,{shape:shapes[p.kind],perLayer:p.unitsPerLayer,cols:p.kind==='tubs20'?4:3,layerHeight:p.layerHeightInches||null},Number(item.qty_units)||0,options);host.setAttribute('role','img');host.setAttribute('aria-label',(item.sku_name||'Product')+' · '+item.qty_units+' '+(item.unit_type||'units')+' · '+p.layers+' layers');}

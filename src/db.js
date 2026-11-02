@@ -3,6 +3,7 @@ import { containerLayout, slotKey } from './container_layout.js';
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
 import { copyFingerprint } from './pallet_groups.js';
+import {findWalkinPosition} from './web/walkin-layout.js';
 import path from 'path';
 
 const dbPath = process.env.DB_PATH || './data/app.db';
@@ -1409,20 +1410,21 @@ listAuditLotReport({ skuId, lotId, startDate, endDate }) {
       if (expectedItems ? copyFingerprint(items) !== expectedItems : (items.length !== 1 || source.qty_units !== Number(expectedQty) || source.location_id !== Number(expectedLocation))) throw new Error('Source pallet changed. Refresh before copying.');
       const qty = Number(qtyUnits);
       if (items.length === 1 && (qtyUnits == null || String(qtyUnits).trim() === '' || !Number.isFinite(qty) || qty <= 0)) throw new Error('Quantity per new pallet must be greater than zero.');
-      if (!Array.isArray(locationCodes) || !locationCodes.length || locationCodes.length > 20) throw new Error('Select 1 to 20 empty container slots.');
+      if (!Array.isArray(locationCodes) || !locationCodes.length || locationCodes.length > 20) throw new Error('Select 1 to 20 container or walk-in destinations.');
       const locations = locationCodes.map(code => {
         if (typeof code !== 'string') throw new Error('Invalid destination.');
-        const loc = this.getLocationByCode(code);
-        if (!loc || loc.type !== 'CONTAINER') throw new Error('Copies must go into empty container slots.');
+        const position=findWalkinPosition(code),loc = this.getLocationByCode(position?'WALKIN':code);
+        if (!loc || !(loc.type === 'CONTAINER'||loc.code==='WALKIN')) throw new Error('Choose a valid container or walk-in destination.');
         this.assertAvailableContainerLocation(loc);
-        return loc;
+        if(position?.single&&sqlite.prepare('SELECT id FROM pallets WHERE location_id=? AND walkin_position=? AND qty_units>0 LIMIT 1').get(loc.id,position.code))throw new Error('That walk-in pallet position is occupied.');
+        return {...loc,position};
       });
-      if (new Set(locations.map(l=>`${l.container_no}:${l.side}:${l.depth}`)).size !== locations.length) throw new Error('Select each destination only once.');
+      if (new Set(locations.map(l=>l.position?.code||(l.type==='CONTAINER'?`${l.container_no}:${l.side}:${l.depth}`:l.code))).size !== locations.length) throw new Error('Select each destination only once.');
       return locations.map(loc => {
         const ids = this.createMixedPallet({ locationCode: loc.code, notes, userName,
           items: items.map(p=>({ ...p, qty_units: items.length === 1 ? qty : p.qty_units })) });
-        for (const id of ids) sqlite.prepare("UPDATE inventory_movements SET note=? WHERE to_pallet_id=? AND type='RECEIVE'")
-          .run(`Copied pallet #${sourcePalletId} template into ${loc.code}; new stock received.`, id);
+        for (const id of ids) {sqlite.prepare('UPDATE pallets SET walkin_position=? WHERE id=?').run(loc.position?.code||null,id);sqlite.prepare("UPDATE inventory_movements SET note=? WHERE to_pallet_id=? AND type='RECEIVE'")
+          .run(`Copied pallet #${sourcePalletId} template into ${loc.position?.code||loc.code}; new stock received.`, id);}
         return ids[0];
       });
     })();
