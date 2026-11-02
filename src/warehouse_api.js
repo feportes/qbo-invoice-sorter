@@ -1,3 +1,4 @@
+import {bundleOptions,routeInvoiceBundle} from './warehouse_invoice_bundle.js';
 import {mapSettings,saveMapSettings,prepareRoadRoute} from './warehouse_maps.js';
 import {ensureProductPhotos,decorateProductPhotos,saveProductPhoto,readProductPhoto} from './warehouse_product_photos.js';
 import {invoiceDate} from './warehouse_planning_invoices.js';
@@ -21,7 +22,7 @@ const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next
 
 function serveInstructionMedia(req,res,m){const total=m.bytes.length;res.type(m.mime_type).set('Accept-Ranges','bytes');if(req.get('range')){const match=/^bytes=(\d*)-(\d*)$/.exec(req.get('range'));if(!match||!match[1]&&!match[2])return res.status(416).set('Content-Range','bytes */'+total).end();let start=match[1]?Number(match[1]):Math.max(0,total-Number(match[2])),end=match[1]&&match[2]?Math.min(total-1,Number(match[2])):total-1;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=total||end<start)return res.status(416).set('Content-Range','bytes */'+total).end();res.status(206).set('Content-Range','bytes '+start+'-'+end+'/'+total).send(m.bytes.subarray(start,end+1));}else res.send(m.bytes);}
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
-export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,readPlanningInvoices,sourceFetch,readContainerLayout}){
+export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,readInvoicePdf,readPlanningInvoices,sourceFetch,readContainerLayout}){
   const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureProductPhotos(sql);ensureGuideSchema(sql);ensureInstructionUpdateSchema(sql);ensureProductRequests(sql);
   const source=createWarehouseSource({sql,env,readInvoice,...(sourceFetch?{fetchImpl:sourceFetch}:{})});
   const timer=setInterval(()=>source.kickAll(),30000);timer.unref();r.stopWarehouseSync=()=>clearInterval(timer);
@@ -71,6 +72,9 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/product-requests',run((req,res)=>res.json(createProductRequest(sql,req.whUser,req.body,driverRoute))));
   r.post('/product-requests/:id/review',run(async(req,res)=>res.json(await reviewProductRequest(sql,req.whUser,req.params.id,req.body,source))));
   r.post('/planning/invoices',run(async(req,res)=>{permit(req.whUser,['admin','office'],'planning');const date=invoiceDate(req.body.date);if(!readPlanningInvoices)problem('Invoice lookup is not configured.',503);res.json(await readPlanningInvoices(date,await source.request('/api/mobile-planning',req.whUser)));}));
+  const invoicePacket=async req=>{const feature=req.whUser.functions?.includes('planning')?'planning':'warehouse';permit(req.whUser,['admin','office','warehouse'],feature);return source.request('/api/mobile-route-documents?route='+encodeURIComponent(req.params.id),req.whUser);};
+  r.get('/route-invoices/:id',run(async(req,res)=>res.json(await invoicePacket(req))));
+  r.get('/route-invoices/:id/pdf',run(async(req,res)=>{const options=bundleOptions(req.query),packet=await invoicePacket(req);const bundle=await routeInvoiceBundle(packet,options,readInvoicePdf);audit(sql,req.whUser,'route-invoice-bundle-generated','route',packet.route.id,{invoiceIds:packet.invoices.map(i=>i.qboInvoiceId),copies:bundle.copies,order:bundle.order,pages:bundle.pages});const filename=('Invoices-'+packet.route.date+'-'+packet.route.name).replace(/[^a-zA-Z0-9_-]/g,'-').slice(0,150)+'.pdf';res.type('application/pdf').set('Content-Disposition',(req.query.download==='1'?'attachment':'inline')+'; filename="'+filename+'"').send(bundle.bytes);}));
   r.get('/planning',run(async(req,res)=>{permit(req.whUser,['admin','office'],'planning');res.json(await source.request('/api/mobile-planning',req.whUser));}));
   r.post('/planning',run(async(req,res)=>{permit(req.whUser,['admin','office'],'planning');res.json(await source.request('/api/mobile-planning',req.whUser,req.body));}));
   r.get('/receiving-lookups',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'receiving');if(!readVendors)problem('Vendor lookup is not configured.',503);res.json({vendors:await readVendors(),products:sql.prepare('SELECT id,qbo_sku,name,unit_type FROM skus WHERE active=1 ORDER BY name').all(),palletConfigs:sql.prepare('SELECT * FROM pallet_configs').all()});}));

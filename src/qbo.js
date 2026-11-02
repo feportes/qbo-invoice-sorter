@@ -2,6 +2,17 @@ import crypto from 'crypto';
 
 const BASE = (realmId) => `https://quickbooks.api.intuit.com/v3/company/${realmId}`;
 
+export async function qboInvoicePdf(oauthClient,realmId,invoiceId){
+  if(!/^\d{1,30}$/.test(String(invoiceId)))throw Error('Invalid QuickBooks invoice identity.');
+  const token=oauthClient.getToken().access_token;
+  const response=await fetch(`${BASE(realmId)}/invoice/${invoiceId}/pdf`,{headers:{Authorization:'Bearer '+token,Accept:'application/pdf'},signal:AbortSignal.timeout(30000),redirect:'error'});
+  if(!response.ok)throw Error('QuickBooks could not provide the invoice PDF.');
+  if(Number(response.headers.get('content-length')||0)>10000000)throw Error('Invoice PDF is too large.');
+  const reader=response.body.getReader(),parts=[];let size=0;
+  for(;;){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>10000000){await reader.cancel();throw Error('Invoice PDF is too large.');}parts.push(Buffer.from(value));}
+  const bytes=Buffer.concat(parts);if(!bytes.subarray(0,1024).includes(Buffer.from('%PDF-')))throw Error('QuickBooks did not return a PDF.');return bytes;
+}
+
 // Generic JSON fetch using intuit-oauth makeApiCall
 export async function qboFetchJson(oauthClient, { url, method = 'GET', body = null, headers = {} }) {
   const opts = { url, method, headers: { Accept: 'application/json', ...headers } };

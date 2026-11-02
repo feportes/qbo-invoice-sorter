@@ -18,7 +18,7 @@ import { createRequire } from 'module';
 import { db } from './src/db.js';
 import { ensureSchema, seedDefaults, seedLocations } from './src/schema.js';
 import { getOAuthClient, authStart, authCallback, requireConnected, withFreshClient } from './src/oauth.js';
-import { qboReadItemByName, qboQuery, qboReadInvoiceWithRetry, qboSendInvoice } from './src/qbo.js';
+import { qboInvoicePdf, qboReadItemByName, qboQuery, qboReadInvoiceWithRetry, qboSendInvoice } from './src/qbo.js';
 import { syncCustomers, syncCategories } from './src/sync.js';
 import { verifyIntuitWebhook, rawBodySaver } from './src/webhooks.js';
 import { processInvoice } from './src/processor.js';
@@ -56,6 +56,7 @@ const warehouseQboQuery = async query => { const {conn,oauthClient}=await withFr
 const warehouseQboId = value => { if(!/^\d{1,30}$/.test(value))throw Object.assign(Error('Choose a valid QuickBooks record.'),{status:400});return value; };
 app.use('/api/warehouse',createWarehouseRouter({db,
   readPlanningInvoices:async(date,planning)=>{const {conn,oauthClient}=await withFreshClient();const result=await qboQuery(oauthClient,conn.realm_id,`select * from Invoice where TxnDate = '${date}' orderby DocNumber desc maxresults 1000`);return projectPlanningInvoices(result?.QueryResponse?.Invoice||[],date,conn.realm_id,planning);},
+  readInvoicePdf:async stop=>{const {conn,oauthClient}=await withFreshClient();return qboInvoicePdf(oauthClient,conn.realm_id,warehouseReference(stop.qboInvoiceId,conn.realm_id));},
   readInvoice:async stop=>{const {conn,oauthClient}=await withFreshClient();const id=warehouseReference(stop.qboInvoiceId,conn.realm_id);const invoice=await qboReadInvoiceWithRetry(oauthClient,conn.realm_id,id,2);return nativeInvoiceBaseline(invoice.Invoice||invoice,stop,conn.realm_id);},
   readContainerLayout:()=>({yard:db.listContainers().map(cont=>{const n=typeof cont==='object'?(cont.containerNo??cont.container_no??cont.id):Number(cont);return {containerNo:n,...buildContainerSlots(n,db),layout:db.getContainerDepths(n)};}),walkin:groupPallets(db.listPalletsInWalkin()),loose:db.listWalkinLoose(),returns:groupPallets(db.listPalletsInReturns())}),
   readVendors:async()=>((await warehouseQboQuery('select * from Vendor where Active = true maxresults 1000'))?.QueryResponse?.Vendor||[]).map(v=>({id:String(v.Id),name:v.DisplayName})),

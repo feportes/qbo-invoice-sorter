@@ -17,6 +17,7 @@
     "intuit-oauth": "^4.0.1",
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
+    "pdf-lib": "1.17.1",
     "pdf-parse": "^1.1.1",
     "xlsx": "^0.18.5"
   }
