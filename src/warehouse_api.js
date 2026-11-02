@@ -31,6 +31,8 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
     if(!['GET','HEAD'].includes(req.method)&&req.get('origin')){try{const origin=new URL(req.get('origin'));if(origin.host!==req.get('host'))return res.status(403).json({error:'Cross-origin save denied.'});}catch{return res.status(403).json({error:'Invalid request origin.'});}}
     next();
   });
+  // Website-restricted browser key only; never returns server keys or business data.
+  r.get('/public-map-config',run((req,res)=>{const origin=req.get('origin');if(origin==='https://superfruits-scanner-preview.superfruits-1762.chatgpt.site')res.set('Access-Control-Allow-Origin',origin).set('Vary','Origin');const config=mapSettings(sql,true);res.json({ready:config.ready,...(config.ready?{browserKey:config.browserKey}:{})});}));
   r.post('/bootstrap',run(async(req,res)=>res.status(201).json({user:await bootstrap(sql,env,req.body)})));
   r.post('/login',run(async(req,res)=>{const result=await login(sql,req.body,req.ip);res.cookie('__Host-wh_session',result.token,{secure:true,httpOnly:true,sameSite:'strict',path:'/',maxAge:14*86400000});res.json(result);}));
 
