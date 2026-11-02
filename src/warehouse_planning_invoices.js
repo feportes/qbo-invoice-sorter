@@ -9,6 +9,12 @@ function referenceEncoder(values,realm){
 }
 export function projectPlanningInvoices(invoices,date,realm,planning){
  const orders=planning.orders||[],invoiceId=referenceEncoder(orders.map(o=>o.qboInvoiceId),realm),customerId=referenceEncoder(orders.map(o=>o.qboCustomerId),realm),itemId=referenceEncoder(orders.flatMap(o=>(o.products||[]).map(p=>p.qboItemId)),realm);
- const documents=invoices.filter(i=>i.TxnDate===date).map(i=>({qboInvoiceId:invoiceId(i.Id),qboCustomerId:customerId(i.CustomerRef?.value||''),invoice:String(i.DocNumber||''),date:i.TxnDate,customer:String(i.CustomerRef?.name||''),shipTo:'',lines:(i.Line||[]).filter(l=>l.DetailType==='SalesItemLineDetail'&&l.SalesItemLineDetail?.ItemRef?.value&&String(l.SalesItemLineDetail.ItemRef.value)!=='520'&&!/operating cost surcharge/i.test(l.SalesItemLineDetail.ItemRef.name||l.Description||'')).map(l=>({qboItemId:itemId(l.SalesItemLineDetail.ItemRef.value),name:String(l.SalesItemLineDetail.ItemRef.name||l.Description||''),qty:l.SalesItemLineDetail.Qty??null}))})).filter(i=>i.lines.length);
+ const documents=invoices.filter(i=>i.TxnDate===date).map(i=>{
+  const rows=(i.Line||[]).filter(l=>l.DetailType==='SalesItemLineDetail'&&l.SalesItemLineDetail?.ItemRef?.value);
+  const name=l=>String(l.SalesItemLineDetail.ItemRef.name||l.Description||''),credit=l=>/(?:^|:)\s*Credit\s*$/i.test(name(l));
+  const accountingLines=rows.filter(credit).map(l=>({name:name(l),kind:'credit'}));
+  const lines=rows.filter(l=>!credit(l)&&String(l.SalesItemLineDetail.ItemRef.value)!=='520'&&!/operating cost surcharge/i.test(name(l))).map(l=>({qboItemId:itemId(l.SalesItemLineDetail.ItemRef.value),name:name(l),qty:l.SalesItemLineDetail.Qty??null}));
+  return {qboInvoiceId:invoiceId(i.Id),qboCustomerId:customerId(i.CustomerRef?.value||''),invoice:String(i.DocNumber||''),date:i.TxnDate,customer:String(i.CustomerRef?.name||''),shipTo:'',lines,...(accountingLines.length?{accountingLines}:{})};
+ }).filter(i=>i.lines.length);
  return {status:'success',date,readAt:new Date().toISOString(),documents,possiblyTruncated:invoices.length>=1000};
 }
