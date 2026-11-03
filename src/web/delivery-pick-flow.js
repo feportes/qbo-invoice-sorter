@@ -1,0 +1,1 @@
+export function nextPendingProduct(stop,after){const products=stop.products||[],index=products.findIndex(p=>p.id===after),start=index<0?0:index+1;for(let n=0;n<products.length;n++){const p=products[(start+n)%products.length];if((stop.counts?.[p.id]||0)<Math.ceil(p.qty-.000001)&&!stop.shortages?.[p.id])return p;}return null;}

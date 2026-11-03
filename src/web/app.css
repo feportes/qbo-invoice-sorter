@@ -27,3 +27,5 @@ body{min-height:100dvh;display:flex;flex-direction:column}main{width:100%;flex:1
 header .app-update-link{flex:0 0 auto;min-width:0;font-size:13px;font-weight:650;padding:10px;border-radius:12px;background:#eee5fa}@media(max-width:600px){header .app-update-link{font-size:12px;padding:8px}}
 
 .departure-checks{display:grid;gap:12px}.departure-check{border:1px solid #dfd0f3;margin:0}.departure-check h3{margin:0 0 5px}.departure-total{display:block;font-size:32px;color:#35116c}.departure-check details{margin-top:12px}.departure-check input{font-size:22px}.departure-check label{margin-top:12px}@media(min-width:900px){.departure-checks{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.delivery-current{outline:3px solid #35116c;outline-offset:2px}
