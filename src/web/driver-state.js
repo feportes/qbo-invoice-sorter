@@ -1,3 +1,4 @@
+import {validateDepartureCounts} from './departure-summary.js';
 // Shared validation for the server and offline browser. The server revalidates every event.
 const problem=(message,status=400)=>{throw Object.assign(Error(message),{status});};
 const clean=v=>String(v??'').trim();
@@ -11,7 +12,7 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
   const stop=route.stops.find(s=>s.id===x.stopId),active=()=>{if(!stop||['completed','skipped','deferred'].includes(stop.status))problem('Choose an open stop.');return stop;};
   if(event.kind==='depart'){
     if(route.status!=='loaded'||x.confirmedLoad!==true)problem('Review the load summary before departure.');
-    route.status='delivering';route.departedAt=at;if(clean(x.vehicleId))route.vehicleId=clean(x.vehicleId);return;
+    validateDepartureCounts(route,x);route.departureCounts={...x.loadCounts};route.status='delivering';route.departedAt=at;if(clean(x.vehicleId)){route.vehicleId=clean(x.vehicleId);route.vehicleName=clean(x.vehicleName);}return;
   }
   if(event.kind==='note'||event.kind==='photo'){if(x.stopId&&!stop)problem('Stop is not on this route.');if(event.kind==='note')reason(x.notes);else if(!Array.isArray(x.mediaIds)||!x.mediaIds.length)problem('Attach a saved photo.');return;}
   if(event.kind==='finalize'){
