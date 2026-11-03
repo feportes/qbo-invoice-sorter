@@ -8,6 +8,7 @@ import {areaPickItems,freezerPalletGroup,palletNames,productKey} from './warehou
 const $=id=>document.getElementById(id),names={freezer:'Freezer',dry:'Dry',refrigerated:'Refrigerated / fresh'},key=l=>l.key||l.order+':'+l.index;
 
 let inventory;
+let awaitingCompletion,barcodeRefresh;
 let session,data,current,state={},pending,busy=false,storeKey,requestKey,feedbackTimer,completedPick,advanceTimer,scanQueue,scanQueuePaused=false;
 
 const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
@@ -41,7 +42,7 @@ async function refresh(){if(session&&(pending||scanQueue?.length)){note('Scans a
 function totals(r){return {total:r.lines.reduce((n,l)=>n+(l.requestedQty??l.qty),0),picked:r.lines.reduce((n,l)=>n+l.picked,0),short:r.lines.reduce((n,l)=>n+(l.shortage?.qty||0),0),remaining:r.lines.reduce((n,l)=>n+l.qty-l.picked,0)};}
 
 function pickPercentage(t){const value=t.total>0?Math.min(100,Math.floor(t.picked/t.total*100)):0,badge=el('div'),label=el('strong',value+'% picked'),bar=el('progress');badge.className='pick-percentage'+(value===100?' complete':'');bar.max=t.total||1;bar.value=t.picked;bar.className='pick-progress'+(value===100?' complete':'');bar.setAttribute('aria-label',value+'% picked');badge.append(label,bar);return badge;}
-function chooseRoute(r){sound();clearTimeout(advanceTimer);completedPick=null;state={date:r.date,routeId:r.id,area:r.lines.find(l=>l.picked<l.qty)?.zone||'freezer',started:false};$('date').value=r.date;remember();draw();}
+function chooseRoute(r){sound();clearTimeout(advanceTimer);completedPick=null;awaitingCompletion=null;state={date:r.date,routeId:r.id,area:r.lines.find(l=>l.picked<l.qty)?.zone||'freezer',started:false};$('date').value=r.date;remember();draw();}
 
 function totalMode(){return current?.pickingModes?.[state.area]===true;}
 
@@ -65,14 +66,32 @@ function enqueueScan(code,qty,line){
 
   if(scanQueuePaused)throw Error('Review the scan warning and resume saved scans first.');
 
-  if(!Number.isInteger(qty)||qty<1)throw Error('Enter a positive whole quantity.');if(qty>line.qty-line.picked)throw Error('Only '+(line.qty-line.picked)+' remain.');if(qty>1&&line.qty-line.picked<=line.scanLimit)throw Error('Scan each unit individually at or below this product threshold.');if(Array.isArray(line.scanCodes)&&!line.scanCodes.some(c=>String(c).trim().toUpperCase()===code.trim().toUpperCase())&&(navigator.onLine===false||data.routes.some(r=>r.lines.some(l=>(l.productId!==line.productId||l.packId!==line.packId)&&l.scanCodes?.some(c=>String(c).trim().toUpperCase()===code.trim().toUpperCase())))))throw Error('Wrong or unregistered barcode. Scan '+line.name+'. Reconnect for a new barcode lookup.');
+  if(!Number.isInteger(qty)||qty<1)throw Error('Enter a positive whole quantity.');if(qty>line.qty-line.picked)throw Error('Only '+(line.qty-line.picked)+' remain.');if(qty>1&&line.qty-line.picked<=line.scanLimit)throw Error('Scan each unit individually at or below this product threshold.');if(!line.scanCodes?.some(c=>String(c).trim().toUpperCase()===code.trim().toUpperCase()))throw Error('Wrong or unregistered barcode. Scan '+line.name+'.');
 
   scanQueue.add({id:crypto.randomUUID(),target:key(line),area:state.area,args:[current.id,totalMode()?line.productId:line.order,totalMode()?line.packId:line.index,code,qty,{bulk:qty>1,area:state.area,chooseItem:true}],name:totalMode()?'scanWarehouseProduct':'scan',line:structuredClone(line)});
 
-  if(qty===line.qty-line.picked){feedback(line.name+' counted. Moving to the next product.',false);completedPick={...line,picked:line.qty};clearTimeout(advanceTimer);advanceTimer=setTimeout(()=>{completedPick=null;state.focus=null;draw();focusCurrentPick();},1800);}if($('pick-code'))$('pick-code').value='';if($('pick-qty'))$('pick-qty').value=1;draw();scanStatus();void drainScans();return true;
+  if(qty===line.qty-line.picked){clearTimeout(advanceTimer);if(navigator.onLine===false){feedback(line.name+' counted offline. Saved on this device.',false);completedPick={...line,picked:line.qty};advanceTimer=setTimeout(()=>{completedPick=null;state.focus=null;draw();focusCurrentPick();},1800);}else awaitingCompletion={...line,picked:line.qty};}if($('pick-code'))$('pick-code').value='';if($('pick-qty'))$('pick-qty').value=1;draw();scanStatus();void drainScans();return true;
 
  }catch(e){feedback(e.message);focusCurrentPick();return false;}
 
+}
+
+async function scanBarcode(code,qty,target){
+ const same=c=>String(c).trim().toUpperCase()===code.trim().toUpperCase();
+ try{
+  if(!target.scanCodes?.some(same)&&navigator.onLine!==false){
+   const wrong=data.routes.some(r=>r.lines.some(l=>(l.productId!==target.productId||l.packId!==target.packId)&&l.scanCodes?.some(same)));
+   if(!wrong){
+    if(!barcodeRefresh)barcodeRefresh=api('/picking').finally(()=>{barcodeRefresh=null;});
+    const fresh=await barcodeRefresh;
+    // Refresh aliases only: never replace counts/revision with a read racing saved scans.
+    for(const route of data.routes)for(const line of route.lines){const latest=fresh.routes.find(r=>r.id===route.id)?.lines.find(l=>l.productId===line.productId&&l.packId===line.packId);if(latest)line.scanCodes=latest.scanCodes;}
+   }
+  }
+  current=projectRoute(data.routes.find(r=>r.id===state.routeId));const line=remainingItems().find(l=>key(l)===key(target));
+  if(!line)throw Error('This item is already complete. Choose the next product.');
+  return enqueueScan(code,qty,line);
+ }catch(e){feedback(navigator.onLine===false?'Barcode not verified offline. Scan a saved barcode for '+target.name+'.':e.message);focusCurrentPick();return false;}
 }
 
 async function drainScans(){
@@ -95,7 +114,7 @@ async function send(){
 
  const operation=pending,name=operation.command.name,isScan=['scan','scanWarehouseProduct'].includes(name),prior=operation.scanLine||(current?next():null),scroll=window.scrollY;
 
- if(!isScan)draw();else scanStatus();let accepted=false;
+ if(!isScan)draw();else scanStatus();let accepted=false,resumeAfterRejection=false;
 
  try{
 
@@ -103,7 +122,7 @@ async function send(){
 
   // Acknowledge queue before clearing exact replay request. Crashes can only replay the same UUID.
 
-  if(operation.scanId)scanQueue.remove(operation.scanId);
+  if(operation.scanId)scanQueue.remove(operation.scanId);if(isScan&&awaitingCompletion&&key(awaitingCompletion)===key(prior)&&!scanQueue.items.some(read=>read.target===key(prior)))awaitingCompletion=null;
 
   localStorage.removeItem(requestKey);pending=null;data=result;note(data.message||'Saved.');
 
@@ -123,7 +142,7 @@ async function send(){
 
    try{
 
-    if(operation.scanId){const k='draw-warehouse-rejected:'+session.user.id,failed=JSON.parse(localStorage.getItem(k)||'[]');localStorage.setItem(k,JSON.stringify([...failed,{...operation,error:e.message,time:new Date().toISOString()}]));scanQueue.remove(operation.scanId);scanQueuePaused=true;}
+    if(operation.scanId){const k='draw-warehouse-rejected:'+session.user.id,failed=JSON.parse(localStorage.getItem(k)||'[]');localStorage.setItem(k,JSON.stringify([...failed,{...operation,error:e.message,time:new Date().toISOString()}]));scanQueue.remove(operation.scanId);resumeAfterRejection=[400,422].includes(e.status);scanQueuePaused=!resumeAfterRejection&&scanQueue.length>0;clearTimeout(advanceTimer);completedPick=null;awaitingCompletion=null;state.focus=key(operation.scanLine);state.area=operation.scanLine.zone||state.area;}
 
     localStorage.removeItem(requestKey);pending=null;
 
@@ -145,7 +164,7 @@ async function send(){
 
   if(isScan||name==='manualPick')focusCurrentPick();
 
-  if(accepted&&scanQueue?.length&&!scanQueuePaused)queueMicrotask(drainScans);
+  if((accepted||resumeAfterRejection)&&scanQueue?.length&&!scanQueuePaused)queueMicrotask(drainScans);
 
  }
 
@@ -167,7 +186,7 @@ function bulkDialog(line){dialog('Bulk pick · '+line.name,(body,actions,d)=>{
 
  const label=el('label'),check=el('input');check.type='checkbox';label.append(check,document.createTextNode('I counted and double-checked every unit.'));body.append(label);
 
- const confirm=button(actions,'Confirm bulk pick',()=>{if(!check.checked)throw Error('Double-check the physical count and tick the confirmation.');const n=Number(count.value);if(!Number.isInteger(n)||n<2||n>line.qty-line.picked)throw Error('Enter a whole count from 2 to '+(line.qty-line.picked)+'.');if(!barcode.value.trim())throw Error('Scan the product barcode first.');if(enqueueScan(barcode.value.trim(),n,line))d.close();},true);confirm.disabled=false;
+ const confirm=button(actions,'Confirm bulk pick',async()=>{if(!check.checked)throw Error('Double-check the physical count and tick the confirmation.');const n=Number(count.value);if(!Number.isInteger(n)||n<2||n>line.qty-line.picked)throw Error('Enter a whole count from 2 to '+(line.qty-line.picked)+'.');if(!barcode.value.trim())throw Error('Scan the product barcode first.');if(await scanBarcode(barcode.value.trim(),n,line))d.close();},true);confirm.disabled=false;
 
  });}
 
@@ -189,7 +208,7 @@ function draw(){const box=$('work'),scroll=window.scrollY;box.replaceChildren();
 
  const heading=el('section');heading.className='pick-heading';heading.append(pickPercentage(totals(current)),el('h2',current.name));button(heading,'Choose another route',()=>{state.routeId=null;remember();draw();});button(heading,'Refresh counts',refresh);box.append(heading);if(inventory?.pending){const banner=el('section');banner.className='card warning';banner.append(el('strong',inventory.conflict?'Restock needs review':'Restock waiting to sync'));const review=button(banner,'Review saved restock',()=>stockDialog(inventory,{name:'Saved restock',productId:null},current.id,{dialog,feedback}));review.disabled=false;box.append(banner);}const t=totals(current),counts=el('div');counts.className='summary-counts';counts.append(el('strong',t.picked+' picked'),el('strong',t.remaining+' remaining'),el('strong',t.short+' not picked'));box.append(counts);
 
- if((pending&&!busy&&!pending.scanId)||scanQueuePaused){const card=el('section');card.className='card warning';card.append(el('p',scanQueuePaused?'A scan was not counted. Review the warning, then continue saved scans.':'An earlier pick is waiting for confirmation.'));button(card,pending?'Retry saved scans':'Continue saved scans',()=>{scanQueuePaused=false;draw();return pending?send():drainScans();},true).disabled=busy;box.append(card);return;}
+ if((pending&&!busy&&!pending.scanId)||scanQueuePaused){const card=el('section');card.className='card warning';card.append(el('p',scanQueuePaused?'A scan was not counted. Review the warning, then continue saved scans.':'An earlier pick is waiting for confirmation.'));button(card,pending?'Retry saved scans':'Continue saved scans',()=>{scanQueuePaused=false;draw();return pending?send():drainScans();},true).disabled=busy;box.append(card);if(!scanQueuePaused)return;}
 
  if(scanQueue?.length){const saved=el('p',scanQueue.length+' scans saved on this device · '+(navigator.onLine===false?'offline, will sync automatically':'syncing'));saved.className='card';box.append(saved);}corrections(box);if(current.status==='loaded'){box.append(el('h2','Loading confirmed for this route'));return;}if(current.fulfillment==='customer-pickup'&&current.status==='ready-for-pickup'){box.append(el('h2','Ready for customer pickup'));const who=field(box,'Collected by'),notes=field(box,'Notes');button(box,'Confirm collected',()=>save('confirmCustomerPickup',[current.id,{collector:who.value,notes:notes.value}]),true);return;}
 
@@ -197,7 +216,7 @@ function draw(){const box=$('work'),scroll=window.scrollY;box.replaceChildren();
 
  const areaButtons=el('div');areaButtons.className='areas';for(const [area,name]of Object.entries(names)){const left=current.lines.filter(l=>l.zone===area).reduce((n,l)=>n+l.qty-l.picked,0);button(areaButtons,name+' ('+left+' left)',()=>{clearTimeout(advanceTimer);completedPick=null;state.area=area;state.focus=null;state.pallet=null;remember();draw();},state.area===area);}box.append(areaButtons);const modeLabel=el('label'),mode=el('input');mode.type='checkbox';mode.checked=totalMode();mode.disabled=busy||!!pending||!!scanQueue?.length;modeLabel.append(mode,document.createTextNode('Pick whole-route product totals in '+names[state.area]));mode.onchange=()=>{state.focus=null;save('setWarehousePickingMode',[current.id,state.area,mode.checked]);};box.append(modeLabel,el('small',totalMode()?'Combine each product across this route. Customer quantities are recorded automatically; individual-scan rules still apply.':'Pick one customer order at a time. Enable totals to build this area’s route pallet together.'));if(state.area==='freezer'){if(!state.pallet)state.pallet=remainingItems().some(l=>l.palletGroup==='tubs')?'tubs':'boxes';const pallets=el('div');pallets.className='areas';for(const group of ['tubs','boxes']){const left=remainingItems().filter(l=>l.palletGroup===group).reduce((n,l)=>n+l.qty-l.picked,0);button(pallets,palletNames[group]+' ('+left+' left)',()=>{state.pallet=group;state.focus=null;remember();draw();},state.pallet===group);}box.append(pallets,el('small','Build as many pallets as needed. These are product groups; mixed pallets are allowed.'));}
 
- const line=completedPick||next();if(line){state.focus=key(line);const card=el('section');card.id='active-pick';card.className='card';const summary=el('div');summary.id='active-pick-summary';card.append(summary);summary.append(el('small',totalMode()?'Whole route · '+new Set(line.members.map(m=>m.order)).size+' customer orders':'Stop '+line.stop+' - '+line.customer),el('h2',line.name));if(state.area==='freezer')summary.append(el('strong',palletNames[line.palletGroup]));const remaining=el('div',(line.qty-line.picked)+' remaining');remaining.className='big-remaining';summary.append(remaining);const scanState=el('small');scanState.id='scan-save-status';scanState.textContent=scanQueue?.length?scanQueue.length+' scans saving · keep scanning this item':'All scans saved';summary.append(scanState);if(completedPick){card.classList.add('pick-complete');const done=el('div');done.className='product-done';done.append(el('span','✓'),el('strong',scanQueue?.length?'Product counted · scans saving':'Product complete · moving to next item'));card.append(done);box.append(card);pickList(box);remember();return;}const form=el('form'),code=field(form,'Scan or type barcode / SKU');code.id='pick-code';code.autocomplete='off';const qty=field(form,'Quantity per scan',1,'number');qty.id='pick-qty';qty.min=1;qty.max=line.qty-line.picked;qty.readOnly=true;qty.parentElement.hidden=true;form.append(el('small','Bulk picking is available while more than '+line.scanLimit+' remain.'));const submit=el('button','Confirm barcode');submit.disabled=!!pending&&!pending.scanId;submit.className='primary';form.append(submit);form.onsubmit=e=>{e.preventDefault();if(code.value.trim())enqueueScan(code.value.trim(),1,line);};card.append(form);if(line.qty-line.picked>line.scanLimit){const b=button(card,'Bulk pick · count and confirm',()=>bulkDialog(line),true);b.disabled=scanQueuePaused||!!pending&&!pending.scanId;}if(line.manualPickAllowed&&!totalMode())button(card,'Office-approved manual pick',()=>{const reason=prompt('How did you check this product?');if(reason)save('manualPick',[current.id,line.order,line.index,Number(qty.value),reason,{area:state.area,chooseItem:true}]);});if(state.area==='freezer'){const find=button(card,'Find more stock / restock walk-in',()=>stockDialog(inventory,line,current.id,{dialog,feedback}));find.disabled=false;}button(card,'Cannot pick remaining item',()=>chooseShortage(line));box.append(card);}else box.append(el('h2',state.area==='freezer'?'This product group is complete. Choose another group or area.':'This area is complete. Choose another area or item.'));
+ const line=completedPick||awaitingCompletion||next();if(line){state.focus=key(line);const card=el('section');card.id='active-pick';card.className='card';const summary=el('div');summary.id='active-pick-summary';card.append(summary);summary.append(el('small',totalMode()?'Whole route · '+new Set(line.members.map(m=>m.order)).size+' customer orders':'Stop '+line.stop+' - '+line.customer),el('h2',line.name));if(state.area==='freezer')summary.append(el('strong',palletNames[line.palletGroup]));const remaining=el('div',(line.qty-line.picked)+' remaining');remaining.className='big-remaining';summary.append(remaining);const scanState=el('small');scanState.id='scan-save-status';scanState.textContent=scanQueue?.length?scanQueue.length+' scans saving · keep scanning this item':'All scans saved';summary.append(scanState);if(awaitingCompletion&&!completedPick){card.append(el('p','Checking the final scan…'));box.append(card);pickList(box);remember();return;}if(completedPick){card.classList.add('pick-complete');const done=el('div');done.className='product-done';done.append(el('span','✓'),el('strong',scanQueue?.length?'Product counted · scans saving':'Product complete · moving to next item'));card.append(done);box.append(card);pickList(box);remember();return;}const form=el('form'),code=field(form,'Scan or type barcode / SKU');code.id='pick-code';code.autocomplete='off';const qty=field(form,'Quantity per scan',1,'number');qty.id='pick-qty';qty.min=1;qty.max=line.qty-line.picked;qty.readOnly=true;qty.parentElement.hidden=true;form.append(el('small','Bulk picking is available while more than '+line.scanLimit+' remain.'));const submit=el('button','Confirm barcode');submit.disabled=!!pending&&!pending.scanId;submit.className='primary';form.append(submit);form.onsubmit=e=>{e.preventDefault();if(code.value.trim())void scanBarcode(code.value.trim(),1,line);};card.append(form);if(line.qty-line.picked>line.scanLimit){const b=button(card,'Bulk pick · count and confirm',()=>bulkDialog(line),true);b.disabled=scanQueuePaused||!!pending&&!pending.scanId;}if(line.manualPickAllowed&&!totalMode())button(card,'Office-approved manual pick',()=>{const reason=prompt('How did you check this product?');if(reason)save('manualPick',[current.id,line.order,line.index,Number(qty.value),reason,{area:state.area,chooseItem:true}]);});if(state.area==='freezer'){const find=button(card,'Find more stock / restock walk-in',()=>stockDialog(inventory,line,current.id,{dialog,feedback}));find.disabled=false;}button(card,'Cannot pick remaining item',()=>chooseShortage(line));box.append(card);}else box.append(el('h2',state.area==='freezer'?'This product group is complete. Choose another group or area.':'This area is complete. Choose another area or item.'));
 
  pickList(box);
 

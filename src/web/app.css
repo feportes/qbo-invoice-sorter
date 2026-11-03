@@ -5,3 +5,21 @@
 .workspace-icon svg{width:36px;height:36px}.workspace-tile:nth-of-type(2) .workspace-icon{background:#dcf6a4}
 
 .route-map-dialog{width:min(96vw,900px);height:92dvh;max-height:92dvh}.route-map-dialog[open]{display:flex;flex-direction:column;gap:10px}.route-map-dialog h2,.route-map-dialog p{margin:0}.driver-map{flex:1;min-height:260px;background:#e8e5df;border-radius:14px}.route-stop-number{background:none;border:none;box-shadow:none;color:white;font-weight:800;font-size:13px}.route-map-dialog>.primary{flex-shrink:0}.leaflet-container{font-family:system-ui,sans-serif}
+
+/* Desktop workspaces use the full browser; handheld layouts stay compact. */
+body{min-height:100dvh;display:flex;flex-direction:column}main{width:100%;flex:1;min-width:0}#content{min-width:0}iframe{min-width:0}
+@media(min-width:900px){
+ main{max-width:none;padding:28px 32px 40px}
+ #content[data-view=login]{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(340px,.8fr);gap:12px 6vw;align-content:center;min-height:calc(100dvh - 230px)}
+ #content[data-view=login]>h1{grid-column:1;font-size:clamp(36px,3vw,56px);margin-bottom:0}
+ #content[data-view=login]>p{grid-column:1}
+ #content[data-view=login]>.delivery-welcome{grid-column:1;max-height:none;width:100%;height:auto;min-height:200px;margin:20px 0}
+ #content[data-view=login]>form{grid-column:2;grid-row:1/4;align-self:center;width:100%;margin:0}
+ #content[data-view=login]>details{grid-column:2;grid-row:4}
+ #content[data-view=dashboard]:has(>.workspace-tile){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 22px}
+ #content[data-view=dashboard]>h1,#content[data-view=dashboard]>.workspace-subtitle,#content[data-view=dashboard]>.delivery-welcome,#content[data-view=dashboard]>.muted,#content[data-view=dashboard]>button:not(.workspace-tile){grid-column:1/-1}
+ #content[data-view=dashboard]>.delivery-welcome{max-height:330px;margin:0 auto 12px}
+ #content[data-view=dashboard]>.workspace-tile{margin:0}
+ #content[data-view=workspace]>iframe{height:calc(100dvh - 200px);min-height:540px;border-radius:18px}
+}
+@media(min-width:1400px){#content[data-view=dashboard]:has(>.workspace-tile){grid-template-columns:repeat(3,minmax(0,1fr))}}
