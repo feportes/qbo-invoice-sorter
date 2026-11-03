@@ -14,7 +14,7 @@ export function savePlanningAddressPin(sql,user,packet,input){
  const stop=packet.orders.find(o=>o.id===input.orderId);if(!stop)problem('This planning stop no longer exists.',404);
  if(stop.requiresLocation&&!stop.locationId)problem('Choose this order’s delivery location first.',409);
  if(!stop.address||normalizeAddress(stop.address)!==normalizeAddress(input.expectedAddress))problem('The delivery address changed. Locate it again.',409);
- if(!point(input)||input.locationType!=='ROOFTOP'&&input.locationType!=='RANGE_INTERPOLATED'||typeof input.matchedAddress!=='string'||input.matchedAddress.length>500)problem('Choose one complete street-address match.',400);
+ const physicalMatch=['ROOFTOP','RANGE_INTERPOLATED'].includes(input.locationType)||input.locationType==='GEOMETRIC_CENTER'&&Array.isArray(input.matchTypes)&&input.matchTypes.some(t=>['street_address','premise','subpremise'].includes(t));if(!point(input)||!physicalMatch||typeof input.matchedAddress!=='string'||input.matchedAddress.length>500)problem('Choose one complete street-address match.',400);
  ensureAddressPins(sql);const key=digest(normalizeAddress(stop.address)),now=new Date().toISOString(),expires=new Date(Date.now()+29*86400000).toISOString();
  sql.prepare('INSERT OR REPLACE INTO wh_address_map_pins VALUES (?,?,?,?,?,?,?)').run(key,stop.address,input.lat,input.lng,input.matchedAddress,now,expires);
  audit(sql,user,'planning-address-located','map-address',key,{orderId:stop.id,source:'Google street address',matchedAddress:input.matchedAddress,lat:input.lat,lng:input.lng});
