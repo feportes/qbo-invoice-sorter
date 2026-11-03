@@ -1,3 +1,4 @@
+import {pickingStockSnapshot,restockWalkin} from './warehouse_restock.js';
 import {ensureWarehouseObservations,observeWarehouseShortages,correctWarehouseRoute} from './warehouse_shortage_service.js';
 import {planningMapRoute,attachPlanningPins,savePlanningAddressPin} from './warehouse_planning_map.js';
 import {customerInstructionDirectory,saveCustomerInstructions} from './warehouse_customer_instructions.js';
@@ -127,6 +128,8 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/stock/pallets/:id/edit',run((req,res)=>res.json(editStockPallet(db,req.whUser,{...req.body,palletId:Number(req.params.id)}))));
   r.post('/stock/pallets/:id/copy',run((req,res)=>res.json(copyStockPallet(db,req.whUser,{...req.body,palletId:Number(req.params.id)}))));
   r.get('/container-layout',run((req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');if(!readContainerLayout)problem('Container layout is not configured.',503);res.json(decoratePalletLayout(sql,readContainerLayout()));}));
+  r.get('/picking/stock',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');const catalog=await source.request('/api/mobile-warehouse-catalog',req.whUser);res.json(pickingStockSnapshot(db,req.whUser,stockCatalog(db,req.whUser,catalog,db.getConnection?.()?.realm_id)));}));
+  r.post('/picking/restock',run((req,res)=>res.json(restockWalkin(db,req.whUser,req.body))));
   r.get('/picking',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');res.json(await source.request('/api/mobile-warehouse',req.whUser));}));
   r.post('/picking',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');if(!['scan','scanWarehouseProduct','setWarehousePickingMode','manualPick','recordWarehouseShortage','clearWarehouseShortage','confirmLoaded','acknowledgeInstructions','confirmCustomerPickup'].includes(req.body.command?.name))problem('Unsupported warehouse action.',403);const result=await source.request('/api/mobile-warehouse',req.whUser,req.body);observeWarehouseShortages(sql,req.whUser,result);audit(sql,req.whUser,'warehouse-action','route',String(req.body.command?.args?.[0]||''),{requestId:req.body.requestId,action:req.body.command?.name});res.json(result);}));
   r.post('/picking/:id/correct-invoices',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');res.json(await correctWarehouseRoute(sql,req.whUser,req.params.id,source,correctWarehouseInvoice));}));
