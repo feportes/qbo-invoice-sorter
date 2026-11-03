@@ -18,7 +18,7 @@ body{min-height:100dvh;display:flex;flex-direction:column}main{width:100%;flex:1
  #content[data-view=login]>details{grid-column:2;grid-row:4}
  #content[data-view=dashboard]:has(>.workspace-tile){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 22px}
  #content[data-view=dashboard]>h1,#content[data-view=dashboard]>.workspace-subtitle,#content[data-view=dashboard]>.delivery-welcome,#content[data-view=dashboard]>.muted,#content[data-view=dashboard]>button:not(.workspace-tile){grid-column:1/-1}
- #content[data-view=dashboard]>.delivery-welcome{max-height:330px;margin:0 auto 12px}
+ #content[data-view=dashboard]>.delivery-welcome{width:min(100%,1000px);height:auto;max-height:none;margin:0 auto 12px}
  #content[data-view=dashboard]>.workspace-tile{margin:0}
  #content[data-view=workspace]>iframe{height:calc(100dvh - 200px);min-height:540px;border-radius:18px}
 }
