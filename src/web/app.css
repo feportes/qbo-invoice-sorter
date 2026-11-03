@@ -23,3 +23,5 @@ body{min-height:100dvh;display:flex;flex-direction:column}main{width:100%;flex:1
  #content[data-view=workspace]>iframe{height:calc(100dvh - 200px);min-height:540px;border-radius:18px}
 }
 @media(min-width:1400px){#content[data-view=dashboard]:has(>.workspace-tile){grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+header .app-update-link{flex:0 0 auto;min-width:0;font-size:13px;font-weight:650;padding:10px;border-radius:12px;background:#eee5fa}@media(max-width:600px){header .app-update-link{font-size:12px;padding:8px}}

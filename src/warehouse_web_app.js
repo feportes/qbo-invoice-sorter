@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 // warehouse API and is never placed in the service worker's shared cache.
 export function mountWarehouseWebApp(app){
   const root=path.dirname(fileURLToPath(import.meta.url));
+  app.get('/workspaces-update',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_update'));
   app.get('/workspaces',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_mobile'));
   app.get('/warehouse-map-settings',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_map_settings'));
   app.get('/warehouse-connections',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_connections'));
