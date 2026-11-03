@@ -13,3 +13,10 @@ test('planning map refreshes moved stops, retains visibility choices and skips i
  ui.hideAll();await pause();assert.match(count.textContent,/0 of 2 routes shown/);
  delete globalThis.window;delete globalThis.document;
 });
+
+test('missing draft pins are located automatically, reused for same-address stops, and routes recompute after reordering',async()=>{
+ const markers=[],reads=[],lookups=[],saves=[];globalThis.document={createElement:()=>new Element()};globalThis.window={google:{maps:{Map:class{fitBounds(){}},LatLngBounds:class{extend(){}},Marker:class{constructor(o){markers.push(o);}addListener(){}setMap(){}},Polyline:class{setMap(){}},InfoWindow:class{},SymbolPath:{CIRCLE:'circle'},event:{trigger(){}}}}};
+ const status=new Element(),choices=new Element();const ui=createPlanningMap({host:new Element(),choices,status,count:new Element(),section:new Element(),roadToggle:new Element(),readRoad:async id=>{reads.push(id);return {status:'ready',geometry:{coordinates:[[-117,33],[-118,34]]}};},locateAddress:async address=>{lookups.push(address);return {status:'located',lat:33,lng:-117,locationType:'ROOFTOP',matchedAddress:address};},savePin:async input=>{saves.push(input);return {pin:input};}});
+ const p={mapProvider:{ready:true,browserKey:'synthetic'},routes:[{id:'D',name:'Draft',status:'draft',date:'2026-11-03'}],orders:[{id:'1',route:'D',stop:1,address:'100 Main St',customerName:'One'},{id:'2',route:'D',stop:2,address:'100 Main St',customerName:'Two'}]};ui.update(p,'2026-11-03');await pause();await pause();assert.equal(lookups.length,1);assert.equal(saves.length,1);assert.equal(p.orders.every(s=>s.lat===33),true);assert.deepEqual(reads,['D']);assert.match(status.textContent,/2 of 2 stops mapped/);
+ ui.update({...p,orders:[{...p.orders[0],stop:2},{...p.orders[1],stop:1}]},'2026-11-03');await pause();assert.deepEqual(reads,['D','D']);assert.equal(markers.at(-2).title.includes('Two'),true);await pause();assert.equal(lookups.length,1);delete globalThis.window;delete globalThis.document;
+});
