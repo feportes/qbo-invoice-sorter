@@ -11,7 +11,7 @@ import XLSX from 'xlsx';
 import { groupPallets } from './src/pallet_groups.js';
 import { loadingNotes } from './src/loading_notes.js';
 import { createWarehouseRouter } from './src/warehouse_api.js';
-import {projectPlanningInvoices,quickBooksAddress} from './src/warehouse_planning_invoices.js';
+import {projectPlanningInvoices,quickBooksAddress,customerDeliveryAddress,fillPlanningCustomerAddresses} from './src/warehouse_planning_invoices.js';
 import {warehouseReference,nativeInvoiceBaseline} from './src/warehouse_invoice.js';
 
 import multer from 'multer';
@@ -56,10 +56,11 @@ app.use(express.json({ verify: rawBodySaver, limit: '2mb' }));
 // Authenticated native driver / receiving API. Existing routes keep their behavior.
 const warehouseQboQuery = async query => { const {conn,oauthClient}=await withFreshClient();return qboQuery(oauthClient,conn.realm_id,query); };
 const warehouseQboId = value => { if(!/^\d{1,30}$/.test(value))throw Object.assign(Error('Choose a valid QuickBooks record.'),{status:400});return value; };
+const warehouseReadCustomerAddress=async ref=>{const {conn,oauthClient}=await withFreshClient();const result=await qboReadCustomer(oauthClient,conn.realm_id,warehouseReference(ref,conn.realm_id)),customer=result.Customer||result;return {name:customer.DisplayName,address:customerDeliveryAddress(customer)};};
 app.use('/api/warehouse',createWarehouseRouter({db,
   readProducts:()=>readProductCatalog(warehouseQboQuery),
-  readPlanningInvoices:async(date,planning)=>{const {conn,oauthClient}=await withFreshClient();const result=await qboQuery(oauthClient,conn.realm_id,`select * from Invoice where TxnDate = '${date}' orderby DocNumber desc maxresults 1000`);return projectPlanningInvoices(result?.QueryResponse?.Invoice||[],date,conn.realm_id,planning);},
-  readCustomerAddress:async ref=>{const {conn,oauthClient}=await withFreshClient();const result=await qboReadCustomer(oauthClient,conn.realm_id,warehouseReference(ref,conn.realm_id)),customer=result.Customer||result;return {name:customer.DisplayName,address:quickBooksAddress(customer.ShipAddr)||quickBooksAddress(customer.BillAddr)};},
+  readPlanningInvoices:async(date,planning)=>{const {conn,oauthClient}=await withFreshClient();const result=await qboQuery(oauthClient,conn.realm_id,`select * from Invoice where TxnDate = '${date}' orderby DocNumber desc maxresults 1000`);return fillPlanningCustomerAddresses(projectPlanningInvoices(result?.QueryResponse?.Invoice||[],date,conn.realm_id,planning),warehouseReadCustomerAddress,planning);},
+  readCustomerAddress:warehouseReadCustomerAddress,
   readInvoicePdf:async stop=>{const {conn,oauthClient}=await withFreshClient();return qboInvoicePdf(oauthClient,conn.realm_id,warehouseReference(stop.qboInvoiceId,conn.realm_id));},
   correctWarehouseInvoice:async correction=>{const {conn,oauthClient}=await withFreshClient(),id=warehouseReference(correction.qboInvoiceId,conn.realm_id);const read=async()=>{const result=await qboReadInvoiceWithRetry(oauthClient,conn.realm_id,id,2);return result.Invoice||result;};const initial=await read(),plan=shortageInvoicePlan(initial,correction,conn.realm_id);if(plan.payload)await qboUpdateInvoice(oauthClient,conn.realm_id,plan.payload);const confirmed=await read(),verified=verifyShortageInvoice(confirmed,correction,conn.realm_id);return {...verified,invoiceId:correction.qboInvoiceId,total:confirmed.TotalAmt};},
   readInvoice:async stop=>{const {conn,oauthClient}=await withFreshClient();const id=warehouseReference(stop.qboInvoiceId,conn.realm_id);const invoice=await qboReadInvoiceWithRetry(oauthClient,conn.realm_id,id,2);return nativeInvoiceBaseline(invoice.Invoice||invoice,stop,conn.realm_id);},
