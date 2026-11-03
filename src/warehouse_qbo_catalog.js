@@ -1,3 +1,4 @@
+import {physicalServiceSupply} from './warehouse-product-policy.js';
 export async function readProductCatalog(query){
  const items=[],seen=new Set();let complete=false;
  for(let start=1;start<=20001;start+=1000){
@@ -11,7 +12,7 @@ export async function readProductCatalog(query){
  const types={Inventory:'ITEM_INVENTORY',NonInventory:'NONINVENTORY',Service:'SERVICE'};
  const rows=items.filter(p=>types[p.Type]).map(p=>{let name=p.FullyQualifiedName||p.Name;if(!name||typeof p.Active!=='boolean')throw Error('QuickBooks product identity or active status is missing.');if(!p.Active&&!/\(deleted[^)]*\)/i.test(name))name+=' (deleted)';return {cells:Object.entries({'Product/Service':name,Type:types[p.Type],SKU:p.Sku??'', 'Memo/Description':p.Description||'', 'Sales Price':p.UnitPrice??null,'Purchase Price':p.PurchaseCost??null,'Qty on Hand':p.QtyOnHand??null}).map(([name,value])=>({name,value}))};});
  if(!rows.length)throw Error('QuickBooks returned an empty product list. Previous catalog retained.');
- return {reportData:{rows},inventoryItems:items.filter(p=>['Inventory','NonInventory'].includes(p.Type)).map(p=>({id:String(p.Id),name:p.Name,sku:p.Sku||'',categoryId:p.ParentRef?.value||null,active:p.Active}))};
+ return {reportData:{rows},inventoryItems:items.filter(p=>['Inventory','NonInventory'].includes(p.Type)||physicalServiceSupply(p)).map(p=>({id:String(p.Id),name:p.Name,sku:p.Sku||'',categoryId:p.ParentRef?.value||null,active:p.Active}))};
 }
 export function syncWarehouseProductCatalog(sql,items){
  if(!Array.isArray(items)||!items.length)throw Error('Warehouse product refresh returned no items.');
