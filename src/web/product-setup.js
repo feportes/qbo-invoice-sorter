@@ -21,4 +21,4 @@ export function missingSetup(p,filter='essential'){
 }
 export function setupSummary(products){return {total:products.length,ready:products.filter(p=>!missingSetup(p).length).length,complete:products.filter(p=>!missingSetup(p,'all').length).length,missing:Object.fromEntries(setupFields.map(f=>[f.id,products.filter(p=>missingSetup(p,f.id).length).length]))};}
 
-export function productEditValues(entries,zone,fresh){const values=Object.fromEntries(entries);delete values.sku;if(zone){values.zone=zone;values.fresh=!!fresh;}return values;}
+export function productEditValues(entries,zone,fresh){const values=Object.fromEntries(entries);delete values.sku;for(const k of ['warehouseScanLimit','driverScanLimit'])if(k in values)values[k]=Number(values[k]);if(zone){values.zone=zone;values.fresh=!!fresh;}return values;}
