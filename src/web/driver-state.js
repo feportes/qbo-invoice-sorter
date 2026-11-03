@@ -31,9 +31,9 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
     if(stop.status!=='picking')problem('Start picking at this stop before scanning.');
     const matches=stop.products.filter(p=>verifiedProductKey?p.id===verifiedProductKey:[...(p.barcodes||[]),p.sku].filter(Boolean).some(c=>code(c)===code(x.barcode)));
     if(matches.length!==1)problem('That barcode does not identify one product at this stop.');
-    const p=matches[0],count=Math.ceil(p.qty-0.000001),picked=stop.counts?.[p.id]||0,left=count-picked,q=qty(x.qty??1,1);
+    const p=matches[0];if(p.warehouseWarnings?.length&&!(stop.counts?.[p.id]>0)&&x.warehouseDoubleChecked!==true)problem('This item was picked without a barcode. Double-check its product, size and quantity first.');const count=Math.ceil(p.qty-0.000001),picked=stop.counts?.[p.id]||0,left=count-picked,q=qty(x.qty??1,1);
     if(!Number.isInteger(q)||q>left)problem('Only '+left+' units remain.');if(q>1&&(x.bulk!==true||left<=(p.scanLimit??10)))problem('Scan each remaining unit individually.');
-    stop.counts??={};stop.counts[p.id]=picked+q;stop.history??=[];stop.history.push({eventId:event.id,productId:p.id,qty:q,at});if(stop.shortages)delete stop.shortages[p.id];return;
+    stop.counts??={};stop.counts[p.id]=picked+q;stop.history??=[];stop.history.push({eventId:event.id,productId:p.id,qty:q,at,...(x.warehouseDoubleChecked?{warehouseDoubleChecked:true}:{})});if(stop.shortages)delete stop.shortages[p.id];return;
   }
   if(event.kind==='undo'){
     if(stop.status!=='picking')problem('Choose a stop that is still being picked.');
