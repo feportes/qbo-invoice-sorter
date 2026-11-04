@@ -46,8 +46,8 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
     const seen=new Set();for(const item of x.items){const p=stop.products.find(p=>p.id===item.productId);if(!p||seen.has(p.id))problem('Review the missing products.');seen.add(p.id);const remaining=Math.ceil(p.qty-0.000001)-(stop.counts?.[p.id]||0);if(remaining<1||!reasons.has(item.reason))problem('Review the missing quantity and reason.');if(item.reason==='Other')reason(item.notes);stop.shortages??={};stop.shortages[p.id]={missing:remaining,reason:item.reason,notes:clean(item.notes).slice(0,1000),at};}return;
   }
   if(event.kind==='edit-line'){
-    const p=stop.products.find(p=>p.id===x.productId);if(!p)problem('Choose a product from this stop.');const q=qty(x.qty),price=qty(x.unitPrice);reason(x.reason);
-    stop.proposedChanges??={};stop.proposedChanges[p.id]={qty:q,unitPrice:price,reason:clean(x.reason),at};return;
+    const p=stop.products.find(p=>p.id===x.productId);if(!p)problem('Choose a product from this stop.');const q=qty(x.qty),changedPrice=x.unitPrice!==undefined&&x.unitPrice!==null&&x.unitPrice!=='',price=changedPrice?qty(x.unitPrice):undefined;reason(x.reason);
+    stop.proposedChanges??={};stop.proposedChanges[p.id]={qty:q,...(changedPrice?{unitPrice:price}:{}),reason:clean(x.reason),at};return;
   }
   if(event.kind==='payment'){
     if(!['cash','check'].includes(x.method)||qty(x.amount,0.01)<=0)problem('Review cash or check payment details.');if(x.method==='check'&&!clean(x.reference))problem('Enter the check reference.');
