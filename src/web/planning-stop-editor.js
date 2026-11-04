@@ -8,7 +8,7 @@ export function mapMoveCommand(packet,date,stopId,targetId,position){
 }
 export function stopMapPopup({packet,date,stopId,onMove}){
  const stop=packet.orders.find(o=>o.id===stopId),route=packet.routes.find(r=>r.id===stop?.route),node=(tag,text)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;},root=node('div');root.className='map-stop-editor';
- root.append(node('strong',stop.customerName),node('p',route.name+' · Stop '+stop.stop),node('p',stop.address||'No address saved'));
+ root.append(node('strong',stop.customerName),node('p',route.name+' · Stop '+stop.stop));if(onMove&&route.status==='draft'){const address=node('details');address.append(node('summary','Delivery address'),node('p',stop.address||'No address saved'));root.append(address);}else root.append(node('p',stop.address||'No address saved'));
  if(!onMove)return root;
  if(route.status!=='draft'){root.append(node('small','Sent to picking · route order is locked.'));return root;}
  const form=node('form'),routeLabel=node('label','Route'),select=node('select'),positionLabel=node('label','Delivery order'),position=node('select'),notice=node('p'),submit=node('button','Move stop');select.setAttribute('aria-label','Route for '+stop.customerName);position.setAttribute('aria-label','Delivery order for '+stop.customerName);submit.type='submit';submit.className='primary';notice.setAttribute('role','status');
