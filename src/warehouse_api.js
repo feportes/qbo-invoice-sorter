@@ -1,4 +1,4 @@
-import {approvalQueue} from './warehouse_approvals.js';
+import {approvalQueue,resolveOfficeIssue} from './warehouse_approvals.js';
 import {pickingStockSnapshot,restockWalkin} from './warehouse_restock.js';
 import {ensureWarehouseObservations,observeWarehouseShortages,correctWarehouseRoute} from './warehouse_shortage_service.js';
 import {planningMapRoute,attachPlanningPins,savePlanningAddressPin} from './warehouse_planning_map.js';
@@ -55,6 +55,7 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
 
   r.use((req,res,next)=>{try{req.whUser=authenticate(sql,req);next();}catch(e){next(e);}});
   r.get('/session',run((req,res)=>res.json({user:viewUser(req.whUser),csrf:req.whUser.csrf,expiresAt:req.whUser.expiresAt})));
+  r.post('/office-issues/:id/resolve',run((req,res)=>res.json(resolveOfficeIssue(sql,req.whUser,req.params.id,req.body.resolution))));
   r.get('/approval-summary',run(async(req,res)=>{const p=await approvalQueue(sql,req.whUser,source);res.json({pendingCount:p.pendingCount,handoffCount:p.handoffCount,sourceError:p.sourceError});}));
   r.get('/approvals',run(async(req,res)=>res.json(await approvalQueue(sql,req.whUser,source))));
   r.post('/approvals/:id/load-invoice',run(async(req,res)=>{permit(req.whUser,['admin','office'],'deliveries');if(!readInvoice)problem('Invoice lookup is not configured.',503);const p=await approvalQueue(sql,req.whUser,source),o=p.orders.find(o=>o.id===req.params.id);if(!o||o.handoffPending)problem('Wait for this delivery to finish syncing.',409);const invoice=await readInvoice(o);await source.request('/api/mobile-baseline',req.whUser,{orderId:o.id,invoice});res.json(await approvalQueue(sql,req.whUser,source));}));

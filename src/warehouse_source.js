@@ -56,6 +56,7 @@ export function createWarehouseSource({sql,env=process.env,fetchImpl=fetch,readI
       try{
         if(!job.operation){
           const versions=sql.prepare('SELECT source_revision,source_stop_revisions FROM wh_routes WHERE id=?').get(routeId);let sourceRevision=versions?.source_revision,sourceStopRevision=JSON.parse(versions?.source_stop_revisions||'{}')[event.payload.stopId];
+          if(row.kind==='complete-stop'&&readInvoice){const packet=JSON.parse(sql.prepare('SELECT snapshot FROM wh_routes WHERE id=?').get(routeId).snapshot),stop=packet.stops.find(s=>s.id===event.payload.stopId);if(stop?.qboInvoiceId&&!stop.hasBaseline)try{const invoice=await readInvoice(stop),baseline=await request('/api/mobile-baseline',user,{orderId:stop.id,invoice});sourceRevision=baseline.sourceRevision;sourceStopRevision=baseline.sourceStopRevision;}catch{/* Completion remains saved; missing invoice details go to office review. */}}
           const photos=row.kind==='photo'?await media(user,{...row,payload:event.payload}):[];
           let prepared;
           try{prepared=await request('/api/mobile-prepare',user,{routeId,sourceRevision,sourceStopRevision,event,photos});}

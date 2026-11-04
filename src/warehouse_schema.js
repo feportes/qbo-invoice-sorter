@@ -57,6 +57,7 @@ export function ensureWarehouseSchema(sql) {
       stop_id TEXT, mime_type TEXT NOT NULL, bytes BLOB NOT NULL,
       device_at TEXT NOT NULL, received_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS wh_office_issue_reviews (event_id TEXT PRIMARY KEY, resolution TEXT NOT NULL, reviewed_by TEXT NOT NULL, reviewed_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS wh_source_jobs (
       event_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, route_id TEXT NOT NULL,
       operation TEXT, status TEXT NOT NULL DEFAULT 'pending', error TEXT,
