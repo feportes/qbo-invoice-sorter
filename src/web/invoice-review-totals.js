@@ -1,0 +1,6 @@
+const money=n=>Math.round((n+Number.EPSILON)*100)/100;
+export function reviewTotals(order){const lines=order.lines||[],originalTotal=Number.isFinite(order.invoiceTotal)?money(order.invoiceTotal):null,valid=l=>Number.isFinite(l.qty)&&Number.isFinite(l.unitRate),oldValid=l=>Number.isFinite(l.originalQty)&&Number.isFinite(l.originalRate);if(!order.hasBaseline||originalTotal===null||!lines.length||!lines.every(valid))return {originalTotal,proposedTotal:null,proposedSubtotal:null,difference:null,taxPending:false};
+ const subtotal=money(lines.filter(l=>!l.removed&&l.qty>0).reduce((n,l)=>n+money(l.qty*l.unitRate),0)),originalSubtotal=money(lines.filter(oldValid).reduce((n,l)=>n+money(l.originalQty*l.originalRate),0)),tax=Number.isFinite(order.invoiceTaxAmount)?money(order.invoiceTaxAmount):Math.abs(originalTotal-originalSubtotal)<.02?0:null;
+ const changedTaxable=lines.some(l=>l.taxable&&(!oldValid(l)||l.removed||l.qty!==l.originalQty||l.unitRate!==l.originalRate)),canKeepTax=tax!==null&&Math.abs(originalSubtotal+tax-originalTotal)<.02&&(!changedTaxable||tax===0)&&!lines.some(l=>!l.removed&&l.added&&l.taxable==null),total=canKeepTax?money(subtotal+tax):null;
+ return {originalTotal,proposedSubtotal:subtotal,proposedTotal:total,difference:total===null?null:money(total-originalTotal),subtotalDifference:money(subtotal-originalSubtotal),taxPending:total===null};
+}

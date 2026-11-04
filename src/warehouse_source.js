@@ -80,7 +80,7 @@ export function createWarehouseSource({sql,env=process.env,fetchImpl=fetch,readI
       }
     }
   }
-  function kick(routeId){if(!configured()||active.has(routeId))return active.get(routeId);const task=flushRoute(routeId).catch(()=>{}).finally(()=>active.delete(routeId));active.set(routeId,task);return task;}
+  function kick(routeId){if(!configured()||sql.prepare('SELECT status FROM wh_routes WHERE id=?').get(routeId)?.status==='archived'||active.has(routeId))return active.get(routeId);const task=flushRoute(routeId).catch(()=>{}).finally(()=>active.delete(routeId));active.set(routeId,task);return task;}
   function kickAll(){if(!configured())return;for(const r of sql.prepare("SELECT DISTINCT route_id FROM wh_driver_events WHERE status='pending-office'").all())kick(r.route_id);}
   return {configured,refresh,catalog,kick,kickAll,request,flushRoute};
 }
