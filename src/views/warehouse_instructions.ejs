@@ -17,4 +17,4 @@ $('customer-edit-form').onsubmit=async e=>{e.preventDefault();if(busy)return;bus
 $('reload-customer-instructions').onclick=async()=>{const id=editingCustomer.customerId,ref=editingCustomer.referenceId;await load(false);const latest=customers.find(c=>c.customerId===id&&c.referenceId===ref);if(latest){$('customer-edit').close();openCustomer(latest);}};
 $('close-customer-edit').onclick=()=>$('customer-edit').close();
 for(const id of ['customer-edit','review'])$(id).addEventListener('click',e=>{if(e.target!==e.currentTarget)return;const r=e.currentTarget.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.currentTarget.close();});
-</script></body></html>
+</script><script type="module" src="/workspaces-assets/office-notification.js"></script></body></html>
