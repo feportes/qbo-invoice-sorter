@@ -4,11 +4,13 @@ const problem=(message,status=400)=>{throw Object.assign(Error(message),{status}
 const clean=v=>String(v??'').trim();
 const code=v=>clean(v).toUpperCase();
 const round=v=>Math.round(v*1e6)/1e6;
-const reasons=new Set(['Not on vehicle','Damaged / unusable','Wrong product loaded','Customer declined','Other']);
+const reasons=new Set(['Not on vehicle','Damaged / unusable','Spoiled / expired','Wrong product loaded','Customer declined','Other']);
 const qty=(v,min=0)=>{if(typeof v!=='number'||!Number.isFinite(v)||v<min||v>1000000)problem('Review the product quantity.');return round(v);};
 const reason=v=>{v=clean(v);if(v.length<5||v.length>1000)problem('Explain why this change is needed.');return v;};
 export function applyDriverEvent(route,event,at=new Date().toISOString(),verifiedProductKey=null){
-  const x=event.payload||{};if(route.status==='delivered')problem('This route is finalized. Ask the office to review a correction.',409);
+  const x=event.payload||{};
+  if(event.kind==='revisit'){const s=route.stops.find(s=>s.id===x.stopId);if(!s||s.status!=='completed'||!['delivering','delivered'].includes(route.status))problem('Choose a completed stop on this route.');if(s.returnBlocked)problem(s.returnBlocked,409);const why=reason(x.reason);s.visitHistory??=[];s.visitHistory.push({completedAt:s.completedAt,officeReview:s.officeReview,counts:structuredClone(s.counts||{}),shortages:structuredClone(s.shortages||{}),proposedChanges:structuredClone(s.proposedChanges||{}),reason:why,at});s.returnVisit={status:'open',reason:why,at,historyLength:(s.history||[]).length};s.proposedChanges??={};for(const p of s.products){const prior=s.proposedChanges[p.id];if(prior&&prior.qty<p.qty)s.proposedChanges[p.id]={...prior,qty:p.qty,reason:'Return delivery: '+why};}s.status='pending';s.officeReview='draft';s.shortages={};delete s.completedAt;route.status='delivering';delete route.completedAt;return;}
+  if(route.status==='delivered')problem('This route is finalized. Ask the office to review a correction.',409);
   const stop=route.stops.find(s=>s.id===x.stopId),active=()=>{if(!stop||['completed','skipped','deferred'].includes(stop.status))problem('Choose an open stop.');return stop;};
   if(event.kind==='depart'){
     if(route.status!=='loaded'||x.confirmedLoad!==true)problem('Review the load summary before departure.');
@@ -38,7 +40,7 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
   }
   if(event.kind==='undo'){
     if(stop.status!=='picking')problem('Choose a stop that is still being picked.');
-    const history=(stop.history||[]).findLast(h=>!h.reversedAt&&h.productId===x.productId);if(!history)problem('No accepted scan remains to undo on this item.');
+    const history=(stop.history||[]).findLast((h,i)=>!h.reversedAt&&h.productId===x.productId&&i>=(stop.returnVisit?.historyLength||0));if(!history)problem('No accepted scan remains to undo on this item.');
     history.reversedAt=at;stop.counts[history.productId]-=history.qty;if(stop.shortages)delete stop.shortages[history.productId];return;
   }
   if(event.kind==='shortage'){
@@ -46,8 +48,8 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
     const seen=new Set();for(const item of x.items){const p=stop.products.find(p=>p.id===item.productId);if(!p||seen.has(p.id))problem('Review the missing products.');seen.add(p.id);const remaining=Math.ceil(p.qty-0.000001)-(stop.counts?.[p.id]||0);if(remaining<1||!reasons.has(item.reason))problem('Review the missing quantity and reason.');if(item.reason==='Other')reason(item.notes);stop.shortages??={};stop.shortages[p.id]={missing:remaining,reason:item.reason,notes:clean(item.notes).slice(0,1000),at};}return;
   }
   if(event.kind==='edit-line'){
-    const p=stop.products.find(p=>p.id===x.productId);if(!p)problem('Choose a product from this stop.');const q=qty(x.qty),changedPrice=x.unitPrice!==undefined&&x.unitPrice!==null&&x.unitPrice!=='',price=changedPrice?qty(x.unitPrice):undefined;reason(x.reason);
-    stop.proposedChanges??={};stop.proposedChanges[p.id]={qty:q,...(changedPrice?{unitPrice:price}:{}),reason:clean(x.reason),at};return;
+    const p=stop.products.find(p=>p.id===x.productId);if(!p)problem('Choose a product from this stop.');const q=qty(x.qty),changedPrice=x.unitPrice!==undefined&&x.unitPrice!==null&&x.unitPrice!=='',price=changedPrice?qty(x.unitPrice):undefined;reason(x.reason);if(x.inventoryLoss&&(!['Damaged / unusable','Spoiled / expired'].includes(x.inventoryLoss.reason)||!Number.isFinite(x.inventoryLoss.qty)||x.inventoryLoss.qty<=0||x.inventoryLoss.qty>100000))problem('Review inventory loss reason and quantity.');
+    stop.proposedChanges??={};stop.proposedChanges[p.id]={qty:q,...(changedPrice?{unitPrice:price}:{}),reason:clean(x.reason),...(x.inventoryLoss?{inventoryLoss:structuredClone(x.inventoryLoss)}:{}),at};return;
   }
   if(event.kind==='payment'){
     if(!['cash','check'].includes(x.method)||qty(x.amount,0.01)<=0)problem('Review cash or check payment details.');if(x.method==='check'&&!clean(x.reference))problem('Enter the check reference.');
@@ -56,7 +58,7 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
   if(event.kind==='complete-stop'){
     if(stop.status!=='picking')problem('Finish the product checks before completing this stop.');
     for(const p of stop.products){const missing=Math.ceil(p.qty-0.000001)-(stop.counts?.[p.id]||0);if(missing>0&&stop.shortages?.[p.id]?.missing!==missing)problem('Confirm why remaining products were not delivered.');}
-    stop.status='completed';stop.completedAt=at;stop.officeReview='pending';return;
+    if(stop.returnVisit?.status==='open'){for(const p of stop.products){const change=stop.proposedChanges?.[p.id];if(change?.qty===p.qty&&change.reason?.startsWith('Return delivery:'))change.qty=Math.min(p.qty,stop.counts?.[p.id]||0);}stop.returnVisit.status='submitted';stop.returnVisit.submittedAt=at;}stop.status='completed';stop.completedAt=at;stop.officeReview='pending';return;
   }
   problem('Unsupported driver action.');
 }

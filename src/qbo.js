@@ -137,3 +137,5 @@ export async function qboBatchReadItems(oauthClient, realmId, ids) {
   return out;
 }
 
+
+export async function qboInventoryAdjustment(oauthClient,realmId,{id,payload,requestId}={}){return qboFetchJson(oauthClient,{url:BASE(realmId)+'/inventoryadjustment'+(id?'/'+encodeURIComponent(id):'')+'?minorversion=75'+(!id?'&requestid='+encodeURIComponent(requestId):''),...(id?{}:{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'application/json'}})});}

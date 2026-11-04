@@ -61,10 +61,11 @@ export function saveDriverEvents(sql,user,input){
 // must not strand a driver's offline scans; changes to this stop still conflict.
 export function driverReplayGuard(route,events){
  const whole=events.some(e=>['depart','finalize'].includes(e.kind)),ids=new Set(events.filter(e=>!['note','photo'].includes(e.kind)).map(e=>e.payload?.stopId).filter(Boolean));
+ const revisiting=events[0]?.kind==='revisit';
  const financial=events.some(e=>e.kind==='edit-line');
  const dictionary=(value,fn)=>Object.keys(value||{}).sort().map(k=>[k,fn(value[k])]);
  const stops=route.stops||[];return {
   route:[route.id,route.date,route.driverId,route.helperId||'',route.status],plan:stops.map(s=>[s.id,s.address||'']),
-  stops:stops.filter(s=>whole||ids.has(s.id)).map(s=>({id:s.id,status:s.status||'pending',invoice:s.qboInvoiceId||'',customer:s.qboCustomerId||'',products:(s.products||[]).map(p=>[p.id,p.qty,JSON.stringify(p.warehouseWarnings||[]),...(financial?[p.unitPrice??null]:[])]),counts:dictionary(s.counts,n=>n),history:(s.history||[]).slice(-200).map(h=>[h.productId,h.qty,!!h.reversedAt]),shortages:dictionary(s.shortages,x=>[x.missing,x.reason,x.notes||'']),...(!whole?{officeReview:s.officeReview||'draft',proposedChanges:dictionary(s.proposedChanges,x=>[x.qty,x.unitPrice,x.reason||'']),payments:(s.payments||[]).map(x=>[x.id,x.amount,x.method,x.reference||''])}:{})}))
+  stops:stops.filter(s=>whole||ids.has(s.id)).map(s=>({id:s.id,status:s.status||'pending',invoice:s.qboInvoiceId||'',customer:s.qboCustomerId||'',products:(s.products||[]).map(p=>[p.id,p.qty,JSON.stringify(p.warehouseWarnings||[]),...(financial?[p.unitPrice??null]:[])]),counts:dictionary(s.counts,n=>n),history:(s.history||[]).slice(-200).map(h=>[h.productId,h.qty,!!h.reversedAt]),shortages:dictionary(s.shortages,x=>[x.missing,x.reason,x.notes||'']),...(!whole&&!revisiting?{officeReview:s.officeReview||'draft',proposedChanges:dictionary(s.proposedChanges,x=>[x.qty,x.unitPrice,x.reason||'']),payments:(s.payments||[]).map(x=>[x.id,x.amount,x.method,x.reference||''])}:{})}))
  };
 }
