@@ -2,4 +2,4 @@
 
 @media(min-width:900px){main{width:100%;max-width:none;padding-left:28px;padding-right:28px}}
 
-@media print{#office-approval-alert{display:none!important}}
+@media print{#office-approval-alert,#office-approval-bar{display:none!important}}
