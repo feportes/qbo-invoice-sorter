@@ -5,7 +5,7 @@ export function withShortageSuggestions(order){
  if(!order.hasBaseline||order.handoffPending||order.status==='approved')return {...order,suggestionCount:0};
  let suggestionCount=0;
  const lines=order.lines.map(line=>{
-  if(line.readOnly||line.added||line.removed||!Number.isFinite(line.originalQty)||line.qty!==line.originalQty)return line;
+  if(line.officeShortageReviewed||line.readOnly||line.added||line.removed||!Number.isFinite(line.originalQty)||line.qty!==line.originalQty)return line;
   const shortages=Object.entries(order.shortages||{}).filter(([key])=>key===line.id||line.productId&&key.split('::')[0]===line.productId);
   // Repeated invoice rows for the same product need office allocation, not a
   // duplicated deduction on each row.
