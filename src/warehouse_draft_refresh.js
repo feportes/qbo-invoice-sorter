@@ -1,0 +1,7 @@
+import {randomUUID,createHash} from 'node:crypto';
+const raw=id=>String(id||'').split(':').at(-1),sig=(o,lines)=>JSON.stringify([o.invoice,o.date,lines.map(l=>[raw(l.qboItemId),l.qty])]);
+export async function refreshPlanningDrafts(user,source,readInvoice,packet,{routeIds,orderIds,date}={}){
+ const orders=packet.orders.filter(o=>!o.manual&&o.qboInvoiceId&&(!o.route||packet.routes.find(r=>r.id===o.route)?.status==='draft')&&(!date||o.date===date)&&(!routeIds||routeIds.includes(o.route))&&(!orderIds||orderIds.includes(o.id)));if(!orders.length)return {packet,changed:0};if(!readInvoice)throw Error('QuickBooks invoice refresh is unavailable. Draft routes were kept.');if(orders.length>200)throw Error('Refresh up to 200 draft invoices at once.');
+ const documents=[];for(let i=0;i<orders.length;i+=5)await Promise.all(orders.slice(i,i+5).map(async o=>{const doc=await readInvoice(o,packet);if(!doc||raw(doc.qboInvoiceId)!==raw(o.qboInvoiceId)||raw(doc.qboCustomerId)!==raw(o.qboCustomerId))throw Error('An invoice or customer changed in QuickBooks. Review it before sending to picking.');if(sig(o,o.products)!==sig(doc,doc.lines))documents.push(doc);}));if(!documents.length)return {packet,changed:0};
+ const updated=await source.request('/api/mobile-planning',user,{requestId:randomUUID(),baseRevision:packet.revision,command:{name:'refreshDraftInvoiceOrders',args:[{documents,readAt:new Date().toISOString(),sourceHash:createHash('sha256').update(JSON.stringify(documents)).digest('hex')}]}});return {packet:updated,changed:documents.length};
+}

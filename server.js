@@ -1,3 +1,4 @@
+import {approvalProduct} from './src/warehouse_approval_products.js';
 import {inventoryAdjustmentPayload,verifyInventoryAdjustment} from './src/warehouse_inventory_loss.js';
 import {deliveryInvoicePlan} from './src/warehouse_delivery_invoice.js';
 import {shortageInvoicePlan,verifyShortageInvoice} from './src/warehouse_shortage_invoices.js';
@@ -61,6 +62,8 @@ const warehouseQboId = value => { if(!/^\d{1,30}$/.test(value))throw Object.assi
 const warehouseReadCustomerAddress=async ref=>{const {conn,oauthClient}=await withFreshClient();const result=await qboReadCustomer(oauthClient,conn.realm_id,warehouseReference(ref,conn.realm_id)),customer=result.Customer||result;return {name:customer.DisplayName,address:customerDeliveryAddress(customer)};};
 app.use('/api/warehouse',createWarehouseRouter({db,
   readProducts:()=>readProductCatalog(warehouseQboQuery),
+  readApprovalProduct:async itemId=>{const {conn,oauthClient}=await withFreshClient(),id=warehouseReference(itemId,conn.realm_id),r=await qboQuery(oauthClient,conn.realm_id,"select * from Item where Id = '"+id+"' maxresults 1");return approvalProduct(r.QueryResponse?.Item?.[0]);},
+  readPlanningInvoice:async(stop,planning)=>{const {conn,oauthClient}=await withFreshClient(),id=warehouseReference(stop.qboInvoiceId,conn.realm_id),result=await qboReadInvoiceWithRetry(oauthClient,conn.realm_id,id,2),raw=result.Invoice||result;return projectPlanningInvoices([raw],raw.TxnDate,conn.realm_id,planning).documents[0];},
   readPlanningInvoices:async(date,planning)=>{const {conn,oauthClient}=await withFreshClient();const result=await qboQuery(oauthClient,conn.realm_id,`select * from Invoice where TxnDate = '${date}' orderby DocNumber desc maxresults 1000`);return fillPlanningCustomerAddresses(projectPlanningInvoices(result?.QueryResponse?.Invoice||[],date,conn.realm_id,planning),warehouseReadCustomerAddress,planning);},
   readCustomerAddress:warehouseReadCustomerAddress,
   readInvoicePdf:async stop=>{const {conn,oauthClient}=await withFreshClient();return qboInvoicePdf(oauthClient,conn.realm_id,warehouseReference(stop.qboInvoiceId,conn.realm_id));},
