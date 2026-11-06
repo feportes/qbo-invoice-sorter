@@ -13,6 +13,7 @@ export function mountWarehouseWebApp(app){
   app.get('/warehouse-connections',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_connections'));
   app.get('/warehouse-products',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_products'));
   app.get('/warehouse-route-invoices',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_route_invoices'));
+  app.get('/warehouse-saved-routes',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_saved_routes'));
   app.get('/warehouse-route-rules',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_route_rules'));
   app.get('/warehouse-planning',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_planning'));
   app.get('/warehouse-receiving',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_receiving'));

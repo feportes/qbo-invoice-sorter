@@ -1,14 +1,14 @@
 import {routeRuleOverview} from './route-rule-model.js';
 const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
-export function renderRuleOverview(host,packet,{query,day,routeId,onEdit,onMap,collapsed=new Set()}={}){
+export function renderRuleOverview(host,packet,{query,day,routeId,onEdit,onMap,expanded=new Set()}={}){
  const result=routeRuleOverview(packet,{query,day,routeId});host.replaceChildren();
  host.append(el('p',result.groups.length+' route / weekday plans · '+result.assignedCustomerCount+' customers with displayed assignments · '+result.unruled.length+' without any rule','overview-count'));
  const warningCount=result.groups.reduce((n,g)=>n+g.stops.filter(s=>s.sharedRank).length,0);
  if(warningCount)host.append(el('p',warningCount+' entries share a preferred stop number. Highlighted rows let you check their order.','overview-warning'));
  if(result.issues.length){const issues=el('details',undefined,'overview-section');issues.open=true;issues.append(el('summary','Rules needing attention · '+result.issues.length));for(const issue of result.issues){const row=el('div',undefined,'overview-stop');row.append(el('span',issue.customer.customerName+' · '+(days[issue.day]||'Weekday')+' · '+issue.reason));editButton(row,issue.customer);}host.append(issues);}
  const grid=el('div',undefined,'rule-overview-grid');host.append(grid);
- for(const g of result.groups){const card=el('details',undefined,'overview-section route-plan');card.dataset.planKey=g.key;card.open=!collapsed.has(g.key);const summary=el('summary');summary.append(el('strong',g.route.name),el('span',days[g.day]+' · '+g.stops.length+' stops'));card.append(summary);if(onMap){const map=el('button','View on map','secondary');map.type='button';map.setAttribute('aria-label','View '+g.route.name+' '+days[g.day]+' on map');map.onclick=()=>onMap(g);card.append(map);}card.addEventListener('toggle',()=>{if(card.open)collapsed.delete(g.key);else collapsed.add(g.key);});
+ for(const g of result.groups){const card=el('details',undefined,'overview-section route-plan');card.dataset.planKey=g.key;card.open=expanded.has(g.key);const summary=el('summary');summary.append(el('strong',g.route.name),el('span',days[g.day]+' · '+g.stops.length+' stops'));card.append(summary);if(onMap){const map=el('button','View on map','secondary');map.type='button';map.setAttribute('aria-label','View '+g.route.name+' '+days[g.day]+' on map');map.onclick=()=>onMap(g);card.append(map);}card.addEventListener('toggle',()=>{if(card.open)expanded.add(g.key);else expanded.delete(g.key);});
   for(const s of g.stops){const row=el('div',undefined,'overview-stop'+(s.sharedRank?' overview-warning':'')),rank=el('strong','Stop '+s.rank,'overview-rank'),name=el('span',s.customer.customerName);if(s.sharedRank){name.append(el('small','Shared stop number — review order'));}row.append(rank,name);editButton(row,s.customer);card.append(row);}grid.append(card);
  }
  if(!result.groups.length)grid.append(el('p','No saved route rules match these filters.'));
