@@ -4,3 +4,14 @@ test('release preflight detects new QBO SKU and updates only the draft before re
 test('unchanged invoices need no save; missing or mismatched QBO records prevent release',async()=>{const source={request:async()=>{throw Error('Unexpected save');}};assert.equal((await refreshPlanningDrafts({},source,async()=>({...doc,lines:[{qboItemId:'1',qty:1}]}),board,{routeIds:['R']})).changed,0);await assert.rejects(refreshPlanningDrafts({},source,async()=>null,board,{routeIds:['R']}),/Invoice #123:/);await assert.rejects(refreshPlanningDrafts({},source,async()=>({...doc,qboCustomerId:'OTHER'}),board,{routeIds:['R']}),/Invoice #123:/);});
 
 test('ordinary Planning loads refresh drafts without a new-client query parameter',async()=>{let called=0;const result=await refreshPlanningDrafts({}, {request:async()=>{called++;return board;}},async()=>doc,board);assert.equal(result.changed,1);assert.equal(called,1);});
+
+test('date queries refresh all current drafts with one read per date and immutable identity checks',async()=>{
+ let queries=0,saved;const extra={...board.orders[0],id:'SECOND',qboInvoiceId:'102',invoice:'124'},packet={...board,orders:[...board.orders,extra]};
+ const read=async(day,p)=>{queries++;assert.equal(day,'2026-11-05');assert.equal(p,packet);return {documents:[doc,{...doc,qboInvoiceId:'102',invoice:'124',lines:[{qboItemId:'1',qty:1}]}]};};
+ const result=await refreshPlanningDrafts({}, {request:async(p,u,b)=>{saved=b;return packet;}},()=>{throw Error('Individual read should not run');},packet,{readInvoices:read});
+ assert.equal(queries,1);assert.equal(result.changed,1);assert.equal(saved.command.args[0].documents[0].qboInvoiceId,'100');
+ const source={request:async()=>{throw Error('Unsafe save');}};
+ await assert.rejects(refreshPlanningDrafts({},source,()=>doc,packet,{readInvoices:async()=>({documents:[doc]})}),/Invoice #124:/);
+ await assert.rejects(refreshPlanningDrafts({},source,()=>doc,board,{readInvoices:async()=>({documents:[{...doc,qboCustomerId:'OTHER'}]})}),/identity changed/);
+ await assert.rejects(refreshPlanningDrafts({},source,()=>doc,board,{readInvoices:async()=>({documents:[doc],possiblyTruncated:true})}),/too many invoices/);
+});
