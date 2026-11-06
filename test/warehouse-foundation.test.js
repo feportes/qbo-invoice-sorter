@@ -32,14 +32,14 @@ test('bootstrap, individual credentials, mandatory first change and administrato
 
 test('walk-in restock and container overflow are suggestions until explicitly confirmed, with retry safety',()=>{
   db.createPallet({skuId:frozen,locationCode:'WALKIN',qtyUnits:60,userName:'Test'});
-  const p=po([{skuId:frozen,orderedQty:240,area:'frozen'}]);const r=receipt(p,[{poLineId:p.lines[0].id,receivedQty:240}],'vendor-pickup');
+  const p=po([{skuId:frozen,orderedQty:240,area:'frozen'}]);const r=receipt(p,[{poLineId:p.lines[0].id,receivedQty:240}],'warehouse');
   const before=db.sqlite.prepare('SELECT COUNT(*) n FROM pallets').get().n;
   const plan=suggestPutaway(db,r.id,{[r.lines[0].id]:{walkinTargetQty:120}});
   assert.equal(plan.allocations.filter(x=>x.locationCode==='WALKIN').reduce((n,x)=>n+x.qty,0),60);
   assert.equal(plan.allocations.filter(x=>x.locationCode!=='WALKIN').reduce((n,x)=>n+x.qty,0),180);assert.equal(plan.unplaced.length,0);
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM pallets').get().n,before);
   const input={requestId:randomUUID(),receiptId:r.id,expectedRevision:r.revision,confirmed:true,allocations:plan.allocations};
-  const result=confirmPutaway(db,receiver,input);assert.equal(result.palletIds.length,3);assert.equal(result.receipt.mode,'vendor-pickup');
+  const result=confirmPutaway(db,receiver,input);assert.equal(result.palletIds.length,3);assert.equal(result.receipt.mode,'warehouse');
   const again=confirmPutaway(db,receiver,input);assert.equal(again.duplicate,true);assert.deepEqual(again.palletIds,result.palletIds);
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM pallets').get().n,before+3);
   assert.equal(db.sqlite.prepare("SELECT COUNT(*) n FROM inventory_movements WHERE reference_type='WAREHOUSE_RECEIPT' AND reference_id=?").get(r.id).n,3);
@@ -78,4 +78,10 @@ test('invalid scans and incomplete deliveries do not partially save a batch',()=
   const events=[{id:randomUUID(),kind:'scan',payload:{stopId:'STOP-A',barcode:'CASE-A'},recordedAt:new Date().toISOString()},{id:randomUUID(),kind:'complete-stop',payload:{stopId:'STOP-A'},recordedAt:new Date().toISOString()}];
   assert.throws(()=>saveDriverEvents(db.sqlite,u,{requestId:randomUUID(),routeId:r.id,deviceId:'DEVICE-TEST-A',expectedRevision:1,events}),/remaining products/);assert.equal(driverRoute(db.sqlite,u,r.id).snapshot.stops[0].counts,undefined);
   assert.throws(()=>applyDriverEvent(r,{kind:'scan',payload:{stopId:'STOP-A',barcode:'1234567890'}}),/barcode/);
+});
+
+test('warehouse-only receiving supports unbounded general walk-in placement without pallet configuration',()=>{
+ const p=po([{skuId:frozen,orderedQty:1000,area:'frozen'}]);assert.throws(()=>receipt(p,[{poLineId:p.lines[0].id,receivedQty:1000}],'vendor-pickup'),/at the warehouse/);
+ const r=receipt(p,[{poLineId:p.lines[0].id,receivedQty:1000,storageLocation:'WALKIN'}]);assert.equal(r.lines[0].storageLocation,'WALKIN');const before=db.sqlite.prepare('SELECT COALESCE(SUM(qty_units),0) q FROM pallets').get().q;
+ const req={requestId:randomUUID(),receiptId:r.id,expectedRevision:r.revision,confirmed:true,allocations:[{receiptLineId:r.lines[0].id,locationCode:'WALKIN',qty:1000}]};const result=confirmPutaway(db,receiver,req);assert.equal(result.receipt.status,'received');assert.equal(db.sqlite.prepare('SELECT COALESCE(SUM(qty_units),0) q FROM pallets').get().q,before+1000);assert.equal(confirmPutaway(db,receiver,req).duplicate,true);
 });

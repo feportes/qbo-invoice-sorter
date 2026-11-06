@@ -1,3 +1,4 @@
+if(new URLSearchParams(location.search).get('from')==='picking'){const back=document.querySelector('body>a');if(back){back.href='/warehouse-picking';back.textContent='← Warehouse pick & load';}}
 const $=id=>document.getElementById(id),params=new URLSearchParams(location.search),route=params.get('route'),selection=params.get('routes');let blobUrl,pdfUrl,routeCount=1;
 async function read(path){const url=new URL('/api/warehouse/'+(selection?'route-invoice-selection':'route-invoices/'+encodeURIComponent(route))+path,location.origin);if(selection)url.searchParams.set('routes',selection);const response=await fetch(url,{credentials:'same-origin',cache:'no-store'});if(!response.ok){let error;try{error=await response.json();}catch{}throw Error(error?.error||'Could not prepare invoices. Please retry.');}return response;}
 try{

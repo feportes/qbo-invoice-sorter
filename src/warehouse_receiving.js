@@ -23,7 +23,7 @@ export function createPurchaseOrder(db,user,input,directReceipt=false){
 }
 export function recordReceipt(db,user,input){
   permit(user,['admin','office','warehouse'],'receiving');const sql=db.sqlite;
-  if(!['warehouse','vendor-pickup'].includes(input.mode))problem('Choose warehouse receiving or vendor pickup.');
+  if(input.mode!=='warehouse')problem('Receive products at the warehouse. Supplier pickups are recorded as route stops, not receipts.');
   if(!Array.isArray(input.lines)||!input.lines.length||input.lines.length>200)problem('Review received product lines.');
   return once(sql,user,input.requestId,input,()=>{
     const po=readPO(sql,input.poId);if(po.status==='closed'||po.revision!==input.expectedPORevision)problem('The PO changed. Refresh before receiving.',409);
@@ -31,11 +31,12 @@ export function recordReceipt(db,user,input){
     const lines=input.lines.map(x=>{
       if(seen.has(x.poLineId))problem('Receive each PO line once per receipt.');seen.add(x.poLineId);
       const p=po.lines.find(p=>p.id===x.poLineId);if(!p)problem('Received item is not on this PO.');
+      const storageLocation=String(x.storageLocation||'').trim().toUpperCase();if(storageLocation){const loc=db.getLocationByCode?.(storageLocation);if(p.area==='frozen'&&(!loc?.enabled||!['CONTAINER','WALKIN'].includes(loc.type)))problem('Choose an active frozen storage location.');if(p.area!=='frozen'&&storageLocation!==(p.area==='dry'?'DRY':'REFRIGERATED'))problem('Choose the matching product storage area.');}
       const receivedQty=quantity(x.receivedQty,'received quantity',false),damagedQty=quantity(x.damagedQty??0,'damaged quantity'),rejectedQty=quantity(x.rejectedQty??0,'rejected quantity');
       if(damagedQty+rejectedQty>receivedQty)problem('Damage and rejected quantities exceed what arrived.');
       const goodQty=round(receivedQty-damagedQty-rejectedQty),accepted=previous.filter(l=>l.poLineId===p.id).reduce((s,l)=>s+l.goodQty,0),remaining=Math.max(0,p.orderedQty-accepted);
       const reason=String(x.exceptionReason||'').trim();if((damagedQty||rejectedQty||goodQty>remaining+0.000001)&&(reason.length<5||reason.length>1000))problem('Explain damage, rejected stock or an over-delivery.');
-      return {id:randomUUID(),poLineId:p.id,skuId:p.skuId,qboItemId:p.qboItemId,name:p.name,unit:p.unit,area:p.area,receivedQty,damagedQty,rejectedQty,goodQty,exceptionReason:reason,lotNumber:String(x.lotNumber||'').trim().slice(0,100)};
+      return {id:randomUUID(),poLineId:p.id,skuId:p.skuId,qboItemId:p.qboItemId,name:p.name,unit:p.unit,area:p.area,storageLocation,receivedQty,damagedQty,rejectedQty,goodQty,exceptionReason:reason,lotNumber:String(x.lotNumber||'').trim().slice(0,100)};
     });
     const id=randomUUID(),at=now();sql.prepare('INSERT INTO wh_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(id,po.id,input.mode,'awaiting-putaway',1,JSON.stringify(lines),String(input.notes||'').trim().slice(0,2000),user.id,at,null,null,null);
     sql.prepare("UPDATE wh_purchase_orders SET revision=revision+1,status='partial',updated_at=? WHERE id=?").run(at,po.id);
