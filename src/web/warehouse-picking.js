@@ -19,7 +19,7 @@ function remember(){if(storeKey)localStorage.setItem(storeKey,JSON.stringify(sta
 let noteTimer;function note(text,error=false){clearTimeout(noteTimer);$('message').textContent=error?text:'';$('message').className=error?'compact-warning':'';}
 function hideScanKeyboard(){document.activeElement?.blur?.();window.DrawKeyboard?.hideKeyboard?.();}
 
-function focusCurrentPick(){requestAnimationFrame(()=>$('active-pick-summary')?.scrollIntoView({block:'center',behavior:'smooth'}));}
+function focusCurrentPick(){requestAnimationFrame(()=>$('active-pick-summary')?.scrollIntoView({block:'start',behavior:'instant'}));}
 
 const errorSound=scanErrorSound();
 
@@ -73,7 +73,7 @@ function enqueueScan(code,qty,line,exception=null){
 
   scanQueue.add({id:crypto.randomUUID(),recordedAt:new Date().toISOString(),countAfter:productCountAfter(line,qty),target:key(line),area:state.area,deltas:pickDeltas(line,qty),args:exception?[current.id,{...exception,productId:line.productId,packId:line.packId,qty,area:state.area,...(!totalMode()?{order:line.order,index:line.index}:{})}]:[current.id,totalMode()?line.productId:line.order,totalMode()?line.packId:line.index,code,qty,{bulk:qty>1,area:state.area,chooseItem:true}],name:exception?'recordWarehouseUnscannable':totalMode()?'scanWarehouseProduct':'scan',line:structuredClone(line)});
 
-  if(qty===line.qty-line.picked){clearTimeout(advanceTimer);if(navigator.onLine===false){feedback(line.name+' counted offline. Saved on this device.',false);completedPick={...line,picked:line.qty};advanceTimer=setTimeout(()=>{completedPick=null;state.focus=null;draw();focusCurrentPick();},1800);}else {const waiting=awaitingCompletion={...line,picked:line.qty};advanceTimer=setTimeout(()=>{if(awaitingCompletion!==waiting)return;awaitingCompletion=null;state.focus=null;draw();focusCurrentPick();},1800);}}if($('pick-code'))$('pick-code').value='';if($('pick-qty'))$('pick-qty').value=1;draw();scanStatus();void drainScans();return true;
+  if(qty===line.qty-line.picked){clearTimeout(advanceTimer);if(navigator.onLine===false){feedback(line.name+' counted offline. Saved on this device.',false);completedPick={...line,picked:line.qty};advanceTimer=setTimeout(()=>{completedPick=null;state.focus=null;draw();focusCurrentPick();},1800);}else {const waiting=awaitingCompletion={...line,picked:line.qty};advanceTimer=setTimeout(()=>{if(awaitingCompletion!==waiting)return;awaitingCompletion=null;state.focus=null;draw();focusCurrentPick();},1800);}}if($('pick-code'))$('pick-code').value='';if($('pick-qty'))$('pick-qty').value=1;draw();scanStatus();focusCurrentPick();void drainScans();return true;
 
  }catch(e){feedback(e.message);focusCurrentPick();return false;}
 

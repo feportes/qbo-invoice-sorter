@@ -26,6 +26,13 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
   if(event.kind==='defer'||event.kind==='skip'){stop.previousStatus=stop.status||'pending';stop.status=event.kind==='defer'?'deferred':'skipped';stop.visitReason=reason(x.reason);stop.visitAt=at;return;}
   if(event.kind==='arrive'){if(!['pending',undefined].includes(stop.status))problem('This stop is already in progress.');stop.status='arrived';stop.arrivedAt=at;return;}
   if(event.kind==='start-picking'){if(stop.status!=='arrived')problem('Confirm arrival first.');stop.status='picking';stop.pickingAt=at;return;}
+  if(event.kind==='warehouse-check'){
+    if(stop.status!=='picking')problem('Start picking before checking this item.');
+    const p=stop.products.find(p=>p.id===x.productId);if(!p?.warehouseWarnings?.length||x.confirmed!==true)problem('Choose a warehouse barcode exception and confirm the physical check.');
+    const picked=stop.counts?.[p.id]||0,left=Math.ceil(p.qty-0.000001)-picked,q=x.qty;
+    if(!Number.isSafeInteger(q)||q<1||q>left||q>1&&(x.bulk!==true||left<=(p.scanLimit??10)))problem('Review the remaining quantity and bulk threshold.');
+    stop.counts??={};stop.counts[p.id]=picked+q;stop.history??=[];stop.history.push({eventId:event.id,productId:p.id,qty:q,at,source:'warehouse-exception-check',warehouseDoubleChecked:true});if(stop.shortages)delete stop.shortages[p.id];return;
+  }
   if(event.kind==='manual-pick'){
     if(stop.status!=='picking')problem('Start picking before recording a manual pick.');const p=stop.products.find(p=>p.id===x.productId);if(!p)problem('Choose a product at this stop.');const q=x.qty,picked=stop.counts?.[p.id]||0,left=Math.ceil(round(p.qty))-picked;
     if(!Number.isInteger(q)||q<1||q>left||String(x.reason||'').trim().length<5)problem('Review manual quantity and give a reason.');stop.counts??={};stop.counts[p.id]=picked+q;stop.history??=[];stop.history.push({eventId:event.id,productId:p.id,qty:q,at,source:'admin-manual-pick',reason:x.reason});if(stop.shortages)delete stop.shortages[p.id];return;
