@@ -28,38 +28,35 @@ export async function routeInvoiceSelection(packets,options,readPdf){
 }
 const printable=value=>String(value??'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,' ').replace(/\s+/g,' ').trim();
 async function loadingChecklist(pdf,packet){
- const font=await pdf.embedFont(StandardFonts.Helvetica),bold=await pdf.embedFont(StandardFonts.HelveticaBold),ink=rgb(.08,.08,.08),line=rgb(.75,.75,.75);let page,y;
- const text=(s,x,at,size=11,strong=false)=>page.drawText(printable(s),{x,y:at,size,font:strong?bold:font,color:ink});
- const wrap=(s,width,size=13)=>{const lines=[];let value='';for(const word of printable(s).split(' ')){if(value&&bold.widthOfTextAtSize(value+' '+word,size)>width){lines.push(value);value=word;}else value+=(value?' ':'')+word;}if(value)lines.push(value);return lines;};
- function sheet(continued=false){
-  page=pdf.addPage([612,792]);text("D' RAW | LOADING REMINDER"+(continued?' - continued':''),36,752,19,true);
-  text(packet.route.name,36,722,17,true);text('Route date: '+packet.route.date,36,700,11);
-  text('Driver: '+(packet.route.driver||'Not assigned'),36,678,13,true);text('Vehicle: '+(packet.route.vehicle||'Not assigned'),36,656,12);
-  page.drawLine({start:{x:36,y:640},end:{x:576,y:640},thickness:1,color:line});
-  text('Check the product. Count the cases. Tick when loaded.',36,619,12,true);
-  text('Each quantity is the TOTAL for all stops on this route.',36,601,11);
-  y=570;
- }
- sheet();let group='';
- const reminder=(packet.checklist||[]).filter(item=>['Fresh fruit / produce','Juices'].includes(item.group));
- if(!reminder.length)text('No fresh fruit or juices on this route.',36,y,14,true);
- for(const item of reminder){
-  const name=String(item.name).replace(/^\d+\.\s*[^:]+:/,'').trim(),names=wrap(name,330),pack=/^(1 invoice unit|case)$/i.test(item.pack||'case')?'':String(item.pack),packs=pack?wrap(pack,330,10):[];
-  const height=Math.max(68,names.length*17+packs.length*12+22),groupSpace=group!==item.group?43:0;
-  if(y-height-groupSpace<64){sheet(true);group='';}
-  if(group!==item.group){group=item.group;page.drawRectangle({x:36,y:y-28,width:540,height:30,color:rgb(.9,.9,.9)});text(group==='Juices'?'JUICES':'FRESH FRUIT / PRODUCE',46,y-18,13,true);y-=43;}
-  const bottom=y-height;
-  page.drawRectangle({x:36,y:bottom,width:540,height,borderColor:line,borderWidth:.7});
-  page.drawRectangle({x:478,y:bottom,width:98,height,color:rgb(.95,.95,.95)});
-  page.drawRectangle({x:48,y:y-39,width:23,height:23,borderColor:ink,borderWidth:1.5});
-  names.forEach((v,i)=>text(v,84,y-23-i*17,13,true));packs.forEach((v,i)=>text(v,84,y-23-names.length*17-i*12,10));
-  const qty=Number(item.qty.toFixed(3)).toLocaleString('en-US'),size=qty.length>6?20:28;
-  text(qty,527-bold.widthOfTextAtSize(qty,size)/2,y-32,size,true);
-  const unit=/^(each|individual)/i.test(pack)?'UNITS':/tub|gal/i.test(pack)?'TUBS':'CASES';text(unit,527-bold.widthOfTextAtSize(unit,10)/2,y-49,10,true);
-  y=bottom-12;
- }
- text('Loading reminder only.',36,38,9);
- return pdf.getPageCount();
+ const font=await pdf.embedFont(StandardFonts.Helvetica),bold=await pdf.embedFont(StandardFonts.HelveticaBold),ink=rgb(.08,.08,.08),line=rgb(.75,.75,.75),page=pdf.addPage([612,792]);
+ const text=(s,x,y,size=11,strong=false,target=page)=>target.drawText(printable(s),{x,y,size,font:strong?bold:font,color:ink});
+ const wrap=(s,width,size,strong=true)=>{const out=[];let value='';const f=strong?bold:font;for(const word of printable(s).split(' ')){for(const char of (value?' ':'')+word){if(value&&f.widthOfTextAtSize(value+char,size)>width){const cut=value.lastIndexOf(' ');if(cut>0){out.push(value.slice(0,cut));value=value.slice(cut+1);}else{out.push(value);value='';}}value+=char;}}if(value.trim())out.push(value.trim());return out;};
+ const fitted=(s,x,y,width,size,strong=false)=>{const f=strong?bold:font;size=Math.min(size,width/Math.max(1,f.widthOfTextAtSize(printable(s),1)));text(s,x,y,size,strong);};
+ text("D' RAW | DRIVER LOADING CHECK",36,752,19,true);
+ fitted(packet.route.name,36,725,540,17,true);text('Route date: '+packet.route.date,36,705,11);
+ fitted('Driver: '+(packet.route.driver||'Not assigned'),36,683,540,13,true);
+ fitted('Vehicle: '+(packet.route.vehicle||'Not assigned'),36,663,540,12);
+ page.drawLine({start:{x:36,y:650},end:{x:576,y:650},thickness:1,color:line});
+ text('Count the cases. Tick when loaded.',36,630,12,true);
+ text('Quantities are totals for ALL stops on this route.',36,613,11);
+ const reminder=(packet.checklist||[]).filter(i=>['Fresh fruit / produce','Juices'].includes(i.group)).sort((a,b)=>a.group.localeCompare(b.group));
+ if(!reminder.length){text('No fresh fruit or juices on this route.',36,570,14,true);return 1;}
+ function rows(columns){const width=(540-(columns-1)*12)/columns,size=columns===1?13:12,nameWidth=width-(columns===1?162:102);return reminder.map(item=>{const name=String(item.name).replace(/^\d+\.\s*[^:]+:/,'').trim(),pack=/^(1 invoice unit|case)$/i.test(item.pack||'case')?'':String(item.pack),names=wrap(name,nameWidth,size),packs=pack?wrap(pack,nameWidth,9,false):[];return {item,names,packs,width,size,height:Math.max(54,names.length*(size+2)+packs.length*11+16)};});}
+ const height=items=>items.reduce((n,r,i)=>n+r.height+6+(i===0||items[i-1].item.group!==r.item.group?29:0),0);
+ let columns=[rows(1)];if(height(columns[0])>548){const all=rows(2);let split=1,best=Infinity;for(let i=1;i<all.length;i++){const h=Math.max(height(all.slice(0,i)),height(all.slice(i)));if(h<best){best=h;split=i;}}columns=all.length===1?[all]:[all.slice(0,split),all.slice(split)];}
+ // Render the entire measured table as one object. It can never spill onto
+ // another sheet or silently omit a product, even with unusually long lists.
+ const tableHeight=Math.max(...columns.map(height)),table=pdf.addPage([540,tableHeight]);
+ columns.forEach((items,index)=>{let y=tableHeight,group='';const x=index*(items[0].width+12);for(const r of items){const {item,width,size,names,packs}=r;if(group!==item.group){group=item.group;table.drawRectangle({x,y:y-23,width,height:23,color:rgb(.9,.9,.9)});text(group==='Juices'?'JUICES':'FRESH FRUIT / PRODUCE',x+7,y-16,11,true,table);y-=29;}
+ const bottom=y-r.height,qtyWidth=columns.length===1?98:64,qtyX=x+width-qtyWidth;
+ table.drawRectangle({x,y:bottom,width,height:r.height,borderColor:line,borderWidth:.7});table.drawRectangle({x:qtyX,y:bottom,width:qtyWidth,height:r.height,color:rgb(.95,.95,.95)});
+ table.drawRectangle({x:x+9,y:y-32,width:18,height:18,borderColor:ink,borderWidth:1.4});
+ names.forEach((v,i)=>text(v,x+36,y-19-i*(size+2),size,true,table));packs.forEach((v,i)=>text(v,x+36,y-19-names.length*(size+2)-i*11,9,false,table));
+ const qty=Number(item.qty.toFixed(3)).toLocaleString('en-US'),qtySize=Math.min(26,(qtyWidth-8)/Math.max(1,bold.widthOfTextAtSize(qty,1))),center=qtyX+qtyWidth/2;
+ text(qty,center-bold.widthOfTextAtSize(qty,qtySize)/2,y-29,qtySize,true,table);const unit=/^(each|individual)/i.test(item.pack||'')?'UNITS':/tub|gal/i.test(item.pack||'')?'TUBS':'CASES';text(unit,center-bold.widthOfTextAtSize(unit,9)/2,y-43,9,true,table);y=bottom-6;
+ }});
+ const embedded=await pdf.embedPage(table),scale=Math.min(1,548/tableHeight);page.drawPage(embedded,{x:36,y:596-tableHeight*scale,width:540*scale,height:tableHeight*scale});pdf.removePage(pdf.getPageCount()-1);
+ text('Loading reminder only.',36,30,9);return 1;
 }
 export async function routeInvoiceBundle(packet,options,readPdf){
   if(!readPdf)problem('QuickBooks invoice printing is not configured.',503);

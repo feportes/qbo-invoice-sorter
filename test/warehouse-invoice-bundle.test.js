@@ -6,3 +6,12 @@ test('reverse order fetches last stop first and unavailable PDFs never return a 
 test('rotated originals remain inside Letter boundaries',async()=>{const d=await PDFDocument.create();for(const angle of [0,90,180,270])d.addPage([792,612]).setRotation(degrees(angle));const bundle=await routeInvoiceBundle({...packet,invoices:[packet.invoices[0]]},{copies:1},async()=>d.save());assert.equal(bundle.pages,5);});
 
 test('selected routes make one PDF, each with its own summary and paired invoice copies',async()=>{const packets=[{...packet,invoices:[packet.invoices[0]]},{...packet,route:{...packet.route,id:'R2',name:'South practice'},invoices:[packet.invoices[1]]}],docs={'101':await document('A',2),'102':await document('B')};const batch=await routeInvoiceSelection(packets,{copies:2},async i=>docs[i.qboInvoiceId]);assert.equal(batch.pages,8);assert.deepEqual(batch.routes.map(r=>[r.startPage,r.pages]),[[1,5],[6,3]]);assert.deepEqual(routeInvoiceIds(JSON.stringify(['R1','R2','R1'])),['R1','R2']);assert.throws(()=>routeInvoiceIds('bad'),/Choose routes/);assert.throws(()=>routeInvoiceIds([]),/1 and 20/);await assert.rejects(routeInvoiceSelection(packets,{},async i=>i.qboInvoiceId==='102'?Buffer.from('invalid'):docs[i.qboInvoiceId]),/South practice.*No partial bundle/);});
+
+test('loading checklist always stays one Letter page for long names and large product lists',async()=>{
+ for(const count of [0,9,18,40,100]){
+  const checklist=Array.from({length:count},(_,i)=>({name:'Item '+String(i+1).padStart(3,'0')+' - '+(i%2?'Fresh blueberries premium large case 12 x 12 ounces':'Cold pressed organic juice variety bottles 12 x 16 ounces'),qty:i+1,pack:'12 bottles per case',group:i%2?'Fresh fruit / produce':'Juices'}));
+  const bundle=await routeInvoiceBundle({...packet,checklist,invoices:[packet.invoices[0]]},{copies:2},async()=>document('A',2));
+  assert.equal(bundle.summaryPages,1,'checklist count '+count);assert.equal(bundle.pages,5);const pdf=await PDFDocument.load(bundle.bytes);assert.equal(pdf.getPage(0).getWidth(),612);assert.equal(pdf.getPage(0).getHeight(),792);
+  if(count===18)await fs.writeFile('../../outputs/driver-checklist-single-page.pdf',bundle.bytes);
+ }
+});
