@@ -9,6 +9,7 @@ export function mountWarehouseWebApp(app){
   app.get('/workspaces-update',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_update'));
   app.get('/workspaces',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_mobile'));
   app.get('/warehouse-approvals',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_approvals'));
+  app.get('/warehouse-driver-checklist',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_driver_checklist'));
   app.get('/warehouse-map-settings',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_map_settings'));
   app.get('/warehouse-connections',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_connections'));
   app.get('/warehouse-products',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_products'));
