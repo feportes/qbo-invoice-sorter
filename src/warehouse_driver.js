@@ -47,6 +47,7 @@ export function saveDriverEvents(sql,user,input){
       if(!/^[A-Za-z0-9_-]{8,100}$/.test(event.id||'')||ids.has(event.id)||!Number.isFinite(Date.parse(event.recordedAt)))problem('Review saved action identifiers and timestamps.');ids.add(event.id);
       if(sql.prepare('SELECT id FROM wh_driver_events WHERE id=?').get(event.id))problem('This action was already received in another batch. Refresh before syncing.',409);
       if(event.kind==='photo')for(const id of event.payload?.mediaIds||[]){const media=sql.prepare('SELECT * FROM wh_media WHERE id=?').get(id);if(!media||media.route_id!==row.id||media.user_id!==user.id||String(media.stop_id||'')!==String(event.payload.stopId||''))problem('Upload the matching route photos before syncing the log.');}
+      if(event.kind==='customer-return'){const cached=sql.prepare('SELECT products FROM wh_driver_catalog WHERE user_id=?').get(user.id),catalog=cached?JSON.parse(cached.products):[],p=catalog.find(p=>p.id===event.payload?.productId);if(!p||event.payload.packId!==p.defaultPack)problem('Refresh the catalog and choose the returned product SKU.',409);if(event.payload.barcode&&![p.sku,...(p.aliases||[]).filter(a=>a.packId===p.defaultPack).map(a=>a.code)].filter(Boolean).some(c=>code(c)===code(event.payload.barcode)))problem('The return barcode does not match the selected product.',409);}
       if(event.kind==='manual-pick'&&user.role!=='admin')problem('Manual picking requires administrator access.',403);
       const at=new Date().toISOString(),proof=event.kind==='scan'?driverBarcodeProof(sql,user,route,event):null;applyDriverEvent(route,event,at,proof);
       sql.prepare('INSERT INTO wh_driver_events (id,route_id,user_id,device_id,device_at,received_at,kind,payload,status) VALUES (?,?,?,?,?,?,?,?,?)').run(event.id,row.id,user.id,input.deviceId,event.recordedAt,at,event.kind,JSON.stringify(event.payload||{}),'pending-office');
@@ -60,12 +61,13 @@ export function saveDriverEvents(sql,user,input){
 // Compare only the work this batch can change. Office approval of another stop
 // must not strand a driver's offline scans; changes to this stop still conflict.
 export function driverReplayGuard(route,events){
+ if(events.every(e=>e.kind==='customer-return'))return {route:[route.id,route.driverId,route.helperId||''],stops:events.map(e=>route.stops.find(s=>s.id===e.payload?.stopId)).map(s=>s?[s.id,s.qboInvoiceId,s.qboCustomerId]:null)};
  const whole=events.some(e=>['depart','finalize'].includes(e.kind)),ids=new Set(events.filter(e=>!['note','photo'].includes(e.kind)).map(e=>e.payload?.stopId).filter(Boolean));
  const revisiting=events[0]?.kind==='revisit';
  const financial=events.some(e=>e.kind==='edit-line');
  const dictionary=(value,fn)=>Object.keys(value||{}).sort().map(k=>[k,fn(value[k])]);
  const stops=route.stops||[];return {
   route:[route.id,route.date,route.driverId,route.helperId||'',route.status],plan:stops.map(s=>[s.id,s.address||'']),
-  stops:stops.filter(s=>whole||ids.has(s.id)).map(s=>({id:s.id,status:s.status||'pending',invoice:s.qboInvoiceId||'',customer:s.qboCustomerId||'',products:(s.products||[]).map(p=>[p.id,p.qty,JSON.stringify(p.warehouseWarnings||[]),...(financial?[p.unitPrice??null]:[])]),counts:dictionary(s.counts,n=>n),history:(s.history||[]).slice(-200).map(h=>[h.productId,h.qty,!!h.reversedAt]),shortages:dictionary(s.shortages,x=>[x.missing,x.reason,x.notes||'']),...(!whole&&!revisiting?{officeReview:s.officeReview||'draft',proposedChanges:dictionary(s.proposedChanges,x=>[x.qty,x.unitPrice,x.reason||'']),payments:(s.payments||[]).map(x=>[x.id,x.amount,x.method,x.reference||''])}:{})}))
+  stops:stops.filter(s=>whole||ids.has(s.id)).map(s=>({id:s.id,status:s.status||'pending',invoice:s.qboInvoiceId||'',customer:s.qboCustomerId||'',products:(s.products||[]).map(p=>[p.id,p.qty,JSON.stringify(p.warehouseWarnings||[]),...(financial?[p.unitPrice??null]:[])]),counts:dictionary(s.counts,n=>n),history:(s.history||[]).slice(-200).map(h=>[h.productId,h.qty,!!h.reversedAt]),customerReturns:(s.customerReturns||[]).map(r=>[r.id,r.productId,r.qty,r.condition,r.status]),shortages:dictionary(s.shortages,x=>[x.missing,x.reason,x.notes||'']),...(!whole&&!revisiting?{officeReview:s.officeReview||'draft',proposedChanges:dictionary(s.proposedChanges,x=>[x.qty,x.unitPrice,x.reason||'']),payments:(s.payments||[]).map(x=>[x.id,x.amount,x.method,x.reference||''])}:{})}))
  };
 }
