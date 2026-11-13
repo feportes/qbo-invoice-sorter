@@ -56,10 +56,10 @@ export function renderPalletVolume(stack,p,n,{onMap=false}={}){
    for(const side of sides){const {a,b,c,d}=side;const shade=Math.round(216+16*(b[0]-a[0])/Math.max(.01,Math.hypot(b[0]-a[0],b[1]-a[1])));face([[...d,z+.5],[...c,z+.5],[...b,z+h-.65],[...a,z+h-.65]],purple?'#572668':`rgb(${shade-5},${shade+3},${shade+2})`,'none');}
    const lid=perimeter(xx-.18,yy-.18,ww+.36,dd+.36,1.65);
    const ring=pts=>pts.map(v=>[...v,z+h]);
-   face(ring(lid),purple?'#623171':'#f5f6f0',purple?'#35123f':'#aab9b9');
+   face(ring(lid),purple?'#623171':'#f5f6f0',purple?'#ffffff':'#aab9b9');
    // Thick snap-on lip is visible around the entire lid perimeter.
    for(let i=0;i<lid.length;i++){const a=lid[i],b=lid[(i+1)%lid.length];if((b[0]-a[0])*.48-(b[1]-a[1])*.28>=0)face([[...a,z+h-.65],[...b,z+h-.65],[...b,z+h],[...a,z+h]],'#d1dcd8','#b7c5c1');}
-   face(ring(perimeter(xx+.35,yy+.35,ww-.7,dd-.7,1.25)),purple?'#71427e':'#edf2ed',purple?'#9963a1':'#cbd6d0');
+   face(ring(perimeter(xx+.35,yy+.35,ww-.7,dd-.7,1.25)),purple?'#71427e':'#edf2ed',purple?'#eee5f1':'#cbd6d0');
    // Printed front panel and drop-down handle identify a plastic food tub.
    face([[xx+ww*.26,yy+dd-.2,z+h*.22],[xx+ww*.74,yy+dd-.2,z+h*.22],[xx+ww*.74,yy+dd-.05,z+h*.58],[xx+ww*.26,yy+dd-.05,z+h*.58]],'#e6ebe5','none');
    const label=pt(xx+ww*.5,yy+dd,z+h*.42);

@@ -34,7 +34,7 @@ export function palletSVG(pallet,orientation='straight'){
  if(kind==='tubs20'||kind==='tubs12'){const cols=kind==='tubs20'?4:3,rows=kind==='tubs20'?5:4,dx=90/cols,dy=110/rows;for(let y=0;y<rows;y++)for(let x=0;x<cols;x++)art+=tub(5+(x+.5)*dx,5+(y+.5)*dy,Math.min(dx,dy)*.49);}
  if(kind==='rectTubs15'||kind==='whiteBoxes12'){const rows=kind==='rectTubs15'?5:4,dy=110/rows;for(let y=0;y<rows;y++)for(let x=0;x<3;x++)art+=`<rect x="${5+x*30}" y="${5+y*dy}" width="29" height="${dy-1}" rx="${kind==='rectTubs15'?5:1}" fill="#fffdfa" stroke="#a9b4ba"/>`;}
  if(kind==='oakberry28'){
-  const lid=(x,y,w,h)=>`<g data-oakberry-tub="true"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2.5" fill="#51225e" stroke="#30133c" stroke-width=".7"/><rect x="${x+1.3}" y="${y+1.3}" width="${w-2.6}" height="${h-2.6}" rx="1.8" fill="#663674" stroke="#9b6aa3" stroke-width=".5"/></g>`;
+  const lid=(x,y,w,h)=>`<g data-oakberry-tub="true"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2.5" fill="#51225e" stroke="#ffffff" stroke-width="1.1"/><rect x="${x+1.3}" y="${y+1.3}" width="${w-2.6}" height="${h-2.6}" rx="1.8" fill="#663674" stroke="#eee5f1" stroke-width=".65"/></g>`;
   for(let y=0;y<4;y++)for(let x=0;x<6;x++)art+=lid(5+x*15,5+y*22.5,14.6,22.1);
   for(let x=0;x<4;x++)art+=lid(5+x*22.5,95,22.1,19.6);
  }
