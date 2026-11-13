@@ -12,6 +12,7 @@ export function mountWarehouseWebApp(app){
   app.get('/warehouse-driver-checklist',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_driver_checklist'));
   app.get('/warehouse-map-settings',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_map_settings'));
   app.get('/warehouse-connections',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_connections'));
+  app.get('/warehouse-reconciliation',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_reconciliation'));
   app.get('/warehouse-products',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_products'));
   app.get('/warehouse-route-invoices',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_route_invoices'));
   app.get('/warehouse-saved-routes',(_req,res)=>res.set('Cache-Control','no-store').render('warehouse_saved_routes'));

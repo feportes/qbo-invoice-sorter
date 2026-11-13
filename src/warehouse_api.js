@@ -1,3 +1,4 @@
+import {ensureReconciliation,listCounts,countReport,createCount,saveCount,reviewCount,countCsv} from './warehouse_reconciliation.js';
 import {checklistPolicy,checklistSettings,saveChecklistSettings,applyChecklistPolicy} from './warehouse_checklist.js';
 import {ruleMapPacket,ruleMapMove} from './warehouse_rule_map.js';
 import {refreshPlanningDrafts} from './warehouse_draft_refresh.js';
@@ -34,7 +35,7 @@ const run=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res)).catch(next
 function serveInstructionMedia(req,res,m){const total=m.bytes.length;res.type(m.mime_type).set('Accept-Ranges','bytes');if(req.get('range')){const match=/^bytes=(\d*)-(\d*)$/.exec(req.get('range'));if(!match||!match[1]&&!match[2])return res.status(416).set('Content-Range','bytes */'+total).end();let start=match[1]?Number(match[1]):Math.max(0,total-Number(match[2])),end=match[1]&&match[2]?Math.min(total-1,Number(match[2])):total-1;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=total||end<start)return res.status(416).set('Content-Range','bytes */'+total).end();res.status(206).set('Content-Range','bytes '+start+'-'+end+'/'+total).send(m.bytes.subarray(start,end+1));}else res.send(m.bytes);}
 const viewUser=u=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,teamId:u.teamId,functions:u.functions,mustChangePassword:u.mustChangePassword});
 export function createWarehouseRouter({db,env=process.env,readVendors,readVendor,readPurchaseOrders,readPurchaseOrder,readInvoice,readInvoicePdf,correctWarehouseInvoice,correctDeliveryInvoice,correctInventoryLoss,readCustomerAddress,readPlanningInvoices,readPlanningInvoice,readProducts,readApprovalProduct,sourceFetch,readContainerLayout}){
-  const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureWarehouseObservations(sql);ensureProductPhotos(sql);ensureGuideSchema(sql);ensureInstructionUpdateSchema(sql);ensureProductRequests(sql);
+  const r=express.Router(),sql=db.sqlite;ensureWarehouseSchema(sql);ensureWarehouseObservations(sql);ensureProductPhotos(sql);ensureGuideSchema(sql);ensureInstructionUpdateSchema(sql);ensureProductRequests(sql);ensureReconciliation(sql);
   const source=createWarehouseSource({sql,env,readInvoice,...(sourceFetch?{fetchImpl:sourceFetch}:{})});
   const refreshProductCatalog=productCatalogRefresher(readProducts,async(user,report)=>{await source.request('/api/mobile-product-catalog',user,{report});syncWarehouseProductCatalog(sql,report.inventoryItems);});
   const refreshStockCatalog=productCatalogRefresher(readProducts,(_user,report)=>syncWarehouseProductCatalog(sql,report.inventoryItems));
@@ -145,6 +146,12 @@ export function createWarehouseRouter({db,env=process.env,readVendors,readVendor
   r.post('/users/:id/disable',run((req,res)=>res.json(disableUser(sql,req.whUser,req.params.id))));
   r.post('/users/:id',run(async(req,res)=>res.json(await updateUser(sql,req.whUser,req.params.id,req.body))));
   r.get('/driver-catalog',run(async(req,res)=>{permit(req.whUser,['admin','office','driver'],'deliveries');res.json(await source.catalog(req.whUser,String(req.query.version||''),req.query.force==='true'));}));
+  r.get('/inventory-counts',run((req,res)=>res.json({reports:listCounts(sql,req.whUser)})));
+  r.post('/inventory-counts',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');if(!readProducts)problem('QuickBooks inventory lookup is unavailable.',503);const fresh=await readProducts();syncWarehouseProductCatalog(sql,fresh.inventoryItems);res.status(201).json(createCount(db,req.whUser,req.body,fresh.inventoryItems));}));
+  r.get('/inventory-counts/:id',run((req,res)=>res.json(countReport(sql,req.whUser,req.params.id))));
+  r.post('/inventory-counts/:id',run((req,res)=>res.json(saveCount(db,req.whUser,req.params.id,req.body))));
+  r.post('/inventory-counts/:id/review',run((req,res)=>res.json(reviewCount(db,req.whUser,req.params.id,req.body))));
+  r.get('/inventory-counts/:id/csv',run((req,res)=>res.type('text/csv').set('Content-Disposition','attachment; filename="Inventory-count.csv"').send(countCsv(countReport(sql,req.whUser,req.params.id)))));
   r.get('/stock/catalog',run(async(req,res)=>{permit(req.whUser,['admin','office','warehouse'],'warehouse');let catalog=null,warning='';try{await refreshStockCatalog(req.whUser);}catch(e){warning='QuickBooks inventory refresh failed: '+e.message;}try{catalog=await source.request('/api/mobile-warehouse-catalog',req.whUser);}catch{warning='Live barcode lookup is unavailable. Search by product name or warehouse SKU.';}try{res.json({...stockCatalog(db,req.whUser,catalog,db.getConnection?.()?.realm_id),warning});}catch(error){if(error.status!==409)throw error;res.json({...stockCatalog(db,req.whUser),warning:error.message});}}));
   r.post('/stock/pallets',run((req,res)=>res.status(201).json(registerStockPallet(db,req.whUser,req.body))));
   r.post('/stock/pallets/:id/move',run((req,res)=>res.json(moveStockPallet(db,req.whUser,{...req.body,palletId:Number(req.params.id)}))));

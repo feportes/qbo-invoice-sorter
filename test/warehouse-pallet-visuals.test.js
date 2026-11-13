@@ -13,6 +13,16 @@ test('frozen fruit case dimensions distinguish 20 lb and 30 lb layer heights wit
 test('category decoration preserves stock values and fingerprints without mutating the source layout',()=>{const original={yard:[{left:[{pallet:{items:[{sku_id:2,qty_units:73}],copy_fingerprint:'keep'}}],right:[]}],walkin:[]},sql={prepare:()=>({all:()=>[{id:2,category:'Sorbet'}]})},out=decoratePalletLayout(sql,original);assert.equal(out.yard[0].left[0].pallet.items[0].category,'Sorbet');assert.equal(out.yard[0].left[0].pallet.items[0].qty_units,73);assert.equal(out.yard[0].left[0].pallet.copy_fingerprint,'keep');assert.equal(original.yard[0].left[0].pallet.items[0].category,undefined);});
 test('compact box icon uses three plus three long cases and four turned cases',()=>{const svg=palletSVG({sku_name:'Frozen mango',category:'Frozen Fruits'});assert.match(svg,/width="48" height="58"/);assert.equal((svg.match(/width="27.5" height="36"/g)||[]).length,6);assert.equal((svg.match(/width="34" height="27"/g)||[]).length,4);assert.match(palletSVG(null,'sideways'),/width="58" height="48"/);});
 
+test('Oakberry uses 28 purple rectangular tubs, including a turned row, without changing round sorbets',()=>{
+ const item={sku_name:'Oakberry Organic Acai Sorbet 7 Kg.',category:'02. Sorbets',qty_units:336},p=palletPacking(item),svg=palletSVG(item);
+ assert.equal(p.kind,'oakberry28');assert.equal(p.unitsPerLayer,28);assert.equal(p.layers,12);assert.equal(p.topLayerUnits,0);assert.equal(p.layerHeightInches,null);
+ assert.equal((svg.match(/data-oakberry-tub="true"/g)||[]).length,28);
+ assert.equal((svg.match(/width="14.6" height="22.1"/g)||[]).length,24);
+ assert.equal((svg.match(/width="22.1" height="19.6"/g)||[]).length,4);
+ assert.match(svg,/28 purple rectangular Oakberry tubs/);assert.equal(palletPacking({...item,qty_units:29}).layers,2);
+ assert.equal(palletPattern({sku_name:'D Raw Acai Sorbet 3 Gal',category:'Sorbets'}),'tubs20');
+});
+
 test('confirmed case and rectangular-tub profiles calculate complete and partial layers without guessing height',()=>{
  for(const sku_name of ['D’ RAW Acai Packs','Acerola Packs','Pitaya Pack']){const p={sku_name,category:'Frozen Fruits',qty_units:168};assert.equal(palletPattern(p),'whiteBoxes12');assert.equal(palletPacking(p).layers,14);assert.equal(palletPacking(p).topLayerUnits,0);assert.equal((palletSVG(p).match(/fill="#fffdfa"/g)||[]).length,12);}
  for(const sku_name of ['Juice Crafters Acai Sorbet','Brazilian Blend Sorbet']){const p={sku_name,category:'Sorbet',qty_units:105},full=palletPacking(p),partial=palletPacking({...p,qty_units:94});assert.equal(full.unitsPerLayer,15);assert.equal(full.fullPalletUnits,105);assert.equal(full.layers,7);assert.equal(partial.fullLayers,6);assert.equal(partial.topLayerUnits,4);assert.equal(partial.layers,7);assert.equal(partial.layerHeightInches,null);assert.equal((palletSVG(p).match(/fill="#fffdfa"/g)||[]).length,15);}
