@@ -35,7 +35,9 @@ async function loadingChecklist(pdf,packet){
  text("D' RAW | DRIVER LOADING CHECK",36,752,19,true);
  fitted(packet.route.name,36,725,540,17,true);text('Route date: '+packet.route.date,36,705,11);
  fitted('Driver: '+(packet.route.driver||'Not assigned'),36,683,540,13,true);
- fitted('Vehicle: '+(packet.route.vehicle||'Not assigned'),36,663,540,12);
+ fitted('Vehicle: '+(packet.route.vehicle||'Not assigned'),36,663,258,12);
+ text('Picked by:',318,663,12,true);
+ page.drawLine({start:{x:382,y:661},end:{x:576,y:661},thickness:.7,color:line});
  page.drawLine({start:{x:36,y:650},end:{x:576,y:650},thickness:1,color:line});
  text('Count the cases. Tick when loaded.',36,630,12,true);
  text('Quantities are totals for ALL stops on this route.',36,613,11);
