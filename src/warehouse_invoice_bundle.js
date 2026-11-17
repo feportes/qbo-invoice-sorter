@@ -32,15 +32,15 @@ async function loadingChecklist(pdf,packet){
  const text=(s,x,y,size=11,strong=false,target=page)=>target.drawText(printable(s),{x,y,size,font:strong?bold:font,color:ink});
  const wrap=(s,width,size,strong=true)=>{const out=[];let value='';const f=strong?bold:font;for(const word of printable(s).split(' ')){for(const char of (value?' ':'')+word){if(value&&f.widthOfTextAtSize(value+char,size)>width){const cut=value.lastIndexOf(' ');if(cut>0){out.push(value.slice(0,cut));value=value.slice(cut+1);}else{out.push(value);value='';}}value+=char;}}if(value.trim())out.push(value.trim());return out;};
  const fitted=(s,x,y,width,size,strong=false)=>{const f=strong?bold:font;size=Math.min(size,width/Math.max(1,f.widthOfTextAtSize(printable(s),1)));text(s,x,y,size,strong);};
- text("D' RAW | DRIVER LOADING CHECK",36,752,19,true);
+ text("D' RAW | DRIVER DOLLY CHECK",36,752,19,true);
  fitted(packet.route.name,36,725,540,17,true);text('Route date: '+packet.route.date,36,705,11);
  fitted('Driver: '+(packet.route.driver||'Not assigned'),36,683,540,13,true);
  fitted('Vehicle: '+(packet.route.vehicle||'Not assigned'),36,663,258,12);
  text('Picked by:',318,663,12,true);
  page.drawLine({start:{x:382,y:661},end:{x:576,y:661},thickness:.7,color:line});
  page.drawLine({start:{x:36,y:650},end:{x:576,y:650},thickness:1,color:line});
- text('Count the cases. Tick when loaded.',36,630,12,true);
- text('Quantities are totals for ALL stops on this route.',36,613,11);
+ text('Count staged dolly cases. Tick after double-checking.',36,630,12,true);
+ text('Binder: on top of dolly. Keys: inside the vehicle.',36,613,11);
  const reminder=(packet.checklist||[]).filter(i=>['Fresh fruit / produce','Juices'].includes(i.group)).sort((a,b)=>a.group.localeCompare(b.group));
  if(!reminder.length){text('No fresh fruit or juices on this route.',36,570,14,true);return 1;}
  function rows(columns){const width=(540-(columns-1)*12)/columns,size=columns===1?13:12,nameWidth=width-(columns===1?162:102);return reminder.map(item=>{const name=String(item.name).replace(/^\d+\.\s*[^:]+:/,'').trim(),pack=/^(1 invoice unit|case)$/i.test(item.pack||'case')?'':String(item.pack),names=wrap(name,nameWidth,size),packs=pack?wrap(pack,nameWidth,9,false):[];return {item,names,packs,width,size,height:Math.max(54,names.length*(size+2)+packs.length*11+16)};});}
@@ -58,7 +58,7 @@ async function loadingChecklist(pdf,packet){
  text(qty,center-bold.widthOfTextAtSize(qty,qtySize)/2,y-29,qtySize,true,table);const unit=/^(each|individual)/i.test(item.pack||'')?'UNITS':/tub|gal/i.test(item.pack||'')?'TUBS':'CASES';text(unit,center-bold.widthOfTextAtSize(unit,9)/2,y-43,9,true,table);y=bottom-6;
  }});
  const embedded=await pdf.embedPage(table),scale=Math.min(1,548/tableHeight);page.drawPage(embedded,{x:36,y:596-tableHeight*scale,width:540*scale,height:tableHeight*scale});pdf.removePage(pdf.getPageCount()-1);
- text('Loading reminder only.',36,30,9);return 1;
+ text('Double-check staged items, then load before departure.',36,30,9);return 1;
 }
 export async function routeInvoiceBundle(packet,options,readPdf){
   if(!readPdf)problem('QuickBooks invoice printing is not configured.',503);
