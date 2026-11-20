@@ -34,7 +34,8 @@ async function loadingChecklist(pdf,packet){
  const fitted=(s,x,y,width,size,strong=false)=>{const f=strong?bold:font;size=Math.min(size,width/Math.max(1,f.widthOfTextAtSize(printable(s),1)));text(s,x,y,size,strong);};
  text("D' RAW | DRIVER DOLLY CHECK",36,752,19,true);
  fitted(packet.route.name,36,725,540,17,true);text('Route date: '+packet.route.date,36,705,11);
- fitted('Driver: '+(packet.route.driver||'Not assigned'),36,683,540,13,true);
+ fitted('Driver: '+(packet.route.driver||'Not assigned'),36,683,258,13,true);
+ fitted('Helper: '+(packet.route.helper||'Not assigned'),318,683,258,13,true);
  fitted('Vehicle: '+(packet.route.vehicle||'Not assigned'),36,663,258,12);
  text('Picked by:',318,663,12,true);
  page.drawLine({start:{x:382,y:661},end:{x:576,y:661},thickness:.7,color:line});
