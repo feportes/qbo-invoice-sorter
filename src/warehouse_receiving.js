@@ -35,7 +35,7 @@ export function recordReceipt(db,user,input){
       const receivedQty=quantity(x.receivedQty,'received quantity',false),damagedQty=quantity(x.damagedQty??0,'damaged quantity'),rejectedQty=quantity(x.rejectedQty??0,'rejected quantity');
       if(damagedQty+rejectedQty>receivedQty)problem('Damage and rejected quantities exceed what arrived.');
       const goodQty=round(receivedQty-damagedQty-rejectedQty),accepted=previous.filter(l=>l.poLineId===p.id).reduce((s,l)=>s+l.goodQty,0),remaining=Math.max(0,p.orderedQty-accepted);
-      const reason=String(x.exceptionReason||'').trim();if((damagedQty||rejectedQty||goodQty>remaining+0.000001)&&(reason.length<5||reason.length>1000))problem('Explain damage, rejected stock or an over-delivery.');
+      const reason=String(x.exceptionReason||'').trim();if((damagedQty||rejectedQty||goodQty>remaining+0.000001)&&(reason.length<1||reason.length>1000))problem('Explain damage, rejected stock or an over-delivery.');
       return {id:randomUUID(),poLineId:p.id,skuId:p.skuId,qboItemId:p.qboItemId,name:p.name,unit:p.unit,area:p.area,storageLocation,receivedQty,damagedQty,rejectedQty,goodQty,exceptionReason:reason,lotNumber:String(x.lotNumber||'').trim().slice(0,100)};
     });
     const id=randomUUID(),at=now();sql.prepare('INSERT INTO wh_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(id,po.id,input.mode,'awaiting-putaway',1,JSON.stringify(lines),String(input.notes||'').trim().slice(0,2000),user.id,at,null,null,null);

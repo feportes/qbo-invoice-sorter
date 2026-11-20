@@ -53,7 +53,7 @@ async function send(r){
   const missing=r.missingSetup||[],override=missing.length?input(form,'Override missing product setup','checkbox'):{checked:false},reason=missing.length?input(form,'Override reason - required only for override'):{value:''},assignments=[];
   if(!missing.length)form.append(node('p','All products have storage and registered scan codes. Ready to send.'));
   for(const p of missing){const zone=choose(form,p.name+' - storage area',[{id:'freezer',name:'Freezer'},{id:'dry',name:'Dry'},{id:'refrigerated',name:'Refrigerated'}],p.zone||''),fresh=input(form,p.name+' - fresh produce','checkbox');fresh.checked=p.fresh===true;assignments.push({id:p.id,zone,fresh});}
-  return()=>{if(override.checked&&reason.value.trim().length<5)throw Error('Explain the barcode override.');const storageAssignments=Object.fromEntries(assignments.map(p=>[p.id,{zone:p.zone.value,fresh:p.fresh.checked}]));return save('release',[r.id,override.checked?{overrideMissingBarcodes:true,reason:reason.value,storageAssignments}:{}]);};
+  return()=>{if(override.checked&&reason.value.trim().length<1)throw Error('Explain the barcode override.');const storageAssignments=Object.fromEntries(assignments.map(p=>[p.id,{zone:p.zone.value,fresh:p.fresh.checked}]));return save('release',[r.id,override.checked?{overrideMissingBarcodes:true,reason:reason.value,storageAssignments}:{}]);};
  });
 }
 

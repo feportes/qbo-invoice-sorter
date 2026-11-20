@@ -6,7 +6,7 @@ const code=v=>clean(v).toUpperCase();
 const round=v=>Math.round(v*1e6)/1e6;
 const reasons=new Set(['Not on vehicle','Damaged / unusable','Spoiled / expired','Wrong product loaded','Customer declined','Other']);
 const qty=(v,min=0)=>{if(typeof v!=='number'||!Number.isFinite(v)||v<min||v>1000000)problem('Review the product quantity.');return round(v);};
-const reason=v=>{v=clean(v);if(v.length<5||v.length>1000)problem('Explain why this change is needed.');return v;};
+const reason=v=>{v=clean(v);if(v.length<1||v.length>1000)problem('Explain why this change is needed.');return v;};
 export function applyDriverEvent(route,event,at=new Date().toISOString(),verifiedProductKey=null){
   const x=event.payload||{};
   if(event.kind==='customer-return'){const s=route.stops.find(s=>s.id===x.stopId);if(!s||!s.qboInvoiceId||!['delivering','delivered'].includes(route.status))problem('Choose a customer invoice on your route.');if(!clean(x.productId)||!clean(x.packId)||!clean(x.name)||!['Sealed / good condition','Opened','Used / partial','Damaged','Spoiled / expired','Other'].includes(x.condition)||qty(x.qty,0.000001)>100000||String(x.notes||'').length>1000)problem('Review the returned product, quantity and condition.');if(x.condition==='Other')reason(x.notes);s.customerReturns??=[];if(s.customerReturns.some(r=>r.id===event.id))problem('This return is already recorded.');s.customerReturns.push({id:event.id,productId:x.productId,packId:x.packId,name:x.name,qty:x.qty,condition:x.condition,notes:clean(x.notes),status:'pending',reportedAt:event.recordedAt});s.officeReview='pending';return;}
@@ -36,7 +36,7 @@ export function applyDriverEvent(route,event,at=new Date().toISOString(),verifie
   }
   if(event.kind==='manual-pick'){
     if(stop.status!=='picking')problem('Start picking before recording a manual pick.');const p=stop.products.find(p=>p.id===x.productId);if(!p)problem('Choose a product at this stop.');const q=x.qty,picked=stop.counts?.[p.id]||0,left=Math.ceil(round(p.qty))-picked;
-    if(!Number.isInteger(q)||q<1||q>left||String(x.reason||'').trim().length<5)problem('Review manual quantity and give a reason.');stop.counts??={};stop.counts[p.id]=picked+q;stop.history??=[];stop.history.push({eventId:event.id,productId:p.id,qty:q,at,source:'admin-manual-pick',reason:x.reason});if(stop.shortages)delete stop.shortages[p.id];return;
+    if(!Number.isInteger(q)||q<1||q>left||String(x.reason||'').trim().length<1)problem('Review manual quantity and give a reason.');stop.counts??={};stop.counts[p.id]=picked+q;stop.history??=[];stop.history.push({eventId:event.id,productId:p.id,qty:q,at,source:'admin-manual-pick',reason:x.reason});if(stop.shortages)delete stop.shortages[p.id];return;
   }
   if(event.kind==='scan'){
     if(stop.status!=='picking')problem('Start picking at this stop before scanning.');
